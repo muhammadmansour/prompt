@@ -119,13 +119,15 @@ function renderMultiSelect(libraries) {
         
         allOptions.push(optionData);
         
-        const dataAttr = escapeHtml(JSON.stringify(optionData));
+        // Use base64 encoding to safely store JSON in data attribute (handles quotes and special chars)
+        const dataAttr = btoa(unescape(encodeURIComponent(JSON.stringify(optionData))));
         const isSelected = currentSelections.some(s => s.nodeUrn === node.urn);
         const depthIndicator = getDepthIndicator(node.depth);
         
         html += `
           <div class="option-item${isSelected ? ' selected' : ''}" 
-               data-option='${dataAttr}'
+               data-option="${dataAttr}"
+               data-group-id="${groupId}"
                data-search="${escapeHtml((node.ref_id + ' ' + node.description + ' ' + frameworkName).toLowerCase())}">
             <div class="option-checkbox">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -167,7 +169,7 @@ function toggleGroup(header) {
 
 // Select all items in a specific group
 function selectAllInGroup(groupId) {
-  const group = document.querySelector(`[data-group-id="${groupId}"]`);
+  const group = document.querySelector(`.option-group[data-group-id="${groupId}"]`);
   if (!group) return;
   
   // Expand the group if collapsed
@@ -177,7 +179,7 @@ function selectAllInGroup(groupId) {
   let addedCount = 0;
   
   items.forEach(item => {
-    const optionData = JSON.parse(item.dataset.option);
+    const optionData = decodeOptionData(item.dataset.option);
     const exists = currentSelections.some(s => s.nodeUrn === optionData.nodeUrn);
     if (!exists) {
       currentSelections.push(optionData);
@@ -199,9 +201,14 @@ function selectAllInGroup(groupId) {
 window.toggleGroup = toggleGroup;
 window.selectAllInGroup = selectAllInGroup;
 
+// Decode option data from base64
+function decodeOptionData(encoded) {
+  return JSON.parse(decodeURIComponent(escape(atob(encoded))));
+}
+
 // Toggle option selection
 function toggleOption(item) {
-  const optionData = JSON.parse(item.dataset.option);
+  const optionData = decodeOptionData(item.dataset.option);
   const index = currentSelections.findIndex(s => s.nodeUrn === optionData.nodeUrn);
   
   if (index === -1) {
@@ -223,9 +230,15 @@ function removeSelection(nodeUrn) {
   if (index !== -1) {
     currentSelections.splice(index, 1);
     
-    // Update option item UI
-    const item = document.querySelector(`.option-item[data-option*="${nodeUrn}"]`);
-    if (item) item.classList.remove('selected');
+    // Update option item UI - find by iterating since data is encoded
+    document.querySelectorAll('.option-item').forEach(item => {
+      try {
+        const data = decodeOptionData(item.dataset.option);
+        if (data.nodeUrn === nodeUrn) {
+          item.classList.remove('selected');
+        }
+      } catch (e) {}
+    });
     
     updateSelectionUI();
   }
@@ -366,7 +379,7 @@ function updateVisibleCount() {
 // Select all visible
 btnSelectAll.addEventListener('click', () => {
   document.querySelectorAll('.option-item:not([style*="display: none"])').forEach(item => {
-    const optionData = JSON.parse(item.dataset.option);
+    const optionData = decodeOptionData(item.dataset.option);
     const exists = currentSelections.some(s => s.nodeUrn === optionData.nodeUrn);
     if (!exists) {
       currentSelections.push(optionData);
