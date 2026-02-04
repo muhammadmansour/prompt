@@ -80,14 +80,26 @@ function renderMultiSelect(libraries) {
       const nodes = framework.requirement_nodes.filter(node => node.description);
       
       // Groups are collapsed by default
+      const groupId = `group-${libraryIndex}`;
       html += `
-        <div class="option-group collapsed" data-framework="${escapeHtml(frameworkName)}">
-          <div class="option-group-header" onclick="toggleGroup(this)">
-            <svg class="chevron-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            <span>${escapeHtml(frameworkName)}</span>
-            <span class="option-group-count">${nodes.length} requirements</span>
+        <div class="option-group collapsed" data-framework="${escapeHtml(frameworkName)}" data-group-id="${groupId}">
+          <div class="option-group-header">
+            <div class="option-group-toggle" onclick="toggleGroup(this.closest('.option-group-header'))">
+              <svg class="chevron-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>${escapeHtml(frameworkName)}</span>
+            </div>
+            <div class="option-group-actions">
+              <span class="option-group-count">${nodes.length} requirements</span>
+              <button type="button" class="btn-group-select" onclick="event.stopPropagation(); selectAllInGroup('${groupId}')" title="Select all in this framework">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="1.5" y="1.5" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M4 7L6 9L10 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Select All
+              </button>
+            </div>
           </div>
           <div class="option-group-items">
       `;
@@ -153,8 +165,39 @@ function toggleGroup(header) {
   group.classList.toggle('collapsed');
 }
 
-// Make toggleGroup globally available
+// Select all items in a specific group
+function selectAllInGroup(groupId) {
+  const group = document.querySelector(`[data-group-id="${groupId}"]`);
+  if (!group) return;
+  
+  // Expand the group if collapsed
+  group.classList.remove('collapsed');
+  
+  const items = group.querySelectorAll('.option-item:not([style*="display: none"])');
+  let addedCount = 0;
+  
+  items.forEach(item => {
+    const optionData = JSON.parse(item.dataset.option);
+    const exists = currentSelections.some(s => s.nodeUrn === optionData.nodeUrn);
+    if (!exists) {
+      currentSelections.push(optionData);
+      item.classList.add('selected');
+      addedCount++;
+    }
+  });
+  
+  updateSelectionUI();
+  
+  if (addedCount > 0) {
+    showToast('success', 'Selected', `Added ${addedCount} requirements from this framework.`);
+  } else {
+    showToast('info', 'Already Selected', 'All requirements in this framework are already selected.');
+  }
+}
+
+// Make functions globally available
 window.toggleGroup = toggleGroup;
+window.selectAllInGroup = selectAllInGroup;
 
 // Toggle option selection
 function toggleOption(item) {
