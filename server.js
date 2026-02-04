@@ -66,8 +66,8 @@ function parseBody(req) {
   });
 }
 
-// Call Gemini API
-async function callGeminiAPI(requirement, userPrompt, apiKey) {
+// Call Gemini API for a single requirement
+async function callGeminiAPIForSingle(requirement, userPrompt, apiKey) {
   // Build the prompt from template
   const fullPrompt = promptTemplate
     .replace('{{REQUIREMENT}}', JSON.stringify(requirement, null, 2))
@@ -158,7 +158,6 @@ async function callGeminiAPI(requirement, userPrompt, apiKey) {
     
     // Try to extract structured data from partial JSON
     try {
-      // Sometimes the response is cut off - try to extract what we can
       const evidenceMatch = jsonStr.match(/"typical_evidence"\s*:\s*\[([\s\S]*?)\]/);
       const questionsMatch = jsonStr.match(/"questions"\s*:\s*\[([\s\S]*?)\]/);
       
@@ -176,6 +175,49 @@ async function callGeminiAPI(requirement, userPrompt, apiKey) {
     
     throw new Error('Failed to parse AI response. Please try again.');
   }
+}
+
+// Call Gemini API for multiple requirements (batch processing)
+async function callGeminiAPIForMultiple(requirements, userPrompt, apiKey) {
+  console.log(`Processing ${requirements.length} requirements...`);
+  
+  // Process requirements in parallel (with a concurrency limit to avoid rate limiting)
+  const CONCURRENCY_LIMIT = 3;
+  const results = [];
+  
+  for (let i = 0; i < requirements.length; i += CONCURRENCY_LIMIT) {
+    const batch = requirements.slice(i, i + CONCURRENCY_LIMIT);
+    const batchPromises = batch.map(async (requirement, batchIndex) => {
+      const index = i + batchIndex;
+      console.log(`Analyzing requirement ${index + 1}/${requirements.length}: ${requirement.refId || 'No ref'}`);
+      
+      try {
+        const analysis = await callGeminiAPIForSingle(requirement, userPrompt, apiKey);
+        return {
+          requirement,
+          analysis,
+          success: true
+        };
+      } catch (error) {
+        console.error(`Failed to analyze requirement ${index + 1}:`, error.message);
+        return {
+          requirement,
+          analysis: {
+            typical_evidence: [],
+            questions: [],
+            suggestions: []
+          },
+          success: false,
+          error: error.message
+        };
+      }
+    });
+    
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+  }
+  
+  return { results };
 }
 
 // Serve static files
@@ -215,11 +257,16 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
-  // API endpoint for Gemini
+  // API endpoint for Gemini - supports both single and multiple requirements
   if (url.pathname === '/api/analyze' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
-      const { requirement, prompt } = body;
+      console.log('Received request body:', JSON.stringify(body, null, 2));
+      
+      const { requirement, requirements, prompt } = body;
+      console.log('requirements array:', requirements);
+      console.log('requirements is array:', Array.isArray(requirements));
+      console.log('requirements length:', requirements?.length);
       
       // Use server-side API key from .env, fallback to header if provided
       const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
@@ -230,13 +277,25 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      // Handle multiple requirements (new multi-select feature)
+      if (requirements && Array.isArray(requirements) && requirements.length > 0) {
+        console.log(`Received batch request for ${requirements.length} requirements`);
+        
+        const result = await callGeminiAPIForMultiple(requirements, prompt, apiKey);
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, data: result }));
+        return;
+      }
+      
+      // Handle single requirement (backward compatibility)
       if (!requirement) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Requirement is required' }));
+        res.end(JSON.stringify({ error: 'Requirement(s) required. Provide "requirement" or "requirements" array.' }));
         return;
       }
 
-      const result = await callGeminiAPI(requirement, prompt, apiKey);
+      const result = await callGeminiAPIForSingle(requirement, prompt, apiKey);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, data: result }));
@@ -259,7 +318,7 @@ server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║   🚀 Framework Requirements App                           ║
+║   🚀 Framework Requirements App (Multi-Select)            ║
 ║                                                           ║
 ║   Server running at: http://localhost:${PORT}               ║
 ║                                                           ║
@@ -267,7 +326,8 @@ server.listen(PORT, () => {
 ║                                                           ║
 ║   Endpoints:                                              ║
 ║   • GET  /           - Serve the app                      ║
-║   • POST /api/analyze - Analyze requirement with Gemini   ║
+║   • POST /api/analyze - Analyze requirements with Gemini  ║
+║                         (supports batch processing)       ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
