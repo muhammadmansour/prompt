@@ -935,7 +935,7 @@ function formatAnalysisForAPI(analysisData) {
         .join('\n');
     }
     
-    // Format questions with proper structure
+    // Format questions with proper URN-based structure for UI rendering
     const questions = {};
     let questionItems = analysis.questions || [];
     
@@ -943,14 +943,21 @@ function formatAnalysisForAPI(analysisData) {
       questionItems = Object.values(questionItems);
     }
     
+    const nodeUrn = selection.nodeUrn || '';
     questionItems.forEach((item, index) => {
       if (!item) return;
       const questionText = item.question || item.text || item.q || '';
       if (questionText) {
-        questions[`q${index + 1}`] = {
-          text: questionText,
+        const qNum = index + 1;
+        const questionUrn = `${nodeUrn}:question:${qNum}`;
+        questions[questionUrn] = {
           type: 'unique_choice',
-          options: ['yes', 'no', 'partial']
+          text: questionText,
+          choices: [
+            { urn: `${questionUrn}:choice:1`, value: 'Yes' },
+            { urn: `${questionUrn}:choice:2`, value: 'No' },
+            { urn: `${questionUrn}:choice:3`, value: 'Partial' }
+          ]
         };
       }
     });
@@ -1005,18 +1012,29 @@ async function confirmAnalysis() {
           .join('\n');
       }
       
-      // Format questions
+      // Format questions with proper URN-based structure for UI rendering
       const questions = {};
-      const questionItems = analysis.questions || [];
+      let questionItems = analysis.questions || [];
       
+      if (!Array.isArray(questionItems)) {
+        questionItems = Object.values(questionItems);
+      }
+      
+      const nodeUrn = selection.nodeUrn || '';
       questionItems.forEach((item, index) => {
         if (!item) return;
-        const questionText = item.question || '';
+        const questionText = item.question || item.text || item.q || '';
         if (questionText) {
-          questions[`q${index + 1}`] = {
-            text: questionText,
+          const qNum = index + 1;
+          const questionUrn = `${nodeUrn}:question:${qNum}`;
+          questions[questionUrn] = {
             type: 'unique_choice',
-            options: ['yes', 'no', 'partial']
+            text: questionText,
+            choices: [
+              { urn: `${questionUrn}:choice:1`, value: 'Yes' },
+              { urn: `${questionUrn}:choice:2`, value: 'No' },
+              { urn: `${questionUrn}:choice:3`, value: 'Partial' }
+            ]
           };
         }
       });
