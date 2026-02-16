@@ -51,6 +51,39 @@
 
   <!-- Dashboard -->
   <main class="dashboard">
+
+    <!-- Hero Header -->
+    <div class="dashboard-hero">
+      <div class="hero-icon">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <rect width="48" height="48" rx="14" fill="url(#heroGrad)"/>
+          <path d="M14 24L20 30L34 16" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="heroGrad" x1="0" y1="0" x2="48" y2="48">
+              <stop stop-color="#3b5998"/>
+              <stop offset="1" stop-color="#4a6db5"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <h1 class="hero-title">Auditing Studio</h1>
+      <p class="hero-subtitle">Build your context session with requirements, references, and queries</p>
+    </div>
+
+    <!-- Previous Sessions -->
+    <div class="prev-sessions-section" id="prev-sessions-section" style="display:none">
+      <div class="prev-sessions-header">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M10 6V10L13 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span>Continue Previous Sessions</span>
+      </div>
+      <div class="prev-sessions-carousel" id="prev-sessions-list">
+        <!-- Session cards rendered by JS -->
+      </div>
+    </div>
+
     <div class="dashboard-grid">
 
       <!-- Card 1: Framework Requirements -->

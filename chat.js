@@ -57,43 +57,106 @@ function loadSessionContext() {
 }
 
 function renderContextBar() {
+  const reqs = sessionContext.requirements || [];
+  const files = sessionContext.fileResources || [];
+  const colls = sessionContext.collections || [];
+
   // Requirements count
   const reqCount = document.getElementById('ctx-req-count');
   if (reqCount) {
-    reqCount.textContent = `${sessionContext.requirements.length} selected`;
+    reqCount.textContent = `${reqs.length} selected`;
   }
 
   // Files count
   const filesCount = document.getElementById('ctx-files-count');
   if (filesCount) {
-    const nFiles = sessionContext.fileResources.length;
-    const nCollections = sessionContext.collections.length;
-    filesCount.textContent = `${nFiles} files in ${nCollections} collections`;
+    filesCount.textContent = `${files.length} files in ${colls.length} collection${colls.length !== 1 ? 's' : ''}`;
   }
 
-  // Query summary
+  // Query summary — show full text, not truncated
   const querySummary = document.getElementById('ctx-query-summary');
   if (querySummary) {
+    querySummary.textContent = sessionContext.query || 'No query';
     if (sessionContext.query) {
-      querySummary.textContent = sessionContext.query.length > 50
-        ? sessionContext.query.substring(0, 50) + '...'
-        : sessionContext.query;
-    } else {
-      querySummary.textContent = 'No query';
+      querySummary.title = sessionContext.query; // full text on hover
     }
   }
 
-  // Show detail card with query if present
-  const detailCard = document.getElementById('ctx-detail-card');
-  const detailContent = document.getElementById('ctx-detail-content');
-  if (detailCard && detailContent && sessionContext.query) {
-    detailCard.style.display = '';
-    detailContent.innerHTML = `
-      <div class="context-detail-label">Initial Query:</div>
-      <div class="context-detail-text">${escapeHtml(sessionContext.query)}</div>
-    `;
+  // Populate requirements detail panel
+  const reqList = document.getElementById('ctx-req-list');
+  if (reqList) {
+    if (reqs.length === 0) {
+      reqList.innerHTML = '<div class="ctx-empty">No requirements selected</div>';
+    } else {
+      // Group by framework
+      const grouped = {};
+      reqs.forEach(r => {
+        const fw = r.frameworkName || 'Unknown Framework';
+        if (!grouped[fw]) grouped[fw] = [];
+        grouped[fw].push(r);
+      });
+      let html = '';
+      Object.entries(grouped).forEach(([fw, items]) => {
+        html += `<div class="ctx-group-label">${escapeHtml(fw)}</div>`;
+        items.forEach(r => {
+          const refId = r.refId || '';
+          const desc = r.description || r.name || '';
+          html += `<div class="ctx-detail-item">
+            <span class="ctx-ref-id">${escapeHtml(refId)}</span>
+            <span class="ctx-desc">${escapeHtml(desc)}</span>
+          </div>`;
+        });
+      });
+      reqList.innerHTML = html;
+    }
+  }
+
+  // Populate files detail panel
+  const filesList = document.getElementById('ctx-files-list');
+  if (filesList) {
+    if (colls.length === 0 && files.length === 0) {
+      filesList.innerHTML = '<div class="ctx-empty">No reference files</div>';
+    } else {
+      let html = '';
+      // Show collections
+      colls.forEach(c => {
+        const collFiles = files.filter(f => f.storeId === c.storeId);
+        html += `<div class="ctx-group-label">📁 ${escapeHtml(c.displayName || c.storeId)}</div>`;
+        if (collFiles.length > 0) {
+          collFiles.forEach(f => {
+            html += `<div class="ctx-detail-item">
+              <span class="ctx-desc">📄 ${escapeHtml(f.documentName || f.fileId)}</span>
+            </div>`;
+          });
+        } else {
+          html += '<div class="ctx-detail-item"><span class="ctx-desc" style="color:var(--color-text-hint)">No files selected</span></div>';
+        }
+      });
+      // Files not in any listed collection
+      const collIds = colls.map(c => c.storeId);
+      const orphanFiles = files.filter(f => !collIds.includes(f.storeId));
+      orphanFiles.forEach(f => {
+        html += `<div class="ctx-detail-item">
+          <span class="ctx-desc">📄 ${escapeHtml(f.documentName || f.fileId)}</span>
+        </div>`;
+      });
+      filesList.innerHTML = html;
+    }
   }
 }
+
+function toggleContextExpand(panelId) {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  const isVisible = panel.style.display !== 'none';
+  // Close all panels first
+  document.querySelectorAll('.context-details-panel').forEach(p => p.style.display = 'none');
+  // Toggle the clicked one
+  if (!isVisible) {
+    panel.style.display = '';
+  }
+}
+window.toggleContextExpand = toggleContextExpand;
 
 // ==========================================
 // Messages
@@ -216,6 +279,17 @@ async function resumeSession(sessionId) {
       throw new Error(data.error || 'Session not found');
     }
 
+    // Load context data from server for the context bar
+    if (data.context) {
+      sessionContext.requirements = data.context.requirements || [];
+      sessionContext.fileResources = data.context.fileResources || [];
+      sessionContext.collections = data.context.collections || [];
+      sessionContext.query = data.context.query || '';
+    }
+
+    // Update context bar with detailed info
+    renderContextBar();
+
     // Render all history messages
     if (data.history && data.history.length > 0) {
       data.history.forEach(msg => {
@@ -225,8 +299,6 @@ async function resumeSession(sessionId) {
       addMessage('ai', 'Session loaded but no messages found. You can continue the conversation below.');
     }
 
-    // Update context bar with basic info
-    renderContextBar();
     console.log(`Session ${sessionId} resumed with ${data.history?.length || 0} messages`);
   } catch (e) {
     console.error('Failed to resume session:', e);
@@ -248,6 +320,7 @@ async function initSession() {
         context: {
           requirements: sessionContext.requirements,
           fileResources: sessionContext.fileResources,
+          collections: sessionContext.collections,
           query: sessionContext.query
         }
       })

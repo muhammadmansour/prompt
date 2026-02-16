@@ -51,25 +51,31 @@
 
   <!-- Session Context Bar -->
   <div class="chat-context-bar">
-    <div class="context-card">
+    <div class="context-card" onclick="toggleContextExpand('ctx-req-details')" style="cursor:pointer">
       <div class="context-card-icon requirements-icon">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
           <path d="M3 9L7 13L15 5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
       <div class="context-card-info">
-        <div class="context-card-title">Requirements</div>
+        <div class="context-card-title">
+          Requirements
+          <svg class="ctx-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
         <div class="context-card-value" id="ctx-req-count">0 selected</div>
       </div>
     </div>
-    <div class="context-card">
+    <div class="context-card" onclick="toggleContextExpand('ctx-files-details')" style="cursor:pointer">
       <div class="context-card-icon files-icon">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
           <path d="M2 6V14C2 15.1 2.9 16 4 16H14C15.1 16 16 15.1 16 14V8C16 6.9 15.1 6 14 6H9L7.5 4H4C2.9 4 2 4.9 2 6Z" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
       <div class="context-card-info">
-        <div class="context-card-title">Reference Files</div>
+        <div class="context-card-title">
+          Reference Files
+          <svg class="ctx-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
         <div class="context-card-value" id="ctx-files-count">0 files in 0 collections</div>
       </div>
     </div>
@@ -85,8 +91,16 @@
         <div class="context-card-value" id="ctx-query-summary">No query</div>
       </div>
     </div>
-    <div class="context-card context-card-detail" id="ctx-detail-card" style="display:none">
-      <div class="context-detail-content" id="ctx-detail-content"></div>
+  </div>
+  <!-- Expandable details panels (shown below context bar) -->
+  <div class="context-details-panel" id="ctx-req-details" style="display:none">
+    <div class="context-details-content" id="ctx-req-list">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+  <div class="context-details-panel" id="ctx-files-details" style="display:none">
+    <div class="context-details-content" id="ctx-files-list">
+      <!-- Populated by JS -->
     </div>
   </div>
 

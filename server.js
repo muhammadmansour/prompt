@@ -462,6 +462,51 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- List all chat sessions ----
+  if (url.pathname === '/api/chat/sessions' && req.method === 'GET') {
+    try {
+      const sessions = Object.values(chatSessions).map(s => {
+        const ctx = s.context || {};
+        const reqs = ctx.requirements || [];
+        const files = ctx.fileResources || [];
+        const query = ctx.query || '';
+
+        return {
+          sessionId: s.id,
+          createdAt: s.createdAt,
+          query,
+          requirementsCount: reqs.length,
+          filesCount: files.length,
+          collectionsCount: (ctx.collections || []).length,
+          // Include requirement details for display
+          requirements: reqs.map(r => ({
+            refId: r.refId || '',
+            description: r.description || r.name || '',
+            frameworkName: r.frameworkName || ''
+          })),
+          // Include collection/file details
+          collections: (ctx.collections || []).map(c => ({
+            storeId: c.storeId,
+            displayName: c.displayName || c.storeId
+          })),
+          fileResources: files.map(f => ({
+            storeId: f.storeId,
+            fileId: f.fileId,
+            documentName: f.documentName || ''
+          }))
+        };
+      }).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); // newest first
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, sessions }));
+    } catch (error) {
+      console.error('List sessions error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   // ---- Get chat session history ----
   const sessionMatch = url.pathname.match(/^\/api\/chat\/sessions\/([0-9a-f-]+)$/);
   if (sessionMatch && req.method === 'GET') {
@@ -486,6 +531,7 @@ const server = http.createServer(async (req, res) => {
         success: true,
         sessionId,
         createdAt: session.createdAt,
+        context: session.context || {},
         history
       }));
     } catch (error) {
@@ -597,6 +643,7 @@ const server = http.createServer(async (req, res) => {
         id: sessionId,
         cachedContentName,
         systemPrompt,
+        context: context || {},  // Store the original context for listing
         createdAt: new Date().toISOString(),
         chat: genai.chats.create({
           model: 'gemini-2.5-flash',
@@ -657,6 +704,7 @@ const server = http.createServer(async (req, res) => {
           id: sessionId,
           cachedContentName: null,
           systemPrompt: chatPromptTemplate || '',
+          context: {},
           createdAt: new Date().toISOString(),
           chat: genai.chats.create({
             model: 'gemini-2.5-flash',

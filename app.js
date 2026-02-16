@@ -1577,10 +1577,91 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ==========================================
+// Previous Sessions
+// ==========================================
+
+async function fetchPreviousSessions() {
+  try {
+    const res = await fetch('/api/chat/sessions');
+    const data = await res.json();
+    if (data.success && data.sessions && data.sessions.length > 0) {
+      renderPreviousSessions(data.sessions);
+    }
+  } catch (e) {
+    console.warn('Could not fetch previous sessions:', e);
+  }
+}
+
+function renderPreviousSessions(sessions) {
+  const section = document.getElementById('prev-sessions-section');
+  const list = document.getElementById('prev-sessions-list');
+  if (!section || !list) return;
+
+  section.style.display = '';
+
+  list.innerHTML = sessions.map(s => {
+    const date = new Date(s.createdAt);
+    const dateStr = date.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: 'numeric' });
+    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    let reqsHtml = '';
+    if (s.requirements && s.requirements.length > 0) {
+      const shown = s.requirements.slice(0, 3);
+      reqsHtml = shown.map(r => {
+        const refId = r.refId ? `<span class="session-ref-id">${escapeHtml(r.refId)}</span>` : '';
+        const desc = r.description || r.frameworkName || '';
+        const truncDesc = desc.length > 60 ? desc.substring(0, 60) + '...' : desc;
+        return `<div class="session-req-item">${refId}<span class="session-req-desc">${escapeHtml(truncDesc)}</span></div>`;
+      }).join('');
+      if (s.requirements.length > 3) {
+        reqsHtml += `<div class="session-req-more">+${s.requirements.length - 3} more</div>`;
+      }
+    }
+
+    let collsHtml = '';
+    if (s.collections && s.collections.length > 0) {
+      collsHtml = s.collections.map(c =>
+        `<span class="session-coll-tag">${escapeHtml(c.displayName || c.storeId)}</span>`
+      ).join('');
+    }
+
+    const queryPreview = s.query
+      ? (s.query.length > 80 ? s.query.substring(0, 80) + '...' : s.query)
+      : '';
+
+    return `<div class="session-card" onclick="continueSession('${s.sessionId}')">
+      <div class="session-card-header">
+        <div class="session-card-title">Audit Session</div>
+        <div class="session-card-date">${dateStr} at ${timeStr}</div>
+      </div>
+      <div class="session-card-stats">
+        <div class="session-stat"><div class="session-stat-num">${s.requirementsCount || 0}</div><div class="session-stat-label">Reqs</div></div>
+        <div class="session-stat"><div class="session-stat-num">${s.collectionsCount || 0}</div><div class="session-stat-label">Collections</div></div>
+        <div class="session-stat"><div class="session-stat-num">${s.filesCount || 0}</div><div class="session-stat-label">Files</div></div>
+      </div>
+      ${reqsHtml ? '<div class="session-card-reqs">' + reqsHtml + '</div>' : ''}
+      ${collsHtml ? '<div class="session-card-colls">' + collsHtml + '</div>' : ''}
+      ${queryPreview ? '<div class="session-card-query">' + escapeHtml(queryPreview) + '</div>' : ''}
+      <button class="btn-continue-session" onclick="event.stopPropagation(); continueSession('${s.sessionId}')">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7H11M8 4L11 7L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Continue Session
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function continueSession(sessionId) {
+  window.location.href = '/chat.html?session=' + sessionId;
+}
+
+window.continueSession = continueSession;
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   fetchLibraries();
   fetchCollections();
+  fetchPreviousSessions();
   updateButtons();
 });
 
@@ -1588,6 +1669,7 @@ document.addEventListener('DOMContentLoaded', () => {
 if (document.readyState !== 'loading') {
   fetchLibraries();
   fetchCollections();
+  fetchPreviousSessions();
 }
 
 // Make functions globally available for onclick handlers
