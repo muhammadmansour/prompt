@@ -250,6 +250,10 @@ function updateSelectionUI() {
   renderSelectedInfo();
   updateButtons();
   selectionCount.textContent = currentSelections.length;
+  
+  // Update summary counts in the dashboard
+  const summaryReqCount = document.getElementById('summary-req-count');
+  if (summaryReqCount) summaryReqCount.textContent = currentSelections.length;
 }
 
 // Render selected tags

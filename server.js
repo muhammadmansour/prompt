@@ -4,6 +4,8 @@ const path = require('path');
 
 const PORT = 6060;
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const GEMINI_UPLOAD_URL = 'https://generativelanguage.googleapis.com/upload/v1beta';
 
 // Load environment variables from .env file
 function loadEnv() {
@@ -51,12 +53,22 @@ const mimeTypes = {
 // Parse JSON body from request
 function parseBody(req) {
   return new Promise((resolve, reject) => {
-    let body = '';
+    const chunks = [];
+    let size = 0;
+    const MAX_SIZE = 150 * 1024 * 1024; // 150MB limit for base64 file uploads
+
     req.on('data', chunk => {
-      body += chunk.toString();
+      size += chunk.length;
+      if (size > MAX_SIZE) {
+        reject(new Error('Request body too large (max 150MB)'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
     });
     req.on('end', () => {
       try {
+        const body = Buffer.concat(chunks).toString('utf-8');
         resolve(body ? JSON.parse(body) : {});
       } catch (e) {
         reject(new Error('Invalid JSON'));
@@ -66,9 +78,12 @@ function parseBody(req) {
   });
 }
 
+// ==========================================
+// Gemini Analysis API
+// ==========================================
+
 // Call Gemini API for a single requirement
 async function callGeminiAPIForSingle(requirement, userPrompt, apiKey) {
-  // Build the prompt from template
   const fullPrompt = promptTemplate
     .replace('{{REQUIREMENT}}', JSON.stringify(requirement, null, 2))
     .replace('{{USER_PROMPT}}', userPrompt || 'No additional context provided.');
@@ -102,26 +117,22 @@ async function callGeminiAPIForSingle(requirement, userPrompt, apiKey) {
 
   const data = await response.json();
   
-  // Extract the text response
   const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
   
   if (!textResponse) {
     throw new Error('No response from Gemini API');
   }
 
-  // Parse the JSON from the response (handle markdown code blocks)
   let jsonStr = textResponse.trim();
   
   console.log('Raw Gemini response length:', textResponse.length);
   
-  // Remove markdown code blocks if present
   const jsonMatch = textResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (jsonMatch) {
     jsonStr = jsonMatch[1].trim();
     console.log('Extracted from markdown code block');
   }
   
-  // Try to find JSON object in the response if not already clean JSON
   if (!jsonStr.startsWith('{')) {
     const jsonObjectMatch = jsonStr.match(/\{[\s\S]*\}/);
     if (jsonObjectMatch) {
@@ -133,7 +144,6 @@ async function callGeminiAPIForSingle(requirement, userPrompt, apiKey) {
   try {
     const parsed = JSON.parse(jsonStr);
     
-    // Validate the structure
     if (!parsed.typical_evidence || !Array.isArray(parsed.typical_evidence)) {
       parsed.typical_evidence = [];
     }
@@ -156,7 +166,6 @@ async function callGeminiAPIForSingle(requirement, userPrompt, apiKey) {
     console.error('Parse error:', e.message);
     console.error('First 500 chars of response:', textResponse.substring(0, 500));
     
-    // Try to extract structured data from partial JSON
     try {
       const evidenceMatch = jsonStr.match(/"typical_evidence"\s*:\s*\[([\s\S]*?)\]/);
       const questionsMatch = jsonStr.match(/"questions"\s*:\s*\[([\s\S]*?)\]/);
@@ -181,7 +190,6 @@ async function callGeminiAPIForSingle(requirement, userPrompt, apiKey) {
 async function callGeminiAPIForMultiple(requirements, userPrompt, apiKey) {
   console.log(`Processing ${requirements.length} requirements...`);
   
-  // Process requirements in parallel (with a concurrency limit to avoid rate limiting)
   const CONCURRENCY_LIMIT = 3;
   const results = [];
   
@@ -220,7 +228,119 @@ async function callGeminiAPIForMultiple(requirements, userPrompt, apiKey) {
   return { results };
 }
 
-// Serve static files
+// ==========================================
+// Gemini File Search Store (Collections) API
+// ==========================================
+
+// Create a file search store
+async function createFileSearchStore(displayName, apiKey) {
+  const res = await fetch(`${GEMINI_BASE_URL}/fileSearchStores?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ displayName })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Create store failed (${res.status}): ${err}`);
+  }
+  return res.json();
+}
+
+// List all file search stores
+async function listFileSearchStores(apiKey) {
+  const res = await fetch(`${GEMINI_BASE_URL}/fileSearchStores?key=${apiKey}`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`List stores failed (${res.status}): ${err}`);
+  }
+  return res.json();
+}
+
+// Delete a file search store
+async function deleteFileSearchStore(storeName, apiKey) {
+  const res = await fetch(`${GEMINI_BASE_URL}/${storeName}?key=${apiKey}`, {
+    method: 'DELETE'
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Delete store failed (${res.status}): ${err}`);
+  }
+  // DELETE may return empty body
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
+}
+
+// Upload file to Gemini Files API (step 1 of 2)
+async function uploadFileToGemini(fileName, mimeType, fileBuffer, apiKey) {
+  const boundary = `===boundary_${Date.now()}_${Math.random().toString(36).slice(2)}===`;
+  const metadata = JSON.stringify({ file: { displayName: fileName } });
+
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`),
+    fileBuffer,
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ]);
+
+  const res = await fetch(`${GEMINI_UPLOAD_URL}/files?key=${apiKey}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': `multipart/related; boundary=${boundary}`
+    },
+    body
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`File upload failed (${res.status}): ${err}`);
+  }
+  return res.json();
+}
+
+// Import file into a file search store (step 2 of 2)
+async function importFileToStore(storeName, fileName, apiKey) {
+  const res = await fetch(`${GEMINI_BASE_URL}/${storeName}:importFile?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileName })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Import file failed (${res.status}): ${err}`);
+  }
+  return res.json();
+}
+
+// List documents in a file search store
+async function listStoreDocuments(storeName, apiKey) {
+  const res = await fetch(`${GEMINI_BASE_URL}/${storeName}/fileSearchDocuments?key=${apiKey}`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`List documents failed (${res.status}): ${err}`);
+  }
+  return res.json();
+}
+
+// Poll a long-running operation until done
+async function pollOperation(operationName, apiKey, maxWaitMs = 120000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const res = await fetch(`${GEMINI_BASE_URL}/${operationName}?key=${apiKey}`);
+    if (!res.ok) {
+      console.warn(`Poll operation warning: ${res.status}`);
+      break;
+    }
+    const op = await res.json();
+    if (op.done) return op;
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  return { done: false, note: 'Still processing in background' };
+}
+
+// ==========================================
+// Static File Server
+// ==========================================
+
 function serveStaticFile(res, filePath) {
   const ext = path.extname(filePath);
   const contentType = mimeTypes[ext] || 'application/octet-stream';
@@ -241,11 +361,14 @@ function serveStaticFile(res, filePath) {
   });
 }
 
-// Create HTTP server
+// ==========================================
+// HTTP Server
+// ==========================================
+
 const server = http.createServer(async (req, res) => {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PATCH, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
 
   // Handle preflight
@@ -257,18 +380,14 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
-  // API endpoint for Gemini - supports both single and multiple requirements
+  // ---- Analyze API ----
   if (url.pathname === '/api/analyze' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
-      console.log('Received request body:', JSON.stringify(body, null, 2));
+      console.log('Received analysis request');
       
       const { requirement, requirements, prompt } = body;
-      console.log('requirements array:', requirements);
-      console.log('requirements is array:', Array.isArray(requirements));
-      console.log('requirements length:', requirements?.length);
       
-      // Use server-side API key from .env, fallback to header if provided
       const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
 
       if (!apiKey) {
@@ -277,38 +396,153 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // Handle multiple requirements (new multi-select feature)
       if (requirements && Array.isArray(requirements) && requirements.length > 0) {
-        console.log(`Received batch request for ${requirements.length} requirements`);
-        
+        console.log(`Batch analysis for ${requirements.length} requirements`);
         const result = await callGeminiAPIForMultiple(requirements, prompt, apiKey);
-        
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, data: result }));
         return;
       }
       
-      // Handle single requirement (backward compatibility)
       if (!requirement) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Requirement(s) required. Provide "requirement" or "requirements" array.' }));
+        res.end(JSON.stringify({ error: 'Requirement(s) required.' }));
         return;
       }
 
       const result = await callGeminiAPIForSingle(requirement, prompt, apiKey);
-
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, data: result }));
-
     } catch (error) {
-      console.error('API Error:', error.message);
+      console.error('Analyze API Error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }
     return;
   }
 
-  // Serve static files
+  // ---- Collections API ----
+  const collectionsMatch = url.pathname.match(/^\/api\/collections(?:\/([^\/]+))?(?:\/(files))?$/);
+  if (collectionsMatch) {
+    const storeId = collectionsMatch[1];
+    const isFiles = collectionsMatch[2] === 'files';
+    const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+
+    if (!apiKey) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'API key not configured.' }));
+      return;
+    }
+
+    try {
+      // POST /api/collections — Create a new file search store
+      if (!storeId && req.method === 'POST') {
+        const body = await parseBody(req);
+        const displayName = body.displayName || 'Untitled Collection';
+        console.log(`Creating file search store: "${displayName}"`);
+        
+        const store = await createFileSearchStore(displayName, apiKey);
+        console.log('Store created:', store);
+        
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, data: store }));
+        return;
+      }
+
+      // GET /api/collections — List all file search stores
+      if (!storeId && req.method === 'GET') {
+        console.log('Listing file search stores...');
+        const stores = await listFileSearchStores(apiKey);
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, data: stores }));
+        return;
+      }
+
+      // DELETE /api/collections/:id — Delete a file search store
+      if (storeId && !isFiles && req.method === 'DELETE') {
+        const storeName = `fileSearchStores/${storeId}`;
+        console.log(`Deleting store: ${storeName}`);
+        
+        await deleteFileSearchStore(storeName, apiKey);
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      // POST /api/collections/:id/files — Upload file to a store
+      if (storeId && isFiles && req.method === 'POST') {
+        const body = await parseBody(req);
+        const { fileName, mimeType, data } = body;
+
+        if (!fileName || !data) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'fileName and data (base64) are required.' }));
+          return;
+        }
+
+        console.log(`Uploading file "${fileName}" to store fileSearchStores/${storeId}`);
+
+        // Step 1: Upload to Gemini Files API
+        const fileBuffer = Buffer.from(data, 'base64');
+        const fileResult = await uploadFileToGemini(
+          fileName,
+          mimeType || 'application/octet-stream',
+          fileBuffer,
+          apiKey
+        );
+        console.log('File uploaded to Files API:', fileResult.file?.name);
+
+        // Step 2: Import into the file search store
+        const storeName = `fileSearchStores/${storeId}`;
+        const importResult = await importFileToStore(storeName, fileResult.file.name, apiKey);
+        console.log('Import started:', importResult.name || 'immediate');
+
+        // Step 3: Poll operation if it's async
+        let finalResult = importResult;
+        if (importResult.name && !importResult.done) {
+          console.log('Polling import operation...');
+          finalResult = await pollOperation(importResult.name, apiKey);
+          console.log('Import complete:', finalResult.done);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          data: {
+            file: fileResult.file,
+            import: finalResult
+          }
+        }));
+        return;
+      }
+
+      // GET /api/collections/:id/files — List files in a store
+      if (storeId && isFiles && req.method === 'GET') {
+        const storeName = `fileSearchStores/${storeId}`;
+        console.log(`Listing documents in ${storeName}`);
+        
+        const docs = await listStoreDocuments(storeName, apiKey);
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, data: docs }));
+        return;
+      }
+
+      // Fallback — method not allowed
+      res.writeHead(405, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Method not allowed' }));
+
+    } catch (error) {
+      console.error('Collections API Error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Static Files ----
   let filePath = path.join(__dirname, url.pathname === '/' ? 'index.html' : url.pathname);
   serveStaticFile(res, filePath);
 });
@@ -318,16 +552,20 @@ server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║   🚀 Framework Requirements App (Multi-Select)            ║
+║   🚀 Wathbah Auditor Assistant                            ║
 ║                                                           ║
 ║   Server running at: http://localhost:${PORT}               ║
 ║                                                           ║
 ║   Gemini API Key: ${apiKeyStatus.padEnd(36)}║
 ║                                                           ║
 ║   Endpoints:                                              ║
-║   • GET  /           - Serve the app                      ║
-║   • POST /api/analyze - Analyze requirements with Gemini  ║
-║                         (supports batch processing)       ║
+║   • GET  /                        - Serve the app         ║
+║   • POST /api/analyze             - Analyze requirements  ║
+║   • GET  /api/collections         - List collections      ║
+║   • POST /api/collections         - Create collection     ║
+║   • DELETE /api/collections/:id   - Delete collection     ║
+║   • GET  /api/collections/:id/files - List files          ║
+║   • POST /api/collections/:id/files - Upload file         ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
