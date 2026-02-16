@@ -11,14 +11,6 @@
 </head>
 <body>
 
-  <!-- Top Banner -->
-  <div class="top-banner">
-    <span class="banner-text">Start Chatting Button Implementation (Community)</span>
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M4 6L7 9L10 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-  </div>
-
   <!-- Navigation Bar -->
   <nav class="navbar">
     <div class="nav-brand">
@@ -139,6 +131,25 @@
             </svg>
             New Collection
           </button>
+          <div class="new-collection-row hidden" id="new-collection-row">
+            <input
+              type="text"
+              class="new-collection-input"
+              id="new-collection-input"
+              placeholder="Collection name..."
+              autocomplete="off"
+            />
+            <button type="button" class="btn-collection-add" id="btn-collection-add" title="Create collection">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button type="button" class="btn-collection-cancel" id="btn-collection-cancel" title="Cancel">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M10 4L4 10M4 4L10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </button>
+          </div>
           <div class="collections-list" id="collections-list">
             <!-- Collections accordion will be rendered here by JS -->
           </div>

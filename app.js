@@ -437,58 +437,39 @@ function handleTextareaInput(e) {
   charCount.textContent = e.target.value.length;
 }
 
-// Analyze with Gemini API - now handles multiple requirements
-async function analyzeRequirement() {
+// Start Audit Session — save context and navigate to chat page
+function analyzeRequirement() {
   const userPrompt = notesTextarea.value.trim();
   
   if (currentSelections.length === 0) {
+    showToast('error', 'No Requirements', 'Please select at least one requirement before starting.');
     return;
   }
   
-  // Show loading state
-  btnAnalyze.classList.add('loading');
-  btnAnalyze.querySelector('.btn-text').classList.add('hidden');
-  btnAnalyze.querySelector('.btn-icon').classList.add('hidden');
-  btnAnalyze.querySelector('.btn-loading').classList.remove('hidden');
-  btnAnalyze.disabled = true;
+  // Gather selected file resources
+  const selectedFiles = typeof getSelectedFileResources === 'function' ? getSelectedFileResources() : [];
   
-  try {
-    // Send all requirements at once for batch analysis
-    const requestBody = {
-      requirements: currentSelections,
-      prompt: userPrompt
-    };
-    
-    console.log('Sending analysis request:', JSON.stringify(requestBody, null, 2));
-    console.log('Number of requirements:', currentSelections.length);
-    
-    const response = await fetch(ANALYZE_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to analyze requirements');
-    }
-    
-    if (data.success && data.data) {
-      showModal(data.data);
-    } else {
-      throw new Error('Invalid response from server');
-    }
-  } catch (error) {
-    console.error('Analysis error:', error);
-    showModalError(error.message);
-  } finally {
-    btnAnalyze.classList.remove('loading');
-    btnAnalyze.querySelector('.btn-text').classList.remove('hidden');
-    btnAnalyze.querySelector('.btn-icon').classList.remove('hidden');
-    btnAnalyze.querySelector('.btn-loading').classList.add('hidden');
-    updateAnalyzeButton();
-  }
+  // Gather unique collection IDs from selected files
+  const collectionIds = [...new Set(selectedFiles.map(f => f.storeId))];
+  const collections = collectionIds.map(id => {
+    const store = collectionsData.find(s => s.name.split('/').pop() === id);
+    return { storeId: id, displayName: store?.displayName || id };
+  });
+  
+  // Save session context to sessionStorage (server will generate UUID on session create)
+  const sessionData = {
+    requirements: currentSelections,
+    fileResources: selectedFiles,
+    collections: collections,
+    query: userPrompt,
+    timestamp: new Date().toISOString()
+  };
+  
+  sessionStorage.setItem('auditSession', JSON.stringify(sessionData));
+  console.log('Audit session saved:', sessionData);
+  
+  // Navigate to chat page
+  window.location.href = '/chat.html';
 }
 
 // Show modal with results - now handles multiple requirements
@@ -1092,7 +1073,482 @@ async function confirmAnalysis() {
   }
 }
 
-// Event listeners
+// ==========================================
+// Collections Management (File Search Stores)
+// ==========================================
+
+let collectionsData = []; // Array of file search stores with their files
+let selectedFileResources = new Set(); // Set of "storeId:fileId" keys for selected files
+
+// Fetch all collections from the API
+async function fetchCollections() {
+  try {
+    const res = await fetch('/api/collections');
+    const data = await res.json();
+    
+    if (data.success && data.data) {
+      collectionsData = data.data.fileSearchStores || [];
+      
+      // Fetch files for each collection in parallel
+      await Promise.all(collectionsData.map(async (store) => {
+        try {
+          const storeId = store.name.split('/').pop();
+          const filesRes = await fetch(`/api/collections/${storeId}/files`);
+          const filesData = await filesRes.json();
+          store.files = filesData.success ? (filesData.data?.documents || []) : [];
+        } catch (e) {
+          console.warn(`Could not fetch files for ${store.name}:`, e.message);
+          store.files = [];
+        }
+      }));
+      
+      renderCollections();
+      updateCollectionSummary();
+    }
+  } catch (error) {
+    console.error('Failed to fetch collections:', error);
+  }
+}
+
+// Show the inline input row for creating a new collection
+function showNewCollectionInput() {
+  const btn = document.getElementById('btn-new-collection');
+  const row = document.getElementById('new-collection-row');
+  const input = document.getElementById('new-collection-input');
+  if (!btn || !row || !input) return;
+
+  btn.classList.add('hidden');
+  row.classList.remove('hidden');
+  input.value = '';
+  input.focus();
+}
+
+// Hide the inline input row and show the button again
+function hideNewCollectionInput() {
+  const btn = document.getElementById('btn-new-collection');
+  const row = document.getElementById('new-collection-row');
+  if (!btn || !row) return;
+
+  row.classList.add('hidden');
+  btn.classList.remove('hidden');
+}
+
+// Create a new collection (file search store) from the inline input
+async function createCollection() {
+  const input = document.getElementById('new-collection-input');
+  const addBtn = document.getElementById('btn-collection-add');
+  const name = input?.value?.trim();
+  if (!name) {
+    input?.focus();
+    return;
+  }
+
+  try {
+    // Disable controls while creating
+    if (input) input.disabled = true;
+    if (addBtn) addBtn.disabled = true;
+
+    const loadingToast = showToast('info', 'Creating...', `Setting up "${name}"...`, 0);
+
+    const res = await fetch('/api/collections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: name })
+    });
+    const data = await res.json();
+
+    if (loadingToast) removeToast(loadingToast);
+
+    if (data.success) {
+      showToast('success', 'Collection Created', `"${name}" is ready for files.`);
+      hideNewCollectionInput();
+      await fetchCollections();
+    } else {
+      throw new Error(data.error || 'Unknown error');
+    }
+  } catch (error) {
+    showToast('error', 'Create Failed', error.message);
+  } finally {
+    if (input) input.disabled = false;
+    if (addBtn) addBtn.disabled = false;
+  }
+}
+
+// Delete a collection
+async function deleteCollection(storeId, displayName) {
+  if (!confirm(`Delete collection "${displayName}"?\nThis will remove the collection and all files in it.`)) return;
+  
+  try {
+    const res = await fetch(`/api/collections/${storeId}`, { method: 'DELETE' });
+    const data = await res.json();
+    
+    if (data.success) {
+      showToast('success', 'Deleted', `Collection "${displayName}" has been removed.`);
+      await fetchCollections();
+    } else {
+      throw new Error(data.error || 'Unknown error');
+    }
+  } catch (error) {
+    showToast('error', 'Delete Failed', error.message);
+  }
+}
+
+// Upload a file to a collection
+async function uploadFileToCollection(storeId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls,.json,.html,.xml,.md,.pptx,.rtf,.zip';
+  
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    // Gemini limit: 100MB per document
+    if (file.size > 100 * 1024 * 1024) {
+      showToast('error', 'File Too Large', 'Maximum file size is 100MB.');
+      return;
+    }
+    
+    const loadingToast = showToast('info', 'Uploading...', `Uploading "${file.name}"... This may take a moment while indexing.`, 0);
+    
+    try {
+      // Read file as base64
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = () => reject(new Error('Could not read file'));
+        reader.readAsDataURL(file);
+      });
+      
+      const res = await fetch(`/api/collections/${storeId}/files`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          data: base64Data
+        })
+      });
+      
+      const data = await res.json();
+      
+      if (loadingToast) removeToast(loadingToast);
+      
+      if (data.success) {
+        showToast('success', 'File Uploaded', `"${file.name}" has been uploaded and indexed.`);
+
+        // Immediately update local data and re-render for instant feedback
+        const store = collectionsData.find(s => {
+          const id = s.name.split('/').pop();
+          return id === storeId;
+        });
+        if (store) {
+          const newFile = {
+            name: data.data?.response?.document?.name || `fileSearchStores/${storeId}/documents/${Date.now()}`,
+            displayName: file.name,
+            state: 'STATE_PROCESSING'
+          };
+          if (!store.files) store.files = [];
+          store.files.push(newFile);
+          renderCollections();
+          updateCollectionSummary();
+        }
+
+        // Also sync from API in background for accurate data
+        fetchCollections();
+      } else {
+        throw new Error(data.error || 'Upload failed');
+      }
+    } catch (error) {
+      if (loadingToast) removeToast(loadingToast);
+      showToast('error', 'Upload Failed', error.message);
+    }
+  };
+  
+  input.click();
+}
+
+// Toggle selection of a single file
+function toggleFileSelection(storeId, fileId) {
+  const key = storeId + ':' + fileId;
+  if (selectedFileResources.has(key)) {
+    selectedFileResources.delete(key);
+  } else {
+    selectedFileResources.add(key);
+  }
+  updateFileSelectionUI();
+}
+
+// Toggle selection of an entire collection (all its files)
+function toggleCollectionSelection(storeId) {
+  const store = collectionsData.find(s => s.name.split('/').pop() === storeId);
+  if (!store || !store.files) return;
+
+  const activeFiles = store.files.filter(f => (f.state || 'STATE_ACTIVE') === 'STATE_ACTIVE');
+  const allKeys = activeFiles.map(f => storeId + ':' + (f.name || '').split('/').pop());
+  const allSelected = allKeys.length > 0 && allKeys.every(k => selectedFileResources.has(k));
+
+  if (allSelected) {
+    // Deselect all
+    allKeys.forEach(k => selectedFileResources.delete(k));
+  } else {
+    // Select all active files
+    allKeys.forEach(k => selectedFileResources.add(k));
+  }
+  updateFileSelectionUI();
+}
+
+// Update checkbox UI and counters without full re-render (preserves collapse state)
+function updateFileSelectionUI() {
+  // Update individual file checkboxes
+  document.querySelectorAll('.collection-file-item[data-file-key]').forEach(el => {
+    const key = el.dataset.fileKey;
+    el.classList.toggle('selected', selectedFileResources.has(key));
+  });
+
+  // Update collection-level checkboxes
+  document.querySelectorAll('.collection-group[data-store-id]').forEach(group => {
+    const storeId = group.dataset.storeId;
+    const fileEls = group.querySelectorAll('.collection-file-item[data-file-key]');
+    const activeEls = [...fileEls].filter(el => !el.querySelector('.file-status.failed') && !el.querySelector('.file-status.processing'));
+    const selectedCount = activeEls.filter(el => selectedFileResources.has(el.dataset.fileKey)).length;
+
+    const cb = group.querySelector('.collection-select-checkbox');
+    if (cb) {
+      cb.classList.toggle('checked', activeEls.length > 0 && selectedCount === activeEls.length);
+      cb.classList.toggle('partial', selectedCount > 0 && selectedCount < activeEls.length);
+    }
+  });
+
+  // Update context-files-count in card 3
+  const contextCount = document.getElementById('context-files-count');
+  if (contextCount) contextCount.textContent = selectedFileResources.size;
+
+  // Update summary
+  const summaryFilesEl = document.getElementById('summary-files-count');
+  if (summaryFilesEl) summaryFilesEl.textContent = selectedFileResources.size;
+}
+
+// Get selected file resource names for API
+function getSelectedFileResources() {
+  const resources = [];
+  selectedFileResources.forEach(key => {
+    const [storeId, fileId] = key.split(':');
+    resources.push({
+      storeId,
+      fileId,
+      storeName: `fileSearchStores/${storeId}`,
+      documentName: `fileSearchStores/${storeId}/documents/${fileId}`
+    });
+  });
+  return resources;
+}
+
+// Delete a single file from a collection
+async function deleteFileFromCollection(storeId, fileId, fileName) {
+  if (!confirm(`Delete "${fileName}"?\nThis file will be permanently removed.`)) return;
+  
+  try {
+    const res = await fetch(`/api/collections/${storeId}/files/${fileId}`, { method: 'DELETE' });
+    const data = await res.json();
+    
+    if (data.success) {
+      showToast('success', 'File Deleted', `"${fileName}" has been removed.`);
+      
+      // Immediately remove from local data and re-render
+      const store = collectionsData.find(s => s.name.split('/').pop() === storeId);
+      if (store && store.files) {
+        store.files = store.files.filter(f => {
+          const fId = (f.name || '').split('/').pop();
+          return fId !== fileId;
+        });
+        renderCollections();
+        updateCollectionSummary();
+      }
+    } else {
+      throw new Error(data.error || 'Unknown error');
+    }
+  } catch (error) {
+    showToast('error', 'Delete Failed', error.message);
+  }
+}
+
+// Render collections as accordion list (matching framework list style)
+function renderCollections() {
+  const listEl = document.getElementById('collections-list');
+  const emptyEl = document.getElementById('collections-empty-state');
+  
+  if (!listEl) return;
+  
+  if (collectionsData.length === 0) {
+    listEl.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = '';
+    return;
+  }
+  
+  if (emptyEl) emptyEl.style.display = 'none';
+  
+  // Save expanded groups and scroll position before re-render
+  const expandedStores = new Set();
+  listEl.querySelectorAll('.collection-group:not(.collapsed)').forEach(g => {
+    if (g.dataset.storeId) expandedStores.add(g.dataset.storeId);
+  });
+  const scrollParent = listEl.closest('.card-body') || listEl.parentElement;
+  const savedScroll = scrollParent ? scrollParent.scrollTop : 0;
+  
+  let html = '';
+  collectionsData.forEach((store, index) => {
+    const storeId = store.name.split('/').pop();
+    const displayName = store.displayName || `Collection ${index + 1}`;
+    const files = store.files || [];
+    const fileCount = files.length;
+    
+    html += `
+      <div class="collection-group${expandedStores.has(storeId) ? '' : ' collapsed'}" data-store-id="${storeId}">
+        <div class="collection-group-header">
+          <div class="collection-header-left">
+            <div class="collection-select-checkbox" onclick="event.stopPropagation(); toggleCollectionSelection('${escapeHtml(storeId)}')" title="Select all files">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="collection-toggle" onclick="toggleCollectionGroup(this)">
+              <svg class="chevron-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span class="collection-name">${escapeHtml(displayName)}</span>
+            </div>
+          </div>
+          <div class="collection-actions">
+            <span class="collection-count">${fileCount}</span>
+            <button type="button" class="btn-collection-upload" onclick="event.stopPropagation(); uploadFileToCollection('${escapeHtml(storeId)}')" title="Upload file">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M12 9V11.5C12 12.1 11.6 12.5 11 12.5H3C2.4 12.5 2 12.1 2 11.5V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M9.5 4.5L7 2L4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M7 2V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              Upload
+            </button>
+            <button type="button" class="btn-collection-delete" onclick="event.stopPropagation(); deleteCollection('${escapeHtml(storeId)}', '${escapeHtml(displayName).replace(/'/g, "\\'")}')" title="Delete collection">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="collection-items">
+          ${files.length === 0 ? `
+            <div class="collection-empty">
+              <span>No files yet — click Upload to add documents.</span>
+            </div>
+          ` : files.map((file, fIdx) => {
+            const fName = file.displayName || file.name || `File ${fIdx + 1}`;
+            const fState = file.state || 'STATE_ACTIVE';
+            const fId = (file.name || '').split('/').pop();
+            const fileKey = storeId + ':' + fId;
+            const isFileSelected = selectedFileResources.has(fileKey);
+            return `
+              <div class="collection-file-item${isFileSelected ? ' selected' : ''}" data-file-state="${fState}" data-file-key="${fileKey}">
+                <div class="file-select-checkbox${isFileSelected ? ' checked' : ''}" onclick="event.stopPropagation(); toggleFileSelection('${escapeHtml(storeId)}', '${escapeHtml(fId)}')" title="Select file">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M2 5L4 7L8 3" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+                <svg class="file-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="file-name">${escapeHtml(fName)}</span>
+                <span class="file-status ${fState === 'STATE_ACTIVE' ? 'active' : fState === 'STATE_FAILED' ? 'failed' : 'processing'}">${fState === 'STATE_ACTIVE' ? 'Indexed' : fState === 'STATE_FAILED' ? 'Failed' : 'Processing'}</span>
+                <button type="button" class="btn-file-delete" onclick="event.stopPropagation(); deleteFileFromCollection('${escapeHtml(storeId)}', '${escapeHtml(fId)}', '${escapeHtml(fName).replace(/'/g, "\\'")}')" title="Delete file">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M9 3L3 9M3 3L9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                </button>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  });
+  
+  listEl.innerHTML = html;
+
+  // Restore scroll position (prevent page jump)
+  if (scrollParent) scrollParent.scrollTop = savedScroll;
+
+  // Restore selection state on checkboxes
+  updateFileSelectionUI();
+
+  // If any files are still PROCESSING, start auto-refresh
+  const hasProcessing = collectionsData.some(store =>
+    (store.files || []).some(f => f.state === 'STATE_PROCESSING')
+  );
+  if (hasProcessing) {
+    startCollectionsAutoRefresh();
+  }
+}
+
+// Toggle collection group expand/collapse
+function toggleCollectionGroup(toggleEl) {
+  const group = toggleEl.closest('.collection-group');
+  if (group) group.classList.toggle('collapsed');
+}
+
+// Update collection-related summary counts
+function updateCollectionSummary() {
+  const totalFiles = collectionsData.reduce((sum, store) => sum + (store.files?.length || 0), 0);
+  const totalCollections = collectionsData.length;
+  
+  const filesCountEl = document.getElementById('files-count');
+  const collectionsCountEl = document.getElementById('collections-count');
+  const summaryCollectionsEl = document.getElementById('summary-collections-count');
+  const summaryFilesEl = document.getElementById('summary-files-count');
+  
+  if (filesCountEl) filesCountEl.textContent = totalFiles;
+  if (collectionsCountEl) collectionsCountEl.textContent = totalCollections;
+  if (summaryCollectionsEl) summaryCollectionsEl.textContent = totalCollections;
+  if (summaryFilesEl) summaryFilesEl.textContent = totalFiles;
+}
+
+// Auto-refresh timer for PROCESSING files
+let collectionsRefreshTimer = null;
+
+function startCollectionsAutoRefresh() {
+  stopCollectionsAutoRefresh();
+  collectionsRefreshTimer = setInterval(async () => {
+    const hasProcessing = collectionsData.some(store =>
+      (store.files || []).some(f => f.state === 'STATE_PROCESSING')
+    );
+    if (hasProcessing) {
+      console.log('Auto-refreshing: PROCESSING files detected...');
+      await fetchCollections();
+      // Check again after refresh
+      const stillProcessing = collectionsData.some(store =>
+        (store.files || []).some(f => f.state === 'STATE_PROCESSING')
+      );
+      if (!stillProcessing) {
+        console.log('All files indexed — stopping auto-refresh.');
+        stopCollectionsAutoRefresh();
+      }
+    } else {
+      stopCollectionsAutoRefresh();
+    }
+  }, 5000); // Poll every 5 seconds
+}
+
+function stopCollectionsAutoRefresh() {
+  if (collectionsRefreshTimer) {
+    clearInterval(collectionsRefreshTimer);
+    collectionsRefreshTimer = null;
+  }
+}
+
+// ==========================================
+// Event Listeners
+// ==========================================
+
 notesTextarea.addEventListener('input', handleTextareaInput);
 btnAnalyze.addEventListener('click', analyzeRequirement);
 btnSubmit.addEventListener('click', submitForm);
@@ -1105,6 +1561,15 @@ modalOverlay.addEventListener('click', (e) => {
   }
 });
 
+// Collection buttons
+document.getElementById('btn-new-collection')?.addEventListener('click', showNewCollectionInput);
+document.getElementById('btn-collection-add')?.addEventListener('click', createCollection);
+document.getElementById('btn-collection-cancel')?.addEventListener('click', hideNewCollectionInput);
+document.getElementById('new-collection-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') createCollection();
+  if (e.key === 'Escape') hideNewCollectionInput();
+});
+
 // Close modal on Escape key
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && modalOverlay.classList.contains('active')) {
@@ -1115,18 +1580,26 @@ document.addEventListener('keydown', (e) => {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   fetchLibraries();
+  fetchCollections();
   updateButtons();
 });
 
 // Fetch immediately if DOM already loaded
 if (document.readyState !== 'loading') {
   fetchLibraries();
+  fetchCollections();
 }
 
-// Make removeSelection globally available for onclick handlers
+// Make functions globally available for onclick handlers
 window.removeSelection = removeSelection;
 window.addItem = addItem;
 window.editItem = editItem;
 window.deleteItem = deleteItem;
 window.saveItem = saveItem;
 window.renderModalContent = renderModalContent;
+window.toggleCollectionGroup = toggleCollectionGroup;
+window.uploadFileToCollection = uploadFileToCollection;
+window.deleteCollection = deleteCollection;
+window.deleteFileFromCollection = deleteFileFromCollection;
+window.toggleFileSelection = toggleFileSelection;
+window.toggleCollectionSelection = toggleCollectionSelection;

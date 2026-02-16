@@ -1,6 +1,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { GoogleGenAI } = require('@google/genai');
 
 const PORT = 6060;
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
@@ -27,7 +29,11 @@ loadEnv();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// Load the prompt template
+// Gemini SDK client + in-memory chat sessions (SDK ChatSession objects)
+let genai = null;
+const chatSessions = {};  // sessionId -> { chat: SDK ChatSession, systemPrompt: string }
+
+// Load prompt templates
 const promptTemplatePath = path.join(__dirname, 'prompts', 'requirement-analyzer.txt');
 let promptTemplate = '';
 
@@ -36,6 +42,15 @@ try {
 } catch (error) {
   console.error('Error loading prompt template:', error.message);
   process.exit(1);
+}
+
+const chatPromptPath = path.join(__dirname, 'prompts', 'chat-auditor.txt');
+let chatPromptTemplate = '';
+
+try {
+  chatPromptTemplate = fs.readFileSync(chatPromptPath, 'utf-8');
+} catch (error) {
+  console.warn('Chat prompt template not found, using default.');
 }
 
 // MIME types for static files
@@ -270,55 +285,81 @@ async function deleteFileSearchStore(storeName, apiKey) {
   return text ? JSON.parse(text) : {};
 }
 
-// Upload file to Gemini Files API (step 1 of 2)
-async function uploadFileToGemini(fileName, mimeType, fileBuffer, apiKey) {
-  const boundary = `===boundary_${Date.now()}_${Math.random().toString(36).slice(2)}===`;
-  const metadata = JSON.stringify({ file: { displayName: fileName } });
+// Upload file directly to a file search store using resumable upload protocol.
+// This combines file upload + store import in a single operation.
+async function uploadFileToStore(storeName, fileName, mimeType, fileBuffer, apiKey) {
+  const sizeBytes = fileBuffer.length;
 
-  const body = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`),
-    Buffer.from(`--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`),
-    fileBuffer,
-    Buffer.from(`\r\n--${boundary}--\r\n`)
-  ]);
+  // URL-encode the filename for HTTP headers (non-ASCII chars like Arabic are not allowed in headers)
+  const encodedFileName = encodeURIComponent(fileName);
 
-  const res = await fetch(`${GEMINI_UPLOAD_URL}/files?key=${apiKey}`, {
+  // Step 1: Initiate resumable upload — get the upload URL
+  const initRes = await fetch(`${GEMINI_UPLOAD_URL}/${storeName}:uploadToFileSearchStore?key=${apiKey}`, {
     method: 'POST',
     headers: {
-      'Content-Type': `multipart/related; boundary=${boundary}`
+      'Content-Type': 'application/json',
+      'X-Goog-Upload-Protocol': 'resumable',
+      'X-Goog-Upload-Command': 'start',
+      'X-Goog-Upload-Header-Content-Length': String(sizeBytes),
+      'X-Goog-Upload-Header-Content-Type': mimeType,
+      'X-Goog-Upload-File-Name': encodedFileName
     },
-    body
+    body: JSON.stringify({
+      displayName: fileName
+    })
   });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`File upload failed (${res.status}): ${err}`);
+  if (!initRes.ok) {
+    const err = await initRes.text();
+    throw new Error(`Upload initiation failed (${initRes.status}): ${err}`);
   }
-  return res.json();
-}
 
-// Import file into a file search store (step 2 of 2)
-async function importFileToStore(storeName, fileName, apiKey) {
-  const res = await fetch(`${GEMINI_BASE_URL}/${storeName}:importFile?key=${apiKey}`, {
+  const uploadUrl = initRes.headers.get('x-goog-upload-url');
+  if (!uploadUrl) {
+    throw new Error('Server did not return an upload URL.');
+  }
+
+  // Step 2: Upload the actual file bytes to the upload URL
+  const uploadRes = await fetch(uploadUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fileName })
+    headers: {
+      'Content-Length': String(sizeBytes),
+      'X-Goog-Upload-Command': 'upload, finalize',
+      'X-Goog-Upload-Offset': '0',
+      'X-Goog-Upload-File-Name': encodedFileName
+    },
+    body: fileBuffer
   });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Import file failed (${res.status}): ${err}`);
+
+  if (!uploadRes.ok) {
+    const err = await uploadRes.text();
+    throw new Error(`File upload failed (${uploadRes.status}): ${err}`);
   }
-  return res.json();
+
+  return uploadRes.json();
 }
 
 // List documents in a file search store
 async function listStoreDocuments(storeName, apiKey) {
-  const res = await fetch(`${GEMINI_BASE_URL}/${storeName}/fileSearchDocuments?key=${apiKey}`);
+  const res = await fetch(`${GEMINI_BASE_URL}/${storeName}/documents?key=${apiKey}`);
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`List documents failed (${res.status}): ${err}`);
   }
   return res.json();
+}
+
+// Delete a document from a file search store
+async function deleteDocument(documentName, apiKey) {
+  const res = await fetch(`${GEMINI_BASE_URL}/${documentName}?key=${apiKey}`, {
+    method: 'DELETE'
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Delete document failed (${res.status}): ${err}`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
 }
 
 // Poll a long-running operation until done
@@ -421,11 +462,239 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- Get chat session history ----
+  const sessionMatch = url.pathname.match(/^\/api\/chat\/sessions\/([0-9a-f-]+)$/);
+  if (sessionMatch && req.method === 'GET') {
+    try {
+      const sessionId = sessionMatch[1];
+      const session = chatSessions[sessionId];
+
+      if (!session) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Session not found.' }));
+        return;
+      }
+
+      // Get history from SDK ChatSession
+      const history = session.chat.getHistory(false).map(entry => ({
+        role: entry.role === 'model' ? 'ai' : 'user',
+        text: entry.parts?.map(p => p.text).join('') || ''
+      }));
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        sessionId,
+        createdAt: session.createdAt,
+        history
+      }));
+    } catch (error) {
+      console.error('Get session error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Create new chat session ----
+  if (url.pathname === '/api/chat/sessions' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const { context } = body;
+      const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+
+      if (!apiKey) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'API key not configured.' }));
+        return;
+      }
+
+      // Lazy-init the SDK client
+      if (!genai) {
+        genai = new GoogleGenAI({ apiKey });
+      }
+
+      // Generate proper UUID
+      const sessionId = crypto.randomUUID();
+
+      // Build the system instruction from context
+      let systemPrompt = chatPromptTemplate || `You are an expert compliance and governance auditor for the Wathbah Auditor platform.`;
+
+      if (context) {
+        // Inject selected requirements with full details
+        if (context.requirements && context.requirements.length > 0) {
+          systemPrompt += `\n\n---\n## SESSION CONTEXT: Selected Requirements (${context.requirements.length} total)\n`;
+          const groupedByFramework = {};
+          context.requirements.forEach(r => {
+            const fw = r.frameworkName || 'Unknown Framework';
+            if (!groupedByFramework[fw]) groupedByFramework[fw] = [];
+            groupedByFramework[fw].push(r);
+          });
+          Object.entries(groupedByFramework).forEach(([fw, reqs]) => {
+            systemPrompt += `\n### Framework: ${fw}\n`;
+            reqs.forEach((r, i) => {
+              systemPrompt += `${i + 1}. **[${r.refId || 'N/A'}]** ${r.description || r.name || ''}`;
+              if (r.nodeUrn) systemPrompt += ` (URN: ${r.nodeUrn})`;
+              systemPrompt += `\n`;
+            });
+          });
+        }
+
+        // Inject reference files / collections info
+        if (context.fileResources && context.fileResources.length > 0) {
+          systemPrompt += `\n---\n## SESSION CONTEXT: Reference Files (${context.fileResources.length} files)\n`;
+          systemPrompt += `The user has uploaded the following reference documents for cross-referencing:\n`;
+          context.fileResources.forEach((f, i) => {
+            systemPrompt += `${i + 1}. Store: ${f.storeName || f.storeId}, Document: ${f.documentName || f.fileId}\n`;
+          });
+          systemPrompt += `\nUse these documents to ground your analysis in the user's actual policies and evidence when possible.\n`;
+        }
+
+        // Inject user query context
+        if (context.query) {
+          systemPrompt += `\n---\n## SESSION CONTEXT: User's Initial Query\n"${context.query}"\n`;
+          systemPrompt += `\nAddress this query directly in your first response. Tailor all analysis to this specific focus area.\n`;
+        }
+      }
+
+      // Create Gemini cached content to store the session context on Gemini's servers
+      let cachedContentName = null;
+      try {
+        const cache = await genai.caches.create({
+          model: 'gemini-2.5-flash',
+          config: {
+            contents: [{
+              role: 'user',
+              parts: [{ text: `Session ${sessionId} initialized. Awaiting first query.` }]
+            }, {
+              role: 'model',
+              parts: [{ text: 'Session ready. I have loaded all the audit context and I am ready to analyze your requirements.' }]
+            }],
+            displayName: `wathbah-audit-${sessionId}`,
+            systemInstruction: systemPrompt,
+            ttl: '3600s' // 1 hour TTL
+          }
+        });
+        cachedContentName = cache.name;
+        console.log(`Gemini cache created: ${cachedContentName}`);
+      } catch (cacheErr) {
+        console.warn(`Cache creation failed (will use direct system instruction): ${cacheErr.message}`);
+      }
+
+      // Create SDK chat session — with cached content if available, otherwise system instruction
+      const chatConfig = {
+        temperature: 0.7,
+        maxOutputTokens: 8192
+      };
+
+      if (cachedContentName) {
+        chatConfig.cachedContent = cachedContentName;
+      } else {
+        chatConfig.systemInstruction = systemPrompt;
+      }
+
+      chatSessions[sessionId] = {
+        id: sessionId,
+        cachedContentName,
+        systemPrompt,
+        createdAt: new Date().toISOString(),
+        chat: genai.chats.create({
+          model: 'gemini-2.5-flash',
+          config: chatConfig
+        })
+      };
+
+      console.log(`Chat session created: ${sessionId} (cache: ${cachedContentName || 'none'}, prompt: ${systemPrompt.length} chars)`);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        sessionId,
+        cachedContent: cachedContentName || null
+      }));
+    } catch (error) {
+      console.error('Create session error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Send message to chat session ----
+  if (url.pathname === '/api/chat' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const { sessionId, message } = body;
+      const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+
+      if (!apiKey) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'API key not configured.' }));
+        return;
+      }
+
+      if (!sessionId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'sessionId is required.' }));
+        return;
+      }
+
+      if (!message) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Message is required.' }));
+        return;
+      }
+
+      // Lazy-init the SDK client
+      if (!genai) {
+        genai = new GoogleGenAI({ apiKey });
+      }
+
+      // Ensure session exists
+      if (!chatSessions[sessionId]) {
+        // Create a basic session on the fly if it doesn't exist
+        chatSessions[sessionId] = {
+          id: sessionId,
+          cachedContentName: null,
+          systemPrompt: chatPromptTemplate || '',
+          createdAt: new Date().toISOString(),
+          chat: genai.chats.create({
+            model: 'gemini-2.5-flash',
+            config: {
+              systemInstruction: chatPromptTemplate || 'You are an expert compliance auditor.',
+              temperature: 0.7,
+              maxOutputTokens: 8192
+            }
+          })
+        };
+        console.log(`Chat session created on-the-fly: ${sessionId}`);
+      }
+
+      const session = chatSessions[sessionId];
+
+      // Send message — SDK ChatSession handles history automatically
+      console.log(`Session ${sessionId}: sending message to Gemini (history: ${session.chat.getHistory(false).length} msgs)`);
+      const response = await session.chat.sendMessage({ message });
+      const reply = response.text || 'No response generated.';
+
+      console.log(`Session ${sessionId}: got reply (${reply.length} chars, history now: ${session.chat.getHistory(false).length} msgs)`);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, reply, sessionId }));
+    } catch (error) {
+      console.error('Chat API Error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   // ---- Collections API ----
-  const collectionsMatch = url.pathname.match(/^\/api\/collections(?:\/([^\/]+))?(?:\/(files))?$/);
+  const collectionsMatch = url.pathname.match(/^\/api\/collections(?:\/([^\/]+))?(?:\/(files)(?:\/([^\/]+))?)?$/);
   if (collectionsMatch) {
     const storeId = collectionsMatch[1];
     const isFiles = collectionsMatch[2] === 'files';
+    const fileId = collectionsMatch[3]; // optional file ID for single-file ops
     const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
 
     if (!apiKey) {
@@ -482,38 +751,32 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        console.log(`Uploading file "${fileName}" to store fileSearchStores/${storeId}`);
+        const storeName = `fileSearchStores/${storeId}`;
+        console.log(`Uploading file "${fileName}" to store ${storeName}`);
 
-        // Step 1: Upload to Gemini Files API
+        // Upload directly to the file search store (resumable protocol)
         const fileBuffer = Buffer.from(data, 'base64');
-        const fileResult = await uploadFileToGemini(
+        const result = await uploadFileToStore(
+          storeName,
           fileName,
           mimeType || 'application/octet-stream',
           fileBuffer,
           apiKey
         );
-        console.log('File uploaded to Files API:', fileResult.file?.name);
+        console.log('Upload + index result:', JSON.stringify(result).slice(0, 200));
 
-        // Step 2: Import into the file search store
-        const storeName = `fileSearchStores/${storeId}`;
-        const importResult = await importFileToStore(storeName, fileResult.file.name, apiKey);
-        console.log('Import started:', importResult.name || 'immediate');
-
-        // Step 3: Poll operation if it's async
-        let finalResult = importResult;
-        if (importResult.name && !importResult.done) {
-          console.log('Polling import operation...');
-          finalResult = await pollOperation(importResult.name, apiKey);
-          console.log('Import complete:', finalResult.done);
+        // Poll the operation if it's a long-running operation
+        let finalResult = result;
+        if (result.name && !result.done) {
+          console.log('Polling upload operation...');
+          finalResult = await pollOperation(result.name, apiKey);
+          console.log('Upload complete:', finalResult.done);
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: true,
-          data: {
-            file: fileResult.file,
-            import: finalResult
-          }
+          data: finalResult
         }));
         return;
       }
@@ -527,6 +790,18 @@ const server = http.createServer(async (req, res) => {
         
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, data: docs }));
+        return;
+      }
+
+      // DELETE /api/collections/:id/files/:fileId — Delete a single file
+      if (storeId && isFiles && fileId && req.method === 'DELETE') {
+        const documentName = `fileSearchStores/${storeId}/documents/${fileId}`;
+        console.log(`Deleting document: ${documentName}`);
+        
+        await deleteDocument(documentName, apiKey);
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
         return;
       }
 
@@ -566,6 +841,7 @@ server.listen(PORT, () => {
 ║   • DELETE /api/collections/:id   - Delete collection     ║
 ║   • GET  /api/collections/:id/files - List files          ║
 ║   • POST /api/collections/:id/files - Upload file         ║
+║   • DELETE /api/collections/:id/files/:fid - Delete file  ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
