@@ -6,6 +6,11 @@
 # Node
 node_modules/
 
+# Database
+sessions.db
+sessions.db-wal
+sessions.db-shm
+
 # OS
 .DS_Store
 Thumbs.db

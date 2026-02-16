@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { GoogleGenAI } = require('@google/genai');
+const Database = require('better-sqlite3');
 
 const PORT = 5555;
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
@@ -28,6 +29,62 @@ function loadEnv() {
 loadEnv();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// ==========================================
+// SQLite Database
+// ==========================================
+
+const db = new Database(path.join(__dirname, 'sessions.db'));
+db.pragma('journal_mode = WAL');  // Better performance for concurrent reads
+
+// Create tables
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    context TEXT NOT NULL DEFAULT '{}',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    cached_content_name TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+`);
+
+console.log('SQLite database initialized (sessions.db)');
+
+// DB helper functions
+const dbInsertSession = db.prepare(`
+  INSERT INTO sessions (id, context, system_prompt, cached_content_name, created_at)
+  VALUES (?, ?, ?, ?, ?)
+`);
+
+const dbInsertMessage = db.prepare(`
+  INSERT INTO messages (session_id, role, text, created_at)
+  VALUES (?, ?, ?, ?)
+`);
+
+const dbGetSession = db.prepare(`SELECT * FROM sessions WHERE id = ?`);
+
+const dbGetMessages = db.prepare(`
+  SELECT role, text, created_at FROM messages WHERE session_id = ? ORDER BY id ASC
+`);
+
+const dbListSessions = db.prepare(`
+  SELECT s.*, (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
+  FROM sessions s ORDER BY s.created_at DESC
+`);
+
+const dbDeleteSession = db.prepare(`DELETE FROM sessions WHERE id = ?`);
+const dbDeleteSessionMessages = db.prepare(`DELETE FROM messages WHERE session_id = ?`);
 
 // Gemini SDK client + in-memory chat sessions (SDK ChatSession objects)
 let genai = null;
@@ -465,26 +522,26 @@ const server = http.createServer(async (req, res) => {
   // ---- List all chat sessions ----
   if (url.pathname === '/api/chat/sessions' && req.method === 'GET') {
     try {
-      const sessions = Object.values(chatSessions).map(s => {
-        const ctx = s.context || {};
+      const rows = dbListSessions.all();
+      const sessions = rows.map(row => {
+        const ctx = JSON.parse(row.context || '{}');
         const reqs = ctx.requirements || [];
         const files = ctx.fileResources || [];
         const query = ctx.query || '';
 
         return {
-          sessionId: s.id,
-          createdAt: s.createdAt,
+          sessionId: row.id,
+          createdAt: row.created_at,
           query,
+          messageCount: row.message_count,
           requirementsCount: reqs.length,
           filesCount: files.length,
           collectionsCount: (ctx.collections || []).length,
-          // Include requirement details for display
           requirements: reqs.map(r => ({
             refId: r.refId || '',
             description: r.description || r.name || '',
             frameworkName: r.frameworkName || ''
           })),
-          // Include collection/file details
           collections: (ctx.collections || []).map(c => ({
             storeId: c.storeId,
             displayName: c.displayName || c.storeId
@@ -495,7 +552,7 @@ const server = http.createServer(async (req, res) => {
             documentName: f.documentName || ''
           }))
         };
-      }).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); // newest first
+      });
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, sessions }));
@@ -512,26 +569,27 @@ const server = http.createServer(async (req, res) => {
   if (sessionMatch && req.method === 'GET') {
     try {
       const sessionId = sessionMatch[1];
-      const session = chatSessions[sessionId];
+      const row = dbGetSession.get(sessionId);
 
-      if (!session) {
+      if (!row) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Session not found.' }));
         return;
       }
 
-      // Get history from SDK ChatSession
-      const history = session.chat.getHistory(false).map(entry => ({
-        role: entry.role === 'model' ? 'ai' : 'user',
-        text: entry.parts?.map(p => p.text).join('') || ''
+      // Get history from DB
+      const messages = dbGetMessages.all(sessionId);
+      const history = messages.map(m => ({
+        role: m.role,
+        text: m.text
       }));
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         success: true,
         sessionId,
-        createdAt: session.createdAt,
-        context: session.context || {},
+        createdAt: row.created_at,
+        context: JSON.parse(row.context || '{}'),
         history
       }));
     } catch (error) {
@@ -639,19 +697,31 @@ const server = http.createServer(async (req, res) => {
         chatConfig.systemInstruction = systemPrompt;
       }
 
+      const createdAt = new Date().toISOString();
+
+      // Save session to DB
+      dbInsertSession.run(
+        sessionId,
+        JSON.stringify(context || {}),
+        systemPrompt,
+        cachedContentName,
+        createdAt
+      );
+
+      // Keep in-memory chat session for active conversations
       chatSessions[sessionId] = {
         id: sessionId,
         cachedContentName,
         systemPrompt,
-        context: context || {},  // Store the original context for listing
-        createdAt: new Date().toISOString(),
+        context: context || {},
+        createdAt,
         chat: genai.chats.create({
           model: 'gemini-2.5-flash',
           config: chatConfig
         })
       };
 
-      console.log(`Chat session created: ${sessionId} (cache: ${cachedContentName || 'none'}, prompt: ${systemPrompt.length} chars)`);
+      console.log(`Chat session created & persisted: ${sessionId} (cache: ${cachedContentName || 'none'}, prompt: ${systemPrompt.length} chars)`);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -697,35 +767,80 @@ const server = http.createServer(async (req, res) => {
         genai = new GoogleGenAI({ apiKey });
       }
 
-      // Ensure session exists
+      // Ensure in-memory session exists (restore from DB if needed)
       if (!chatSessions[sessionId]) {
-        // Create a basic session on the fly if it doesn't exist
-        chatSessions[sessionId] = {
-          id: sessionId,
-          cachedContentName: null,
-          systemPrompt: chatPromptTemplate || '',
-          context: {},
-          createdAt: new Date().toISOString(),
-          chat: genai.chats.create({
-            model: 'gemini-2.5-flash',
-            config: {
-              systemInstruction: chatPromptTemplate || 'You are an expert compliance auditor.',
-              temperature: 0.7,
-              maxOutputTokens: 8192
-            }
-          })
-        };
-        console.log(`Chat session created on-the-fly: ${sessionId}`);
+        const row = dbGetSession.get(sessionId);
+        if (row) {
+          // Rebuild in-memory chat session from DB
+          const savedMessages = dbGetMessages.all(sessionId);
+          const history = savedMessages.map(m => ({
+            role: m.role === 'ai' ? 'model' : 'user',
+            parts: [{ text: m.text }]
+          }));
+
+          // Always use systemInstruction when restoring (cached content may have expired — TTL is 1h)
+          const chatConfig = {
+            systemInstruction: row.system_prompt || 'You are an expert compliance auditor.',
+            temperature: 0.7,
+            maxOutputTokens: 8192
+          };
+
+          // Provide history so the SDK ChatSession resumes from where it left off
+          if (history.length > 0) {
+            chatConfig.history = history;
+          }
+
+          chatSessions[sessionId] = {
+            id: sessionId,
+            cachedContentName: null, // Don't reuse expired cache
+            systemPrompt: row.system_prompt,
+            context: JSON.parse(row.context || '{}'),
+            createdAt: row.created_at,
+            chat: genai.chats.create({
+              model: 'gemini-2.5-flash',
+              config: chatConfig
+            })
+          };
+          console.log(`Chat session restored from DB: ${sessionId} (${history.length} messages, using systemInstruction)`);
+        } else {
+          // No DB record — create a fresh session
+          const createdAt = new Date().toISOString();
+          const sysPrompt = chatPromptTemplate || 'You are an expert compliance auditor.';
+          dbInsertSession.run(sessionId, '{}', sysPrompt, null, createdAt);
+
+          chatSessions[sessionId] = {
+            id: sessionId,
+            cachedContentName: null,
+            systemPrompt: sysPrompt,
+            context: {},
+            createdAt,
+            chat: genai.chats.create({
+              model: 'gemini-2.5-flash',
+              config: {
+                systemInstruction: sysPrompt,
+                temperature: 0.7,
+                maxOutputTokens: 8192
+              }
+            })
+          };
+          console.log(`Chat session created on-the-fly & persisted: ${sessionId}`);
+        }
       }
 
       const session = chatSessions[sessionId];
 
       // Send message — SDK ChatSession handles history automatically
-      console.log(`Session ${sessionId}: sending message to Gemini (history: ${session.chat.getHistory(false).length} msgs)`);
+      const historyLen = session.chat.getHistory ? session.chat.getHistory(false).length : 0;
+      console.log(`Session ${sessionId}: sending message to Gemini (history: ${historyLen} msgs)`);
       const response = await session.chat.sendMessage({ message });
       const reply = response.text || 'No response generated.';
 
-      console.log(`Session ${sessionId}: got reply (${reply.length} chars, history now: ${session.chat.getHistory(false).length} msgs)`);
+      // Persist both user message and AI reply to DB
+      const now = new Date().toISOString();
+      dbInsertMessage.run(sessionId, 'user', message, now);
+      dbInsertMessage.run(sessionId, 'ai', reply, now);
+
+      console.log(`Session ${sessionId}: got reply (${reply.length} chars) — messages persisted to DB`);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, reply, sessionId }));
