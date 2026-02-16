@@ -61,16 +61,48 @@ function renderContextBar() {
   const files = sessionContext.fileResources || [];
   const colls = sessionContext.collections || [];
 
-  // Requirements count
+  // Requirements — show names, not just count
   const reqCount = document.getElementById('ctx-req-count');
   if (reqCount) {
-    reqCount.textContent = `${reqs.length} selected`;
+    if (reqs.length === 0) {
+      reqCount.textContent = '0 selected';
+    } else if (reqs.length <= 2) {
+      // Show actual names
+      reqCount.innerHTML = reqs.map(r => {
+        const refId = r.refId || '';
+        const desc = r.description || r.name || '';
+        const short = desc.length > 45 ? desc.substring(0, 45) + '…' : desc;
+        return `<span class="ctx-inline-req">${refId ? '<b>' + escapeHtml(refId) + '</b> ' : ''}${escapeHtml(short)}</span>`;
+      }).join('<br>');
+    } else {
+      // Show first 2 + count
+      const first2 = reqs.slice(0, 2).map(r => {
+        const refId = r.refId || '';
+        const desc = r.description || r.name || '';
+        const short = desc.length > 40 ? desc.substring(0, 40) + '…' : desc;
+        return `<span class="ctx-inline-req">${refId ? '<b>' + escapeHtml(refId) + '</b> ' : ''}${escapeHtml(short)}</span>`;
+      }).join('<br>');
+      reqCount.innerHTML = first2 + `<br><span style="color:var(--color-text-hint);font-size:0.6875rem">+${reqs.length - 2} more</span>`;
+    }
   }
 
-  // Files count
+  // Files — show collection names, not just count
   const filesCount = document.getElementById('ctx-files-count');
   if (filesCount) {
-    filesCount.textContent = `${files.length} files in ${colls.length} collection${colls.length !== 1 ? 's' : ''}`;
+    if (colls.length === 0 && files.length === 0) {
+      filesCount.textContent = '0 files';
+    } else {
+      const collNames = colls.map(c => escapeHtml(c.displayName || c.storeId));
+      const fileCount = files.length;
+      let html = '';
+      if (collNames.length > 0) {
+        html = collNames.map(n => `<span class="ctx-inline-coll">📁 ${n}</span>`).join('<br>');
+        html += `<br><span style="color:var(--color-text-hint);font-size:0.6875rem">${fileCount} file${fileCount !== 1 ? 's' : ''}</span>`;
+      } else {
+        html = `${fileCount} file${fileCount !== 1 ? 's' : ''}`;
+      }
+      filesCount.innerHTML = html;
+    }
   }
 
   // Query summary — show full text, not truncated
