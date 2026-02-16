@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { GoogleGenAI } = require('@google/genai');
 
-const PORT = 6060;
+const PORT = 5555;
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const GEMINI_UPLOAD_URL = 'https://generativelanguage.googleapis.com/upload/v1beta';
