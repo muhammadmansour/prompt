@@ -1113,7 +1113,7 @@ async function fetchCollections() {
           const storeId = store.name.split('/').pop();
           const filesRes = await fetch(`/api/collections/${storeId}/files`);
           const filesData = await filesRes.json();
-          store.files = filesData.success ? (filesData.data?.fileSearchDocuments || []) : [];
+          store.files = filesData.success ? (filesData.data?.documents || filesData.data?.fileSearchDocuments || []) : [];
         } catch (e) {
           console.warn(`Could not fetch files for ${store.name}:`, e.message);
           store.files = [];
