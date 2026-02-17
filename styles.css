@@ -1380,19 +1380,10 @@ textarea::placeholder {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  position: relative;
   cursor: pointer;
   flex-shrink: 0;
   user-select: none;
-}
-
-.coll-checkbox input,
-.file-checkbox input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-  pointer-events: none;
+  padding: 2px;
 }
 
 .coll-checkmark {
@@ -1401,10 +1392,11 @@ textarea::placeholder {
   border: 2px solid var(--color-border);
   border-radius: 4px;
   background: var(--color-bg-card);
-  transition: var(--transition);
+  transition: all 0.15s ease;
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .file-checkmark {
@@ -1413,10 +1405,11 @@ textarea::placeholder {
   border: 2px solid var(--color-border);
   border-radius: 3px;
   background: var(--color-bg-card);
-  transition: var(--transition);
+  transition: all 0.15s ease;
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .coll-checkbox:hover .coll-checkmark,
@@ -1425,14 +1418,13 @@ textarea::placeholder {
 }
 
 /* Checked state */
-.coll-checkbox input:checked + .coll-checkmark,
-.file-checkbox input:checked + .file-checkmark {
+.coll-checkmark.checked,
+.file-checkmark.checked {
   background: var(--color-primary);
   border-color: var(--color-primary);
 }
 
-.coll-checkbox input:checked + .coll-checkmark::after,
-.file-checkbox input:checked + .file-checkmark::after {
+.coll-checkmark.checked::after {
   content: '';
   display: block;
   width: 5px;
@@ -1440,13 +1432,18 @@ textarea::placeholder {
   border: solid white;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
-  margin-top: -1px;
+  margin-top: -2px;
 }
 
-.file-checkbox input:checked + .file-checkmark::after {
+.file-checkmark.checked::after {
+  content: '';
+  display: block;
   width: 4px;
   height: 7px;
+  border: solid white;
   border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  margin-top: -1px;
 }
 
 /* Indeterminate (partial selection) */
@@ -1466,7 +1463,7 @@ textarea::placeholder {
 
 /* Spacer for non-selectable files (pending/failed) */
 .file-checkbox-spacer {
-  width: 15px;
+  width: 19px;
   flex-shrink: 0;
 }
 

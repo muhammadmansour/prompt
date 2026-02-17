@@ -1427,10 +1427,9 @@ function renderCollections() {
     html += `
       <div class="collection-group ${isExpanded ? '' : 'collapsed'} ${isCollSelected ? 'selected' : ''}" data-store-id="${storeId}">
         <div class="collection-group-header">
-          <label class="coll-checkbox" onclick="toggleCollectionSelection('${escapeHtml(storeId)}', event)">
-            <input type="checkbox" ${isCollSelected ? 'checked' : ''} ${collCheckState === 'indeterminate' ? 'data-indeterminate="true"' : ''} tabindex="-1" />
-            <span class="coll-checkmark ${collCheckState === 'indeterminate' ? 'indeterminate' : ''}"></span>
-          </label>
+          <div class="coll-checkbox" onclick="event.stopPropagation(); toggleCollectionSelection('${escapeHtml(storeId)}')">
+            <span class="coll-checkmark ${isCollSelected ? 'checked' : (collCheckState === 'indeterminate' ? 'indeterminate' : '')}"></span>
+          </div>
           <div class="collection-toggle" onclick="toggleCollectionGroup(this)">
             <svg class="chevron-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1482,12 +1481,11 @@ function renderCollections() {
               stateIcon = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/></svg>';
             }
             return `
-              <div class="collection-file-item ${stateClass === 'failed' ? 'file-failed' : ''} ${isFileSelected ? 'file-selected' : ''}">
+              <div class="collection-file-item ${stateClass === 'failed' ? 'file-failed' : ''} ${isFileSelected ? 'file-selected' : ''}" data-file-key="${escapeHtml(fileKey)}">
                 ${isActive ? `
-                <label class="file-checkbox" onclick="toggleFileSelection('${escapeHtml(storeId)}', '${escapeHtml(fileKey).replace(/'/g, "\\'")}', event)">
-                  <input type="checkbox" ${isFileSelected ? 'checked' : ''} tabindex="-1" />
-                  <span class="file-checkmark"></span>
-                </label>
+                <div class="file-checkbox" onclick="event.stopPropagation(); toggleFileSelection('${escapeHtml(storeId)}', '${escapeHtml(fileKey).replace(/'/g, "\\'")}')">
+                  <span class="file-checkmark ${isFileSelected ? 'checked' : ''}"></span>
+                </div>
                 ` : '<span class="file-checkbox-spacer"></span>'}
                 <svg class="file-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1513,37 +1511,30 @@ function toggleCollectionGroup(toggleEl) {
 }
 
 // Toggle selection of an entire collection (all active files)
-function toggleCollectionSelection(storeId, e) {
-  e.stopPropagation();
+function toggleCollectionSelection(storeId) {
   const store = collectionsData.find(s => s.name.split('/').pop() === storeId);
   if (!store) return;
 
   const activeFiles = (store.files || []).filter(f => f.state === 'STATE_ACTIVE');
 
   if (selectedCollections.has(storeId)) {
-    // Deselect collection and all its files
     selectedCollections.delete(storeId);
     activeFiles.forEach(f => {
-      const key = storeId + '::' + (f.name || f.displayName);
-      selectedFiles.delete(key);
+      selectedFiles.delete(storeId + '::' + (f.name || f.displayName));
     });
   } else {
-    // Select collection and all its active files
     selectedCollections.add(storeId);
     activeFiles.forEach(f => {
-      const key = storeId + '::' + (f.name || f.displayName);
-      selectedFiles.add(key);
+      selectedFiles.add(storeId + '::' + (f.name || f.displayName));
     });
   }
 
-  renderCollections();
+  updateSelectionCheckboxes();
   updateCollectionSummary();
 }
 
 // Toggle selection of a single file
-function toggleFileSelection(storeId, fileKey, e) {
-  e.stopPropagation();
-
+function toggleFileSelection(storeId, fileKey) {
   if (selectedFiles.has(fileKey)) {
     selectedFiles.delete(fileKey);
   } else {
@@ -1562,8 +1553,36 @@ function toggleFileSelection(storeId, fileKey, e) {
     }
   }
 
-  renderCollections();
+  updateSelectionCheckboxes();
   updateCollectionSummary();
+}
+
+// Update checkbox visuals without re-rendering the entire DOM
+function updateSelectionCheckboxes() {
+  document.querySelectorAll('.collection-group[data-store-id]').forEach(group => {
+    const storeId = group.getAttribute('data-store-id');
+    const isCollSelected = selectedCollections.has(storeId);
+    const store = collectionsData.find(s => s.name.split('/').pop() === storeId);
+    const files = store ? (store.files || []) : [];
+    const someSelected = files.some(f => selectedFiles.has(storeId + '::' + (f.name || f.displayName)));
+
+    // Update collection checkbox
+    const collCb = group.querySelector('.coll-checkmark');
+    if (collCb) {
+      collCb.classList.toggle('checked', isCollSelected);
+      collCb.classList.toggle('indeterminate', !isCollSelected && someSelected);
+    }
+    group.classList.toggle('selected', isCollSelected);
+
+    // Update file checkboxes
+    group.querySelectorAll('.collection-file-item[data-file-key]').forEach(fileEl => {
+      const key = fileEl.getAttribute('data-file-key');
+      const isSelected = selectedFiles.has(key);
+      fileEl.classList.toggle('file-selected', isSelected);
+      const fileCb = fileEl.querySelector('.file-checkmark');
+      if (fileCb) fileCb.classList.toggle('checked', isSelected);
+    });
+  });
 }
 
 // Get selected file resources for session context
