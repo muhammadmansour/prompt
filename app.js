@@ -562,51 +562,8 @@ async function analyzeRequirement() {
   };
   sessionStorage.setItem('auditSession', JSON.stringify(auditSession));
   
-  // Show loading state
-  btnAnalyze.classList.add('loading');
-  btnAnalyze.querySelector('.btn-text').classList.add('hidden');
-  btnAnalyze.querySelector('.btn-icon').classList.add('hidden');
-  btnAnalyze.querySelector('.btn-loading').classList.remove('hidden');
-  btnAnalyze.disabled = true;
-  
-  try {
-    // Send all requirements at once for batch analysis
-    const requestBody = {
-      requirements: currentSelections,
-      prompt: userPrompt,
-      contextFiles: contextFiles.map(cf => ({ name: cf.name, content: cf.content }))
-    };
-    
-    console.log('Sending analysis request:', JSON.stringify(requestBody, null, 2));
-    console.log('Number of requirements:', currentSelections.length);
-    
-    const response = await fetch(ANALYZE_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to analyze requirements');
-    }
-    
-    if (data.success && data.data) {
-      showModal(data.data);
-    } else {
-      throw new Error('Invalid response from server');
-    }
-  } catch (error) {
-    console.error('Analysis error:', error);
-    showModalError(error.message);
-  } finally {
-    btnAnalyze.classList.remove('loading');
-    btnAnalyze.querySelector('.btn-text').classList.remove('hidden');
-    btnAnalyze.querySelector('.btn-icon').classList.remove('hidden');
-    btnAnalyze.querySelector('.btn-loading').classList.add('hidden');
-    updateAnalyzeButton();
-  }
+  // Navigate to chat page — session creation happens there
+  window.location.href = '/chat.html';
 }
 
 // Show modal with results - now handles multiple requirements
