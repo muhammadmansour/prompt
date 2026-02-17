@@ -617,6 +617,36 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- Delete chat session ----
+  if (sessionMatch && req.method === 'DELETE') {
+    try {
+      const sessionId = sessionMatch[1];
+      const row = dbGetSession.get(sessionId);
+
+      if (!row) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Session not found.' }));
+        return;
+      }
+
+      // Delete messages first, then session
+      dbDeleteSessionMessages.run(sessionId);
+      dbDeleteSession.run(sessionId);
+
+      // Remove from in-memory cache
+      delete chatSessions[sessionId];
+
+      console.log(`Session deleted: ${sessionId}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (error) {
+      console.error('Delete session error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   // ---- Create new chat session ----
   if (url.pathname === '/api/chat/sessions' && req.method === 'POST') {
     try {

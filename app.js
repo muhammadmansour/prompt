@@ -1564,9 +1564,31 @@ async function fetchPreviousSessions() {
     const data = await res.json();
     if (data.success && data.sessions && data.sessions.length > 0) {
       renderPreviousSessions(data.sessions);
+    } else {
+      const section = document.getElementById('prev-sessions-section');
+      if (section) section.style.display = 'none';
     }
   } catch (e) {
     console.warn('Could not load previous sessions:', e.message);
+  }
+}
+
+async function deleteSession(sessionId, e) {
+  e.stopPropagation(); // Prevent card click navigation
+
+  if (!confirm('Delete this session? This cannot be undone.')) return;
+
+  try {
+    const res = await fetch('/api/chat/sessions/' + sessionId, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      showToast('success', 'Deleted', 'Session has been removed.');
+      fetchPreviousSessions();
+    } else {
+      throw new Error(data.error || 'Delete failed');
+    }
+  } catch (err) {
+    showToast('error', 'Delete Failed', err.message);
   }
 }
 
@@ -1600,7 +1622,12 @@ function renderPreviousSessions(sessions) {
     card.innerHTML =
       '<div class="session-card-header">' +
         '<div class="session-card-title">' + (s.requirements && s.requirements[0] ? (s.requirements[0].frameworkName || 'Audit Session') : 'Audit Session') + '</div>' +
-        '<div class="session-card-date">' + dateStr + '</div>' +
+        '<div class="session-card-header-actions">' +
+          '<span class="session-card-date">' + dateStr + '</span>' +
+          '<button class="session-delete-btn" onclick="deleteSession(\'' + s.sessionId + '\', event)" title="Delete session">' +
+            '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M5 4V2.5C5 2.2 5.2 2 5.5 2H8.5C8.8 2 9 2.2 9 2.5V4M10.5 4V11.5C10.5 11.8 10.3 12 10 12H4C3.7 12 3.5 11.8 3.5 11.5V4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '</button>' +
+        '</div>' +
       '</div>' +
       '<div class="session-card-stats">' +
         '<div class="session-stat"><div class="session-stat-num">' + (s.requirementsCount || 0) + '</div><div class="session-stat-label">Requirements</div></div>' +
@@ -1641,3 +1668,4 @@ window.toggleCollectionGroup = toggleCollectionGroup;
 window.removeContextFile = removeContextFile;
 window.uploadFileToCollection = uploadFileToCollection;
 window.deleteCollection = deleteCollection;
+window.deleteSession = deleteSession;
