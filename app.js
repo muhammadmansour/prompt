@@ -552,21 +552,11 @@ async function analyzeRequirement() {
     return;
   }
 
-  // Save audit context to sessionStorage for chat flow
+  // Save audit context to sessionStorage for chat flow (only selected files)
   const auditSession = {
     requirements: currentSelections,
-    fileResources: collectionsData.flatMap(store =>
-      (store.files || []).filter(f => f.state === 'STATE_ACTIVE').map(f => ({
-        storeId: store.name,
-        storeName: store.displayName || store.name,
-        fileId: f.name,
-        documentName: f.displayName || f.name
-      }))
-    ),
-    collections: collectionsData.map(s => ({
-      storeId: s.name,
-      displayName: s.displayName || s.name
-    })),
+    fileResources: getSelectedFileResources(),
+    collections: getSelectedCollections(),
     query: userPrompt,
     contextFiles: contextFiles.map(cf => ({ name: cf.name, content: cf.content }))
   };
@@ -1225,6 +1215,8 @@ async function confirmAnalysis() {
 // ==========================================
 
 let collectionsData = []; // Array of file search stores with their files
+let selectedCollections = new Set(); // Selected store IDs
+let selectedFiles = new Set(); // Selected file keys: "storeId::fileName"
 
 // Fetch all collections from the API
 async function fetchCollections() {
@@ -1420,9 +1412,17 @@ function renderCollections() {
     const failedFiles = files.filter(f => f.state === 'STATE_FAILED');
     const fileCount = files.length;
     
+    const isCollSelected = selectedCollections.has(storeId);
+    const someFilesSelected = files.some(f => selectedFiles.has(storeId + '::' + (f.name || f.displayName)));
+    const collCheckState = isCollSelected ? 'checked' : (someFilesSelected ? 'indeterminate' : '');
+
     html += `
-      <div class="collection-group collapsed" data-store-id="${storeId}">
+      <div class="collection-group collapsed ${isCollSelected ? 'selected' : ''}" data-store-id="${storeId}">
         <div class="collection-group-header">
+          <label class="coll-checkbox" onclick="toggleCollectionSelection('${escapeHtml(storeId)}', event)">
+            <input type="checkbox" ${isCollSelected ? 'checked' : ''} ${collCheckState === 'indeterminate' ? 'data-indeterminate="true"' : ''} tabindex="-1" />
+            <span class="coll-checkmark ${collCheckState === 'indeterminate' ? 'indeterminate' : ''}"></span>
+          </label>
           <div class="collection-toggle" onclick="toggleCollectionGroup(this)">
             <svg class="chevron-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1454,6 +1454,9 @@ function renderCollections() {
           ` : files.map((file, fIdx) => {
             const fName = file.displayName || file.name || `File ${fIdx + 1}`;
             const fState = file.state || 'STATE_PENDING';
+            const fileKey = storeId + '::' + (file.name || file.displayName);
+            const isFileSelected = selectedFiles.has(fileKey);
+            const isActive = fState === 'STATE_ACTIVE';
             let stateClass = 'pending';
             let stateLabel = 'Pending';
             let stateIcon = '';
@@ -1471,7 +1474,13 @@ function renderCollections() {
               stateIcon = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/></svg>';
             }
             return `
-              <div class="collection-file-item ${stateClass === 'failed' ? 'file-failed' : ''}">
+              <div class="collection-file-item ${stateClass === 'failed' ? 'file-failed' : ''} ${isFileSelected ? 'file-selected' : ''}">
+                ${isActive ? `
+                <label class="file-checkbox" onclick="toggleFileSelection('${escapeHtml(storeId)}', '${escapeHtml(fileKey).replace(/'/g, "\\'")}', event)">
+                  <input type="checkbox" ${isFileSelected ? 'checked' : ''} tabindex="-1" />
+                  <span class="file-checkmark"></span>
+                </label>
+                ` : '<span class="file-checkbox-spacer"></span>'}
                 <svg class="file-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                   <path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1495,6 +1504,89 @@ function toggleCollectionGroup(toggleEl) {
   if (group) group.classList.toggle('collapsed');
 }
 
+// Toggle selection of an entire collection (all active files)
+function toggleCollectionSelection(storeId, e) {
+  e.stopPropagation();
+  const store = collectionsData.find(s => s.name.split('/').pop() === storeId);
+  if (!store) return;
+
+  const activeFiles = (store.files || []).filter(f => f.state === 'STATE_ACTIVE');
+
+  if (selectedCollections.has(storeId)) {
+    // Deselect collection and all its files
+    selectedCollections.delete(storeId);
+    activeFiles.forEach(f => {
+      const key = storeId + '::' + (f.name || f.displayName);
+      selectedFiles.delete(key);
+    });
+  } else {
+    // Select collection and all its active files
+    selectedCollections.add(storeId);
+    activeFiles.forEach(f => {
+      const key = storeId + '::' + (f.name || f.displayName);
+      selectedFiles.add(key);
+    });
+  }
+
+  renderCollections();
+  updateCollectionSummary();
+}
+
+// Toggle selection of a single file
+function toggleFileSelection(storeId, fileKey, e) {
+  e.stopPropagation();
+
+  if (selectedFiles.has(fileKey)) {
+    selectedFiles.delete(fileKey);
+  } else {
+    selectedFiles.add(fileKey);
+  }
+
+  // Update collection selection state based on its files
+  const store = collectionsData.find(s => s.name.split('/').pop() === storeId);
+  if (store) {
+    const activeFiles = (store.files || []).filter(f => f.state === 'STATE_ACTIVE');
+    const allSelected = activeFiles.length > 0 && activeFiles.every(f => selectedFiles.has(storeId + '::' + (f.name || f.displayName)));
+    if (allSelected) {
+      selectedCollections.add(storeId);
+    } else {
+      selectedCollections.delete(storeId);
+    }
+  }
+
+  renderCollections();
+  updateCollectionSummary();
+}
+
+// Get selected file resources for session context
+function getSelectedFileResources() {
+  const resources = [];
+  collectionsData.forEach(store => {
+    const storeId = store.name.split('/').pop();
+    (store.files || []).filter(f => f.state === 'STATE_ACTIVE').forEach(f => {
+      const key = storeId + '::' + (f.name || f.displayName);
+      if (selectedFiles.has(key)) {
+        resources.push({
+          storeId: store.name,
+          storeName: store.displayName || store.name,
+          fileId: f.name,
+          documentName: f.displayName || f.name
+        });
+      }
+    });
+  });
+  return resources;
+}
+
+function getSelectedCollections() {
+  return collectionsData
+    .filter(s => selectedCollections.has(s.name.split('/').pop()))
+    .map(s => ({
+      storeId: s.name,
+      displayName: s.displayName || s.name
+    }));
+}
+
 // Update collection-related summary counts
 let pendingPollTimer = null;
 
@@ -1503,6 +1595,8 @@ function updateCollectionSummary() {
   const activeTotal = collectionsData.reduce((sum, store) => sum + (store.files || []).filter(f => f.state === 'STATE_ACTIVE').length, 0);
   const pendingTotal = collectionsData.reduce((sum, store) => sum + (store.files || []).filter(f => f.state === 'STATE_PENDING').length, 0);
   const totalCollections = collectionsData.length;
+  const selectedFileCount = selectedFiles.size;
+  const selectedCollCount = selectedCollections.size;
   
   const filesCountEl = document.getElementById('files-count');
   const collectionsCountEl = document.getElementById('collections-count');
@@ -1511,8 +1605,9 @@ function updateCollectionSummary() {
   
   if (filesCountEl) filesCountEl.textContent = totalFiles;
   if (collectionsCountEl) collectionsCountEl.textContent = totalCollections;
-  if (summaryCollectionsEl) summaryCollectionsEl.textContent = totalCollections;
-  if (summaryFilesEl) summaryFilesEl.textContent = totalFiles;
+  // Show selected / total in summary
+  if (summaryCollectionsEl) summaryCollectionsEl.textContent = selectedCollCount > 0 ? selectedCollCount + '/' + totalCollections : totalCollections;
+  if (summaryFilesEl) summaryFilesEl.textContent = selectedFileCount > 0 ? selectedFileCount + '/' + activeTotal : activeTotal;
 
   // Auto-poll if any files are still pending/processing
   if (pendingPollTimer) clearTimeout(pendingPollTimer);
@@ -1665,6 +1760,8 @@ window.deleteItem = deleteItem;
 window.saveItem = saveItem;
 window.renderModalContent = renderModalContent;
 window.toggleCollectionGroup = toggleCollectionGroup;
+window.toggleCollectionSelection = toggleCollectionSelection;
+window.toggleFileSelection = toggleFileSelection;
 window.removeContextFile = removeContextFile;
 window.uploadFileToCollection = uploadFileToCollection;
 window.deleteCollection = deleteCollection;

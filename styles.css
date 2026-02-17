@@ -1375,91 +1375,109 @@ textarea::placeholder {
 }
 
 /* Collection & file selection checkboxes */
-.collection-header-left {
-  display: flex;
+.coll-checkbox,
+.file-checkbox {
+  display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
 }
 
-.collection-select-checkbox,
-.file-select-checkbox {
+.coll-checkbox input,
+.file-checkbox input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.coll-checkmark {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-card);
+  transition: var(--transition);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+}
+
+.file-checkmark {
+  width: 15px;
+  height: 15px;
   border: 2px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  border-radius: 3px;
   background: var(--color-bg-card);
-  cursor: pointer;
   transition: var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.collection-select-checkbox {
-  width: 20px;
-  height: 20px;
+.coll-checkbox:hover .coll-checkmark,
+.file-checkbox:hover .file-checkmark {
+  border-color: var(--color-primary);
 }
 
-.collection-select-checkbox svg,
-.file-select-checkbox svg {
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.collection-select-checkbox.checked,
-.file-select-checkbox.checked {
+/* Checked state */
+.coll-checkbox input:checked + .coll-checkmark,
+.file-checkbox input:checked + .file-checkmark {
   background: var(--color-primary);
   border-color: var(--color-primary);
 }
 
-.collection-select-checkbox.checked svg,
-.file-select-checkbox.checked svg {
-  opacity: 1;
-}
-
-.collection-select-checkbox.partial {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-  position: relative;
-}
-
-.collection-select-checkbox.partial svg {
-  opacity: 0;
-}
-
-.collection-select-checkbox.partial::after {
+.coll-checkbox input:checked + .coll-checkmark::after,
+.file-checkbox input:checked + .file-checkmark::after {
   content: '';
-  position: absolute;
-  width: 10px;
+  display: block;
+  width: 5px;
+  height: 9px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  margin-top: -1px;
+}
+
+.file-checkbox input:checked + .file-checkmark::after {
+  width: 4px;
+  height: 7px;
+  border-width: 0 1.5px 1.5px 0;
+}
+
+/* Indeterminate (partial selection) */
+.coll-checkmark.indeterminate {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.coll-checkmark.indeterminate::after {
+  content: '';
+  display: block;
+  width: 8px;
   height: 2px;
   background: white;
   border-radius: 1px;
 }
 
-.collection-select-checkbox:hover,
-.file-select-checkbox:hover {
-  border-color: var(--color-primary);
-}
-
-.file-select-checkbox {
-  width: 16px;
-  height: 16px;
+/* Spacer for non-selectable files (pending/failed) */
+.file-checkbox-spacer {
+  width: 15px;
+  flex-shrink: 0;
 }
 
 /* Selected file item highlight */
-.collection-file-item.selected {
+.collection-file-item.file-selected {
   background: rgba(59, 89, 152, 0.06);
-  border-left: 2px solid var(--color-primary);
-  padding-left: calc(0.75rem - 2px);
 }
 
-.collection-file-item.selected .file-select-checkbox {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-}
-
-.collection-file-item.selected .file-select-checkbox svg {
-  opacity: 1;
+/* Selected collection highlight */
+.collection-group.selected > .collection-group-header {
+  background: rgba(59, 89, 152, 0.06);
 }
 
 /* ========================
