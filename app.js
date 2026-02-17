@@ -1287,6 +1287,9 @@ function renderCollections() {
     const storeId = store.name.split('/').pop();
     const displayName = store.displayName || `Collection ${index + 1}`;
     const files = store.files || [];
+    const activeFiles = files.filter(f => f.state === 'STATE_ACTIVE');
+    const pendingFiles = files.filter(f => f.state === 'STATE_PENDING');
+    const failedFiles = files.filter(f => f.state === 'STATE_FAILED');
     const fileCount = files.length;
     
     html += `
@@ -1322,15 +1325,31 @@ function renderCollections() {
             </div>
           ` : files.map((file, fIdx) => {
             const fName = file.displayName || file.name || `File ${fIdx + 1}`;
-            const fState = file.state || 'ACTIVE';
+            const fState = file.state || 'STATE_PENDING';
+            let stateClass = 'pending';
+            let stateLabel = 'Pending';
+            let stateIcon = '';
+            if (fState === 'STATE_ACTIVE') {
+              stateClass = 'active';
+              stateLabel = 'Indexed';
+              stateIcon = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            } else if (fState === 'STATE_FAILED') {
+              stateClass = 'failed';
+              stateLabel = 'Failed';
+              stateIcon = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+            } else {
+              stateClass = 'pending';
+              stateLabel = 'Processing';
+              stateIcon = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/></svg>';
+            }
             return `
-              <div class="collection-file-item">
+              <div class="collection-file-item ${stateClass === 'failed' ? 'file-failed' : ''}">
                 <svg class="file-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                   <path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
                 <span class="file-name">${escapeHtml(fName)}</span>
-                <span class="file-status ${fState === 'ACTIVE' ? 'active' : 'processing'}">${fState === 'ACTIVE' ? 'Indexed' : 'Processing'}</span>
+                <span class="file-status ${stateClass}" title="${fState}">${stateIcon} ${stateLabel}</span>
               </div>
             `;
           }).join('')}
@@ -1349,8 +1368,12 @@ function toggleCollectionGroup(toggleEl) {
 }
 
 // Update collection-related summary counts
+let pendingPollTimer = null;
+
 function updateCollectionSummary() {
   const totalFiles = collectionsData.reduce((sum, store) => sum + (store.files?.length || 0), 0);
+  const activeTotal = collectionsData.reduce((sum, store) => sum + (store.files || []).filter(f => f.state === 'STATE_ACTIVE').length, 0);
+  const pendingTotal = collectionsData.reduce((sum, store) => sum + (store.files || []).filter(f => f.state === 'STATE_PENDING').length, 0);
   const totalCollections = collectionsData.length;
   
   const filesCountEl = document.getElementById('files-count');
@@ -1362,6 +1385,15 @@ function updateCollectionSummary() {
   if (collectionsCountEl) collectionsCountEl.textContent = totalCollections;
   if (summaryCollectionsEl) summaryCollectionsEl.textContent = totalCollections;
   if (summaryFilesEl) summaryFilesEl.textContent = totalFiles;
+
+  // Auto-poll if any files are still pending/processing
+  if (pendingPollTimer) clearTimeout(pendingPollTimer);
+  if (pendingTotal > 0) {
+    pendingPollTimer = setTimeout(() => {
+      console.log('Polling for pending file states...');
+      fetchCollections();
+    }, 5000);
+  }
 }
 
 // ==========================================

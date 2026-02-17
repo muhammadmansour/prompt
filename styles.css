@@ -1188,6 +1188,9 @@ textarea::placeholder {
 
 .file-status {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.625rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -1196,12 +1199,16 @@ textarea::placeholder {
   border-radius: 10px;
 }
 
+.file-status svg {
+  flex-shrink: 0;
+}
+
 .file-status.active {
   color: var(--color-success);
   background: rgba(22, 163, 74, 0.1);
 }
 
-.file-status.processing {
+.file-status.pending {
   color: var(--color-warning);
   background: rgba(217, 119, 6, 0.1);
   animation: pulse-processing 1.5s ease-in-out infinite;
@@ -1210,6 +1217,14 @@ textarea::placeholder {
 .file-status.failed {
   color: var(--color-error);
   background: rgba(220, 38, 38, 0.1);
+}
+
+.collection-file-item.file-failed {
+  opacity: 0.6;
+}
+
+.collection-file-item.file-failed .file-name {
+  text-decoration: line-through;
 }
 
 @keyframes pulse-processing {
