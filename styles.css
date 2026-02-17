@@ -1020,6 +1020,93 @@ textarea::placeholder {
   background: var(--color-primary-light);
 }
 
+.context-hint {
+  font-size: 0.8125rem;
+  color: var(--color-text-hint);
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+/* Context Files List */
+.context-files-list {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.context-file-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+
+.context-file-item:hover {
+  border-color: var(--color-primary-light);
+  background: var(--color-bg-card);
+}
+
+.context-file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: 0.625rem;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.context-file-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.context-file-name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-file-size {
+  font-size: 0.6875rem;
+  color: var(--color-text-hint);
+  margin-top: 0.125rem;
+}
+
+.context-file-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: none;
+  background: transparent;
+  color: var(--color-text-hint);
+  cursor: pointer;
+  border-radius: 50%;
+  transition: var(--transition);
+  flex-shrink: 0;
+}
+
+.context-file-remove:hover {
+  color: var(--color-danger);
+  background: rgba(220, 53, 69, 0.1);
+}
+
 /* ========================
    Collections Accordion
    ======================== */

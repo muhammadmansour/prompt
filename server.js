@@ -155,10 +155,23 @@ function parseBody(req) {
 // ==========================================
 
 // Call Gemini API for a single requirement
-async function callGeminiAPIForSingle(requirement, userPrompt, apiKey) {
+async function callGeminiAPIForSingle(requirement, userPrompt, apiKey, contextFiles) {
+  // Format context files content for the prompt
+  let contextFilesText = 'No context files provided.';
+  if (contextFiles && contextFiles.length > 0) {
+    contextFilesText = contextFiles.map((cf, i) => {
+      // Truncate very large files to avoid token limits (keep first ~8000 chars)
+      const content = cf.content && cf.content.length > 8000
+        ? cf.content.substring(0, 8000) + '\n... [truncated — file too large to include fully]'
+        : (cf.content || '(empty file)');
+      return `### File ${i + 1}: ${cf.name}\n\`\`\`\n${content}\n\`\`\``;
+    }).join('\n\n');
+  }
+
   const fullPrompt = promptTemplate
     .replace('{{REQUIREMENT}}', JSON.stringify(requirement, null, 2))
-    .replace('{{USER_PROMPT}}', userPrompt || 'No additional context provided.');
+    .replace('{{USER_PROMPT}}', userPrompt || 'No additional context provided.')
+    .replace('{{CONTEXT_FILES}}', contextFilesText);
 
   const requestBody = {
     contents: [{
@@ -259,7 +272,7 @@ async function callGeminiAPIForSingle(requirement, userPrompt, apiKey) {
 }
 
 // Call Gemini API for multiple requirements (batch processing)
-async function callGeminiAPIForMultiple(requirements, userPrompt, apiKey) {
+async function callGeminiAPIForMultiple(requirements, userPrompt, apiKey, contextFiles) {
   console.log(`Processing ${requirements.length} requirements...`);
   
   const CONCURRENCY_LIMIT = 3;
@@ -272,7 +285,7 @@ async function callGeminiAPIForMultiple(requirements, userPrompt, apiKey) {
       console.log(`Analyzing requirement ${index + 1}/${requirements.length}: ${requirement.refId || 'No ref'}`);
       
       try {
-        const analysis = await callGeminiAPIForSingle(requirement, userPrompt, apiKey);
+        const analysis = await callGeminiAPIForSingle(requirement, userPrompt, apiKey, contextFiles);
         return {
           requirement,
           analysis,
@@ -484,7 +497,7 @@ const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       console.log('Received analysis request');
       
-      const { requirement, requirements, prompt } = body;
+      const { requirement, requirements, prompt, contextFiles } = body;
       
       const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
 
@@ -494,9 +507,13 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (contextFiles && contextFiles.length > 0) {
+        console.log(`Context files attached: ${contextFiles.length} (${contextFiles.map(f => f.name).join(', ')})`);
+      }
+
       if (requirements && Array.isArray(requirements) && requirements.length > 0) {
         console.log(`Batch analysis for ${requirements.length} requirements`);
-        const result = await callGeminiAPIForMultiple(requirements, prompt, apiKey);
+        const result = await callGeminiAPIForMultiple(requirements, prompt, apiKey, contextFiles);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, data: result }));
         return;
@@ -508,7 +525,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const result = await callGeminiAPIForSingle(requirement, prompt, apiKey);
+      const result = await callGeminiAPIForSingle(requirement, prompt, apiKey, contextFiles);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, data: result }));
     } catch (error) {
@@ -652,6 +669,19 @@ const server = http.createServer(async (req, res) => {
             systemPrompt += `${i + 1}. Store: ${f.storeName || f.storeId}, Document: ${f.documentName || f.fileId}\n`;
           });
           systemPrompt += `\nUse these documents to ground your analysis in the user's actual policies and evidence when possible.\n`;
+        }
+
+        // Inject uploaded context files content
+        if (context.contextFiles && context.contextFiles.length > 0) {
+          systemPrompt += `\n---\n## SESSION CONTEXT: Uploaded Context Files (${context.contextFiles.length} files)\n`;
+          systemPrompt += `The user has uploaded the following documents as additional context. Use their content to ground your analysis:\n\n`;
+          context.contextFiles.forEach((cf, i) => {
+            // Truncate to ~8000 chars per file to avoid token overflow
+            const content = cf.content && cf.content.length > 8000
+              ? cf.content.substring(0, 8000) + '\n... [truncated]'
+              : (cf.content || '(empty file)');
+            systemPrompt += `### File ${i + 1}: ${cf.name}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+          });
         }
 
         // Inject user query context

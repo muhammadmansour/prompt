@@ -15,7 +15,8 @@ let sessionContext = {
   requirements: [],
   fileResources: [],
   collections: [],
-  query: ''
+  query: '',
+  contextFiles: []
 };
 
 // ==========================================
@@ -48,7 +49,8 @@ function loadSessionContext() {
         requirements: parsed.requirements || [],
         fileResources: parsed.fileResources || [],
         collections: parsed.collections || [],
-        query: parsed.query || ''
+        query: parsed.query || '',
+        contextFiles: parsed.contextFiles || []
       };
     }
   } catch (e) {
@@ -86,10 +88,11 @@ function renderContextBar() {
     }
   }
 
-  // Files — show collection names, not just count
+  // Files — show collection names + context files count
+  const ctxFiles = sessionContext.contextFiles || [];
   const filesCount = document.getElementById('ctx-files-count');
   if (filesCount) {
-    if (colls.length === 0 && files.length === 0) {
+    if (colls.length === 0 && files.length === 0 && ctxFiles.length === 0) {
       filesCount.textContent = '0 files';
     } else {
       const collNames = colls.map(c => escapeHtml(c.displayName || c.storeId));
@@ -98,10 +101,14 @@ function renderContextBar() {
       if (collNames.length > 0) {
         html = collNames.map(n => `<span class="ctx-inline-coll">📁 ${n}</span>`).join('<br>');
         html += `<br><span style="color:var(--color-text-hint);font-size:0.6875rem">${fileCount} file${fileCount !== 1 ? 's' : ''}</span>`;
-      } else {
+      } else if (fileCount > 0) {
         html = `${fileCount} file${fileCount !== 1 ? 's' : ''}`;
       }
-      filesCount.innerHTML = html;
+      if (ctxFiles.length > 0) {
+        if (html) html += '<br>';
+        html += `<span style="color:var(--color-text-hint);font-size:0.6875rem">📎 ${ctxFiles.length} context file${ctxFiles.length !== 1 ? 's' : ''}</span>`;
+      }
+      filesCount.innerHTML = html || '0 files';
     }
   }
 
@@ -146,7 +153,7 @@ function renderContextBar() {
   // Populate files detail panel
   const filesList = document.getElementById('ctx-files-list');
   if (filesList) {
-    if (colls.length === 0 && files.length === 0) {
+    if (colls.length === 0 && files.length === 0 && ctxFiles.length === 0) {
       filesList.innerHTML = '<div class="ctx-empty">No reference files</div>';
     } else {
       let html = '';
@@ -172,6 +179,15 @@ function renderContextBar() {
           <span class="ctx-desc">📄 ${escapeHtml(f.documentName || f.fileId)}</span>
         </div>`;
       });
+      // Show uploaded context files
+      if (ctxFiles.length > 0) {
+        html += `<div class="ctx-group-label">📎 Uploaded Context Files</div>`;
+        ctxFiles.forEach(cf => {
+          html += `<div class="ctx-detail-item">
+            <span class="ctx-desc">📄 ${escapeHtml(cf.name)}</span>
+          </div>`;
+        });
+      }
       filesList.innerHTML = html;
     }
   }
@@ -317,6 +333,7 @@ async function resumeSession(sessionId) {
       sessionContext.fileResources = data.context.fileResources || [];
       sessionContext.collections = data.context.collections || [];
       sessionContext.query = data.context.query || '';
+      sessionContext.contextFiles = data.context.contextFiles || [];
     }
 
     // Update context bar with detailed info
@@ -353,7 +370,8 @@ async function initSession() {
           requirements: sessionContext.requirements,
           fileResources: sessionContext.fileResources,
           collections: sessionContext.collections,
-          query: sessionContext.query
+          query: sessionContext.query,
+          contextFiles: sessionContext.contextFiles
         }
       })
     });

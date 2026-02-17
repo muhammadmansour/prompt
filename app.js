@@ -32,6 +32,7 @@ let librariesData = [];
 let currentSelections = []; // Changed to array for multi-select
 let currentAnalysisData = null; // Will store { [refId]: analysisData }
 let allOptions = []; // Flat list of all option items for searching
+let contextFiles = []; // Uploaded context files (name, content, size)
 
 // Check if buttons should be enabled
 function updateButtons() {
@@ -437,6 +438,112 @@ function handleTextareaInput(e) {
   charCount.textContent = e.target.value.length;
 }
 
+// ==========================================
+// Context Files Upload
+// ==========================================
+
+function handleUploadContextFiles() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.accept = '.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls,.json,.html,.xml,.md,.pptx,.rtf,.log,.yaml,.yml';
+
+  input.onchange = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+
+    for (const file of files) {
+      // Skip duplicates
+      if (contextFiles.some(cf => cf.name === file.name)) {
+        showToast('info', 'Duplicate', `"${file.name}" is already attached.`);
+        continue;
+      }
+
+      // 20MB limit for context files (they'll be embedded as text in the prompt)
+      if (file.size > 20 * 1024 * 1024) {
+        showToast('error', 'File Too Large', `"${file.name}" exceeds 20MB limit.`);
+        continue;
+      }
+
+      try {
+        const content = await readFileAsText(file);
+        contextFiles.push({
+          name: file.name,
+          size: file.size,
+          type: file.type || 'text/plain',
+          content: content
+        });
+      } catch (err) {
+        showToast('error', 'Read Error', `Could not read "${file.name}": ${err.message}`);
+      }
+    }
+
+    renderContextFiles();
+    updateContextFilesCount();
+  };
+
+  input.click();
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.readAsText(file);
+  });
+}
+
+function removeContextFile(index) {
+  contextFiles.splice(index, 1);
+  renderContextFiles();
+  updateContextFilesCount();
+}
+
+function updateContextFilesCount() {
+  const el = document.getElementById('context-files-count');
+  if (el) el.textContent = contextFiles.length;
+  const summaryEl = document.getElementById('summary-context-count');
+  if (summaryEl) summaryEl.textContent = contextFiles.length;
+}
+
+function renderContextFiles() {
+  const listEl = document.getElementById('context-files-list');
+  if (!listEl) return;
+
+  if (contextFiles.length === 0) {
+    listEl.innerHTML = '';
+    listEl.style.display = 'none';
+    return;
+  }
+
+  listEl.style.display = 'block';
+  let html = '';
+  contextFiles.forEach((cf, i) => {
+    const sizeStr = cf.size < 1024
+      ? cf.size + ' B'
+      : cf.size < 1024 * 1024
+        ? (cf.size / 1024).toFixed(1) + ' KB'
+        : (cf.size / (1024 * 1024)).toFixed(1) + ' MB';
+    const ext = cf.name.split('.').pop().toUpperCase();
+    html += `
+      <div class="context-file-item">
+        <div class="context-file-icon">${ext}</div>
+        <div class="context-file-info">
+          <div class="context-file-name">${escapeHtml(cf.name)}</div>
+          <div class="context-file-size">${sizeStr}</div>
+        </div>
+        <button type="button" class="context-file-remove" onclick="removeContextFile(${i})" aria-label="Remove file">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M10.5 3.5L3.5 10.5M3.5 3.5L10.5 10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    `;
+  });
+  listEl.innerHTML = html;
+}
+
 // Analyze with Gemini API - now handles multiple requirements
 async function analyzeRequirement() {
   const userPrompt = notesTextarea.value.trim();
@@ -444,6 +551,26 @@ async function analyzeRequirement() {
   if (currentSelections.length === 0) {
     return;
   }
+
+  // Save audit context to sessionStorage for chat flow
+  const auditSession = {
+    requirements: currentSelections,
+    fileResources: collectionsData.flatMap(store =>
+      (store.files || []).filter(f => f.state === 'STATE_ACTIVE').map(f => ({
+        storeId: store.name,
+        storeName: store.displayName || store.name,
+        fileId: f.name,
+        documentName: f.displayName || f.name
+      }))
+    ),
+    collections: collectionsData.map(s => ({
+      storeId: s.name,
+      displayName: s.displayName || s.name
+    })),
+    query: userPrompt,
+    contextFiles: contextFiles.map(cf => ({ name: cf.name, content: cf.content }))
+  };
+  sessionStorage.setItem('auditSession', JSON.stringify(auditSession));
   
   // Show loading state
   btnAnalyze.classList.add('loading');
@@ -456,7 +583,8 @@ async function analyzeRequirement() {
     // Send all requirements at once for batch analysis
     const requestBody = {
       requirements: currentSelections,
-      prompt: userPrompt
+      prompt: userPrompt,
+      contextFiles: contextFiles.map(cf => ({ name: cf.name, content: cf.content }))
     };
     
     console.log('Sending analysis request:', JSON.stringify(requestBody, null, 2));
@@ -1415,6 +1543,9 @@ modalOverlay.addEventListener('click', (e) => {
 // Collection buttons
 document.getElementById('btn-new-collection')?.addEventListener('click', createCollection);
 
+// Context files upload button
+document.getElementById('btn-upload-context')?.addEventListener('click', handleUploadContextFiles);
+
 // Close modal on Escape key
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && modalOverlay.classList.contains('active')) {
@@ -1507,5 +1638,6 @@ window.deleteItem = deleteItem;
 window.saveItem = saveItem;
 window.renderModalContent = renderModalContent;
 window.toggleCollectionGroup = toggleCollectionGroup;
+window.removeContextFile = removeContextFile;
 window.uploadFileToCollection = uploadFileToCollection;
 window.deleteCollection = deleteCollection;
