@@ -1401,6 +1401,13 @@ function renderCollections() {
   }
   
   if (emptyEl) emptyEl.style.display = 'none';
+
+  // Preserve which accordions are expanded before re-rendering
+  const expandedStores = new Set();
+  listEl.querySelectorAll('.collection-group:not(.collapsed)').forEach(el => {
+    const sid = el.getAttribute('data-store-id');
+    if (sid) expandedStores.add(sid);
+  });
   
   let html = '';
   collectionsData.forEach((store, index) => {
@@ -1411,13 +1418,14 @@ function renderCollections() {
     const pendingFiles = files.filter(f => f.state === 'STATE_PENDING');
     const failedFiles = files.filter(f => f.state === 'STATE_FAILED');
     const fileCount = files.length;
+    const isExpanded = expandedStores.has(storeId);
     
     const isCollSelected = selectedCollections.has(storeId);
     const someFilesSelected = files.some(f => selectedFiles.has(storeId + '::' + (f.name || f.displayName)));
     const collCheckState = isCollSelected ? 'checked' : (someFilesSelected ? 'indeterminate' : '');
 
     html += `
-      <div class="collection-group collapsed ${isCollSelected ? 'selected' : ''}" data-store-id="${storeId}">
+      <div class="collection-group ${isExpanded ? '' : 'collapsed'} ${isCollSelected ? 'selected' : ''}" data-store-id="${storeId}">
         <div class="collection-group-header">
           <label class="coll-checkbox" onclick="toggleCollectionSelection('${escapeHtml(storeId)}', event)">
             <input type="checkbox" ${isCollSelected ? 'checked' : ''} ${collCheckState === 'indeterminate' ? 'data-indeterminate="true"' : ''} tabindex="-1" />
