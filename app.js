@@ -1390,10 +1390,73 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+
+// ==========================================
+// Previous Sessions
+// ==========================================
+
+async function fetchPreviousSessions() {
+  try {
+    const res = await fetch('/api/chat/sessions');
+    const data = await res.json();
+    if (data.success && data.sessions && data.sessions.length > 0) {
+      renderPreviousSessions(data.sessions);
+    }
+  } catch (e) {
+    console.warn('Could not load previous sessions:', e.message);
+  }
+}
+
+function renderPreviousSessions(sessions) {
+  const section = document.getElementById('prev-sessions-section');
+  const list = document.getElementById('prev-sessions-list');
+  if (!section || !list) return;
+
+  list.innerHTML = '';
+
+  sessions.forEach(function(s) {
+    var date = new Date(s.createdAt);
+    var dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    var reqItems = (s.requirements || []).slice(0, 3).map(function(r) {
+      return '<div class="session-req-item"><span class="session-ref-id">' + (r.refId || '') + '</span><span class="session-req-desc">' + (r.description || '') + '</span></div>';
+    }).join('');
+
+    var moreCount = (s.requirements || []).length - 3;
+    var moreReqs = moreCount > 0
+      ? '<div class="session-req-item"><span class="session-req-desc" style="color:var(--color-text-hint)">+' + moreCount + ' more</span></div>'
+      : '';
+
+    var queryPreview = s.query
+      ? '<div class="session-query-preview">' + s.query.substring(0, 80) + (s.query.length > 80 ? '...' : '') + '</div>'
+      : '';
+
+    var card = document.createElement('div');
+    card.className = 'session-card';
+    card.onclick = function() { window.location.href = '/chat.html?session=' + s.sessionId; };
+    card.innerHTML =
+      '<div class="session-card-header">' +
+        '<div class="session-card-title">' + (s.requirements && s.requirements[0] ? (s.requirements[0].frameworkName || 'Audit Session') : 'Audit Session') + '</div>' +
+        '<div class="session-card-date">' + dateStr + '</div>' +
+      '</div>' +
+      '<div class="session-card-stats">' +
+        '<div class="session-stat"><div class="session-stat-num">' + (s.requirementsCount || 0) + '</div><div class="session-stat-label">Requirements</div></div>' +
+        '<div class="session-stat"><div class="session-stat-num">' + (s.filesCount || 0) + '</div><div class="session-stat-label">Files</div></div>' +
+        '<div class="session-stat"><div class="session-stat-num">' + (s.messageCount || 0) + '</div><div class="session-stat-label">Messages</div></div>' +
+      '</div>' +
+      queryPreview +
+      '<div class="session-card-reqs">' + reqItems + moreReqs + '</div>';
+    list.appendChild(card);
+  });
+
+  section.style.display = '';
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   fetchLibraries();
   fetchCollections();
+  fetchPreviousSessions();
   updateButtons();
 });
 
@@ -1401,6 +1464,7 @@ document.addEventListener('DOMContentLoaded', () => {
 if (document.readyState !== 'loading') {
   fetchLibraries();
   fetchCollections();
+  fetchPreviousSessions();
 }
 
 // Make functions globally available for onclick handlers

@@ -318,6 +318,19 @@ body {
   font-style: italic;
 }
 
+.session-query-preview {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.35rem 0.5rem;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--color-primary);
+}
+
 .session-card-colls {
   display: flex;
   flex-wrap: wrap;
