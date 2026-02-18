@@ -1483,6 +1483,129 @@ textarea::placeholder {
   border-radius: 10px;
 }
 
+/* --- Section (sub-accordion within framework group) --- */
+.option-section {
+  border-bottom: 1px solid rgba(42, 58, 82, 0.3);
+}
+
+.option-section:last-child {
+  border-bottom: none;
+}
+
+.option-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem 0.5rem 1.25rem;
+  background: rgba(14, 165, 233, 0.03);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.option-section-header:hover {
+  background: rgba(14, 165, 233, 0.07);
+}
+
+.option-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+}
+
+.option-section-toggle .chevron-icon {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  transition: transform 0.2s ease;
+}
+
+.option-section.collapsed .option-section-toggle .chevron-icon {
+  transform: rotate(0deg);
+}
+
+.option-section:not(.collapsed) .option-section-toggle .chevron-icon {
+  transform: rotate(90deg);
+}
+
+.option-section-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.option-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.option-section-count {
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: var(--color-text-hint);
+  background: rgba(42, 58, 82, 0.4);
+  padding: 0.1rem 0.4rem;
+  border-radius: 8px;
+  min-width: 1.25rem;
+  text-align: center;
+}
+
+.btn-section-select {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+
+.btn-section-select:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  background: rgba(14, 165, 233, 0.08);
+}
+
+.btn-section-select.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
+  border-color: transparent;
+}
+
+.btn-section-select.partial {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  background: rgba(14, 165, 233, 0.15);
+}
+
+.btn-section-select svg {
+  flex-shrink: 0;
+}
+
+.option-section-items {
+  display: block;
+}
+
+.option-section.collapsed .option-section-items {
+  display: none;
+}
+
+.option-section-items .option-item {
+  padding-left: 2rem;
+}
+
 .option-item {
   display: flex;
   align-items: flex-start;

@@ -66,7 +66,7 @@ async function fetchLibraries() {
   }
 }
 
-// Render multi-select options
+// Render multi-select options — grouped by sections
 function renderMultiSelect(libraries) {
   allOptions = [];
   
@@ -77,10 +77,34 @@ function renderMultiSelect(libraries) {
     
     if (framework && framework.requirement_nodes) {
       const frameworkName = framework.name || library.name;
-      const nodes = framework.requirement_nodes.filter(node => node.description);
+      const allNodes = framework.requirement_nodes;
+      const assessableNodes = allNodes.filter(node => node.assessable && node.description);
       
-      // Groups are collapsed by default
+      // Build section map: find non-assessable parent nodes (sections)
+      const sectionMap = new Map(); // parentUrn -> { section node, children[] }
+      const orphanNodes = []; // nodes with no section parent
+      
+      // Index all nodes by URN for parent lookups
+      const nodeByUrn = new Map();
+      allNodes.forEach(n => nodeByUrn.set(n.urn, n));
+      
+      assessableNodes.forEach(node => {
+        const parentNode = nodeByUrn.get(node.parent_urn);
+        if (parentNode && !parentNode.assessable && parentNode.name) {
+          // This node belongs to a named section
+          if (!sectionMap.has(parentNode.urn)) {
+            sectionMap.set(parentNode.urn, { section: parentNode, children: [] });
+          }
+          sectionMap.get(parentNode.urn).children.push(node);
+        } else {
+          orphanNodes.push(node);
+        }
+      });
+      
+      const totalAssessable = assessableNodes.length;
       const groupId = `group-${libraryIndex}`;
+      
+      // Framework-level accordion (collapsed by default)
       html += `
         <div class="option-group collapsed" data-framework="${escapeHtml(frameworkName)}" data-group-id="${groupId}">
           <div class="option-group-header">
@@ -91,7 +115,7 @@ function renderMultiSelect(libraries) {
               <span>${escapeHtml(frameworkName)}</span>
             </div>
             <div class="option-group-actions">
-              <span class="option-group-count">${nodes.length} requirements</span>
+              <span class="option-group-count">${totalAssessable} requirements</span>
               <button type="button" class="btn-group-select" onclick="event.stopPropagation(); selectAllInGroup('${groupId}')" title="Select all in this framework">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <rect x="1.5" y="1.5" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/>
@@ -104,46 +128,53 @@ function renderMultiSelect(libraries) {
           <div class="option-group-items">
       `;
       
-      nodes.forEach(node => {
-        const optionData = {
-          libraryId: library.id,
-          frameworkUrn: framework.urn,
-          frameworkName: frameworkName,
-          nodeUrn: node.urn,
-          refId: node.ref_id,
-          name: node.name,
-          description: node.description,
-          depth: node.depth,
-          assessable: node.assessable
-        };
-        
-        allOptions.push(optionData);
-        
-        // Use base64 encoding to safely store JSON in data attribute (handles quotes and special chars)
-        const dataAttr = btoa(unescape(encodeURIComponent(JSON.stringify(optionData))));
-        const isSelected = currentSelections.some(s => s.nodeUrn === node.urn);
-        const depthIndicator = getDepthIndicator(node.depth);
-        
-        html += `
-          <div class="option-item${isSelected ? ' selected' : ''}" 
-               data-option="${dataAttr}"
-               data-group-id="${groupId}"
-               data-search="${escapeHtml((node.ref_id + ' ' + node.description + ' ' + frameworkName).toLowerCase())}">
-            <div class="option-checkbox">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <div class="option-content">
-              ${node.ref_id ? `<span class="option-ref-id">${escapeHtml(node.ref_id)}</span>` : ''}
-              <div class="option-description">
-                <span class="option-depth-indicator">${depthIndicator}</span>
-                ${escapeHtml(node.description)}
+      // Render sections in order they appear in the data
+      const renderedSections = new Set();
+      allNodes.forEach(node => {
+        // Check if this node is a section header
+        if (sectionMap.has(node.urn)) {
+          renderedSections.add(node.urn);
+          const { section, children } = sectionMap.get(node.urn);
+          const sectionId = `section-${libraryIndex}-${section.ref_id || section.urn}`;
+          const sectionLabel = (section.ref_id ? section.ref_id + ' ' : '') + (section.name || '');
+          
+          html += `
+            <div class="option-section collapsed" data-section-id="${escapeHtml(sectionId)}" data-group-id="${groupId}">
+              <div class="option-section-header">
+                <div class="option-section-toggle" onclick="toggleSection(this.closest('.option-section'))">
+                  <svg class="chevron-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M5 3.5L9 7L5 10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span class="option-section-name">${escapeHtml(sectionLabel)}</span>
+                </div>
+                <div class="option-section-actions">
+                  <span class="option-section-count">${children.length}</span>
+                  <button type="button" class="btn-section-select" onclick="event.stopPropagation(); selectAllInSection('${escapeHtml(sectionId)}')" title="Select all in this section">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                      <path d="M3 6L5 8L9 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Select
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
-        `;
+              <div class="option-section-items">
+          `;
+          
+          children.forEach(child => {
+            html += renderOptionItem(child, library, framework, frameworkName, groupId, sectionId);
+          });
+          
+          html += `</div></div>`;
+        }
       });
+      
+      // Render orphan nodes (not under any named section)
+      if (orphanNodes.length > 0) {
+        orphanNodes.forEach(node => {
+          html += renderOptionItem(node, library, framework, frameworkName, groupId, null);
+        });
+      }
       
       html += '</div></div>';
     }
@@ -159,7 +190,119 @@ function renderMultiSelect(libraries) {
       toggleOption(item);
     });
   });
+  
+  // Update section selection states
+  updateSectionSelectionStates();
 }
+
+// Render a single option item
+function renderOptionItem(node, library, framework, frameworkName, groupId, sectionId) {
+  const optionData = {
+    libraryId: library.id,
+    frameworkUrn: framework.urn,
+    frameworkName: frameworkName,
+    nodeUrn: node.urn,
+    refId: node.ref_id,
+    name: node.name,
+    description: node.description,
+    depth: node.depth,
+    assessable: node.assessable,
+    parentUrn: node.parent_urn
+  };
+  
+  allOptions.push(optionData);
+  
+  const dataAttr = btoa(unescape(encodeURIComponent(JSON.stringify(optionData))));
+  const isSelected = currentSelections.some(s => s.nodeUrn === node.urn);
+  
+  return `
+    <div class="option-item${isSelected ? ' selected' : ''}" 
+         data-option="${dataAttr}"
+         data-group-id="${groupId}"
+         ${sectionId ? `data-section-id="${escapeHtml(sectionId)}"` : ''}
+         data-search="${escapeHtml((node.ref_id + ' ' + node.description + ' ' + frameworkName).toLowerCase())}">
+      <div class="option-checkbox">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="option-content">
+        ${node.ref_id ? `<span class="option-ref-id">${escapeHtml(node.ref_id)}</span>` : ''}
+        <div class="option-description">${escapeHtml(node.description)}</div>
+      </div>
+    </div>
+  `;
+}
+
+// Toggle section collapse/expand
+function toggleSection(sectionEl) {
+  sectionEl.classList.toggle('collapsed');
+}
+
+// Select all items in a section
+function selectAllInSection(sectionId) {
+  const section = document.querySelector(`.option-section[data-section-id="${sectionId}"]`);
+  if (!section) return;
+  
+  // Expand the section
+  section.classList.remove('collapsed');
+  
+  const items = section.querySelectorAll('.option-item:not([style*="display: none"])');
+  const allSelected = Array.from(items).every(item => item.classList.contains('selected'));
+  
+  let count = 0;
+  if (allSelected) {
+    // Deselect all in section
+    items.forEach(item => {
+      const optionData = decodeOptionData(item.dataset.option);
+      currentSelections = currentSelections.filter(s => s.nodeUrn !== optionData.nodeUrn);
+      item.classList.remove('selected');
+      count++;
+    });
+    updateSelectionUI();
+    updateSectionSelectionStates();
+    showToast('info', 'Deselected', `Removed ${count} requirements from this section.`);
+  } else {
+    // Select all in section
+    items.forEach(item => {
+      const optionData = decodeOptionData(item.dataset.option);
+      const exists = currentSelections.some(s => s.nodeUrn === optionData.nodeUrn);
+      if (!exists) {
+        currentSelections.push(optionData);
+        item.classList.add('selected');
+        count++;
+      }
+    });
+    updateSelectionUI();
+    updateSectionSelectionStates();
+    if (count > 0) {
+      showToast('success', 'Selected', `Added ${count} requirements from this section.`);
+    }
+  }
+}
+
+// Update section header checkbox states (all/some/none selected)
+function updateSectionSelectionStates() {
+  document.querySelectorAll('.option-section').forEach(section => {
+    const items = section.querySelectorAll('.option-item');
+    const selectedItems = section.querySelectorAll('.option-item.selected');
+    const btn = section.querySelector('.btn-section-select');
+    if (!btn) return;
+    
+    if (selectedItems.length === 0) {
+      btn.classList.remove('active', 'partial');
+    } else if (selectedItems.length === items.length) {
+      btn.classList.add('active');
+      btn.classList.remove('partial');
+    } else {
+      btn.classList.add('partial');
+      btn.classList.remove('active');
+    }
+  });
+}
+
+window.toggleSection = toggleSection;
+window.selectAllInSection = selectAllInSection;
 
 // Toggle group collapse/expand
 function toggleGroup(header) {
@@ -189,6 +332,7 @@ function selectAllInGroup(groupId) {
   });
   
   updateSelectionUI();
+  updateSectionSelectionStates();
   
   if (addedCount > 0) {
     showToast('success', 'Selected', `Added ${addedCount} requirements from this framework.`);
@@ -222,6 +366,7 @@ function toggleOption(item) {
   }
   
   updateSelectionUI();
+  updateSectionSelectionStates();
 }
 
 // Select by nodeUrn (for removing from tags/info)
@@ -241,6 +386,7 @@ function removeSelection(nodeUrn) {
     });
     
     updateSelectionUI();
+    updateSectionSelectionStates();
   }
 }
 
@@ -325,10 +471,35 @@ function filterOptions(query) {
   const groups = document.querySelectorAll('.option-group');
   
   groups.forEach(group => {
-    const items = group.querySelectorAll('.option-item');
     let visibleInGroup = 0;
     
-    items.forEach(item => {
+    // Handle sections within the group
+    const sections = group.querySelectorAll('.option-section');
+    sections.forEach(section => {
+      const items = section.querySelectorAll('.option-item');
+      let visibleInSection = 0;
+      
+      items.forEach(item => {
+        const searchText = item.dataset.search || '';
+        const matches = query === '' || searchText.includes(query);
+        item.style.display = matches ? '' : 'none';
+        if (matches) visibleInSection++;
+      });
+      
+      section.style.display = visibleInSection > 0 ? '' : 'none';
+      visibleInGroup += visibleInSection;
+      
+      // Auto-expand sections when searching
+      if (query !== '' && visibleInSection > 0) {
+        section.classList.remove('collapsed');
+      } else if (query === '') {
+        section.classList.add('collapsed');
+      }
+    });
+    
+    // Handle orphan items (not in any section)
+    const orphanItems = group.querySelectorAll('.option-group-items > .option-item');
+    orphanItems.forEach(item => {
       const searchText = item.dataset.search || '';
       const matches = query === '' || searchText.includes(query);
       item.style.display = matches ? '' : 'none';
@@ -387,6 +558,7 @@ btnSelectAll.addEventListener('click', () => {
     }
   });
   updateSelectionUI();
+  updateSectionSelectionStates();
 });
 
 // Clear all
@@ -396,6 +568,7 @@ btnClearAll.addEventListener('click', () => {
     item.classList.remove('selected');
   });
   updateSelectionUI();
+  updateSectionSelectionStates();
 });
 
 // Get visual indicator for depth level
