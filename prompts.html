@@ -112,13 +112,17 @@
             <label for="prompt-name">Name</label>
             <input type="text" id="prompt-name" placeholder="e.g. Requirement Analyzer" autocomplete="off" />
           </div>
-          <div class="prompt-form-group">
-            <label for="prompt-description">Description</label>
-            <input type="text" id="prompt-description" placeholder="Brief description of what this prompt does" autocomplete="off" />
+          <div class="prompt-form-group prompt-form-group-full">
+            <label for="prompt-system-instruction">System Instruction</label>
+            <textarea id="prompt-system-instruction" placeholder="The main system prompt / role definition..." rows="8"></textarea>
           </div>
           <div class="prompt-form-group prompt-form-group-full">
-            <label for="prompt-content">Prompt Content</label>
-            <textarea id="prompt-content" placeholder="Enter the prompt template text..." rows="16"></textarea>
+            <label for="prompt-eval-instructions">Evaluation Instructions</label>
+            <textarea id="prompt-eval-instructions" placeholder="Step-by-step evaluation instructions..." rows="6"></textarea>
+          </div>
+          <div class="prompt-form-group prompt-form-group-full">
+            <label for="prompt-output-format">Output Format</label>
+            <textarea id="prompt-output-format" placeholder="Expected JSON output format template..." rows="8"></textarea>
           </div>
         </div>
       </div>

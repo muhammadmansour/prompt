@@ -12,8 +12,9 @@ const modalClose = document.getElementById('prompt-modal-close');
 const modalCancel = document.getElementById('prompt-modal-cancel');
 const modalSave = document.getElementById('prompt-modal-save');
 const inputName = document.getElementById('prompt-name');
-const inputDescription = document.getElementById('prompt-description');
-const inputContent = document.getElementById('prompt-content');
+const inputSystemInstruction = document.getElementById('prompt-system-instruction');
+const inputEvalInstructions = document.getElementById('prompt-eval-instructions');
+const inputOutputFormat = document.getElementById('prompt-output-format');
 const toastContainer = document.getElementById('toast-container');
 
 let allPrompts = [];
@@ -44,6 +45,14 @@ async function fetchPrompts() {
   }
 }
 
+function getPromptPreview(prompt) {
+  // Build a preview from system_instruction (primary content)
+  const si = prompt.system_instruction || '';
+  if (si) return si.substring(0, 200);
+  // Fallback to content or evaluation_instructions
+  return (prompt.content || prompt.evaluation_instructions || '').substring(0, 200);
+}
+
 function renderPrompts(prompts) {
   if (prompts.length === 0) {
     promptsList.innerHTML = `
@@ -64,11 +73,11 @@ function renderPrompts(prompts) {
   prompts.forEach(prompt => {
     const id = prompt._id || prompt.id;
     const name = prompt.name || 'Untitled';
-    const description = prompt.description || '';
     const version = prompt.version || 1;
-    const createdAt = prompt.createdAt ? formatDate(prompt.createdAt) : '';
-    const updatedAt = prompt.updatedAt ? formatDate(prompt.updatedAt) : '';
-    const contentPreview = (prompt.content || '').substring(0, 200);
+    const createdAt = prompt.created_at || prompt.createdAt;
+    const updatedAt = prompt.updated_at || prompt.updatedAt;
+    const preview = getPromptPreview(prompt);
+    const fullText = prompt.system_instruction || prompt.content || prompt.evaluation_instructions || '';
 
     html += `
       <div class="prompt-card" data-id="${escapeHtml(id)}">
@@ -80,15 +89,15 @@ function renderPrompts(prompts) {
             <span class="prompt-version-badge">v${version}</span>
           </div>
         </div>
-        ${contentPreview ? `
+        ${preview ? `
         <div class="prompt-card-preview">
-          <pre>${escapeHtml(contentPreview)}${prompt.content && prompt.content.length > 200 ? '…' : ''}</pre>
+          <pre>${escapeHtml(preview)}${fullText.length > 200 ? '…' : ''}</pre>
         </div>
         ` : ''}
         <div class="prompt-card-footer">
           <div class="prompt-card-dates">
-            ${updatedAt ? `<span class="prompt-date">Updated ${updatedAt}</span>` : ''}
-            ${createdAt ? `<span class="prompt-date">Created ${createdAt}</span>` : ''}
+            ${updatedAt ? `<span class="prompt-date">Updated ${formatDate(updatedAt)}</span>` : ''}
+            ${createdAt ? `<span class="prompt-date">Created ${formatDate(createdAt)}</span>` : ''}
           </div>
           <div class="prompt-card-actions">
             <button class="btn-prompt-action btn-prompt-edit" onclick="editPrompt('${escapeHtml(id)}')" title="Edit">
@@ -122,8 +131,8 @@ promptsSearch.addEventListener('input', (e) => {
   }
   const filtered = allPrompts.filter(p =>
     (p.name || '').toLowerCase().includes(q) ||
-    (p.description || '').toLowerCase().includes(q) ||
-    (p.content || '').toLowerCase().includes(q)
+    (p.system_instruction || '').toLowerCase().includes(q) ||
+    (p.evaluation_instructions || '').toLowerCase().includes(q)
   );
   renderPrompts(filtered);
 });
@@ -135,21 +144,24 @@ function openModal() {
   document.body.style.overflow = 'hidden';
 }
 
+function clearForm() {
+  inputName.value = '';
+  inputSystemInstruction.value = '';
+  inputEvalInstructions.value = '';
+  inputOutputFormat.value = '';
+}
+
 function closeModal() {
   modalOverlay.classList.remove('active');
   document.body.style.overflow = '';
   editingPromptId = null;
-  inputName.value = '';
-  inputDescription.value = '';
-  inputContent.value = '';
+  clearForm();
 }
 
 btnCreatePrompt.addEventListener('click', () => {
   editingPromptId = null;
   modalTitle.textContent = 'New Prompt';
-  inputName.value = '';
-  inputDescription.value = '';
-  inputContent.value = '';
+  clearForm();
   openModal();
   inputName.focus();
 });
@@ -169,26 +181,27 @@ document.addEventListener('keydown', (e) => {
 // ─── Edit ──────────────────────────────────────────────────────
 
 async function editPrompt(id) {
-  // Show modal immediately with loading state
   editingPromptId = id;
   modalTitle.textContent = 'Edit Prompt';
-  
+
   // Pre-fill from cached list data
   const cached = allPrompts.find(p => (p._id || p.id) === id);
   inputName.value = cached?.name || '';
-  inputDescription.value = cached?.description || '';
-  inputContent.value = cached?.content || '';
+  inputSystemInstruction.value = cached?.system_instruction || '';
+  inputEvalInstructions.value = cached?.evaluation_instructions || '';
+  inputOutputFormat.value = cached?.output_format || '';
   openModal();
 
-  // Fetch full prompt (with content) from GET /api/prompts/:id
+  // Fetch full prompt from GET /api/prompts/:id
   try {
     const res = await fetch(`${PROMPTS_API}/${id}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const prompt = data.data || data.prompt || data;
     inputName.value = prompt.name || '';
-    inputDescription.value = prompt.description || '';
-    inputContent.value = prompt.content || '';
+    inputSystemInstruction.value = prompt.system_instruction || '';
+    inputEvalInstructions.value = prompt.evaluation_instructions || '';
+    inputOutputFormat.value = prompt.output_format || '';
   } catch (err) {
     console.error('Failed to fetch prompt details:', err);
     showToast('error', 'Error', 'Could not load prompt content: ' + err.message);
@@ -201,21 +214,22 @@ window.editPrompt = editPrompt;
 
 modalSave.addEventListener('click', async () => {
   const name = inputName.value.trim();
-  const description = inputDescription.value.trim();
-  const content = inputContent.value.trim();
+  const system_instruction = inputSystemInstruction.value.trim();
+  const evaluation_instructions = inputEvalInstructions.value.trim();
+  const output_format = inputOutputFormat.value.trim();
 
   if (!name) {
     showToast('error', 'Validation', 'Prompt name is required.');
     inputName.focus();
     return;
   }
-  if (!content) {
-    showToast('error', 'Validation', 'Prompt content is required.');
-    inputContent.focus();
+  if (!system_instruction) {
+    showToast('error', 'Validation', 'System instruction is required.');
+    inputSystemInstruction.focus();
     return;
   }
 
-  const body = { name, description, content };
+  const body = { name, system_instruction, evaluation_instructions, output_format };
   const saveBtnText = modalSave.querySelector('.btn-text');
   const saveBtnLoading = modalSave.querySelector('.btn-loading');
 
@@ -226,14 +240,12 @@ modalSave.addEventListener('click', async () => {
 
     let res;
     if (editingPromptId) {
-      // Update
       res = await fetch(`${PROMPTS_API}/${editingPromptId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
     } else {
-      // Create
       res = await fetch(PROMPTS_API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
