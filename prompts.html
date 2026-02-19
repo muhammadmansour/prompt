@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prompts — Wathbah Auditor Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="prompts-page">
+
+  <!-- Navigation Bar -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <div class="nav-logo">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect width="28" height="28" rx="8" fill="url(#navGrad)"/>
+          <path d="M8 14L12 18L20 10" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="navGrad" x1="0" y1="0" x2="28" y2="28">
+              <stop stop-color="#3b5998"/>
+              <stop offset="1" stop-color="#4a6db5"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <span class="nav-title">Wathbah Auditor Assistant</span>
+    </div>
+    <div class="nav-center">
+      <a class="nav-btn nav-btn-ghost" href="index.html">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2 6L8 2L14 6V13C14 13.6 13.6 14 13 14H3C2.4 14 2 13.6 2 13V6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M6 14V8H10V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Home
+      </a>
+      <button class="nav-btn nav-btn-filled" type="button">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2 3H14M2 6.5H10M2 10H12M2 13.5H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        Prompts
+      </button>
+    </div>
+    <div class="nav-actions">
+      <button class="nav-btn nav-btn-outlined" type="button" id="btn-create-prompt">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        New Prompt
+      </button>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="prompts-main">
+    <div class="prompts-header">
+      <div class="prompts-header-text">
+        <h1 class="prompts-title">Prompts</h1>
+        <p class="prompts-subtitle">Manage and edit your prompt templates</p>
+      </div>
+      <div class="prompts-header-actions">
+        <div class="prompts-search-wrapper">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <input type="text" id="prompts-search" placeholder="Search prompts..." autocomplete="off" />
+        </div>
+        <button class="btn-icon-action" id="btn-clear-cache" title="Clear cache">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4H14M5 4V3C5 2.4 5.4 2 6 2H10C10.6 2 11 2.4 11 3V4M6 7V12M8 7V12M10 7V12M3 4L4 14H12L13 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Prompts List -->
+    <div class="prompts-list" id="prompts-list">
+      <div class="loading-state">
+        <svg class="spinner" width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/>
+          <path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Loading prompts...</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- Prompt Editor Modal -->
+  <div class="modal-overlay" id="prompt-modal-overlay">
+    <div class="modal prompt-modal" id="prompt-modal">
+      <div class="modal-header">
+        <div class="modal-title">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M4 4H16L20 8V20C20 20.6 19.6 21 19 21H4C3.4 21 3 20.6 3 20V5C3 4.4 3.4 4 4 4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M16 4V8H20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M7 13H17M7 16H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span id="prompt-modal-title">New Prompt</span>
+        </div>
+        <button type="button" class="modal-close" id="prompt-modal-close" aria-label="Close modal">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="prompt-modal-body">
+        <div class="prompt-form">
+          <div class="prompt-form-group">
+            <label for="prompt-name">Name</label>
+            <input type="text" id="prompt-name" placeholder="e.g. Requirement Analyzer" autocomplete="off" />
+          </div>
+          <div class="prompt-form-group">
+            <label for="prompt-description">Description</label>
+            <input type="text" id="prompt-description" placeholder="Brief description of what this prompt does" autocomplete="off" />
+          </div>
+          <div class="prompt-form-group prompt-form-group-full">
+            <label for="prompt-content">Prompt Content</label>
+            <textarea id="prompt-content" placeholder="Enter the prompt template text..." rows="16"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" id="prompt-modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-confirm" id="prompt-modal-save">
+          <svg class="btn-icon" width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M3 9L7 13L15 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="btn-text">Save</span>
+          <span class="btn-loading hidden">
+            <svg class="spinner" width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="2" stroke-opacity="0.3"/>
+              <path d="M9 2C13 2 16 5 16 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            Saving...
+          </span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="prompts.js"></script>
+</body>
+</html>
