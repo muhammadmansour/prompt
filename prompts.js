@@ -75,7 +75,6 @@ function renderPrompts(prompts) {
         <div class="prompt-card-header">
           <div class="prompt-card-info">
             <h3 class="prompt-card-name">${escapeHtml(name)}</h3>
-            ${description ? `<p class="prompt-card-desc">${escapeHtml(description)}</p>` : ''}
           </div>
           <div class="prompt-card-meta">
             <span class="prompt-version-badge">v${version}</span>
@@ -169,16 +168,31 @@ document.addEventListener('keydown', (e) => {
 
 // ─── Edit ──────────────────────────────────────────────────────
 
-function editPrompt(id) {
-  const prompt = allPrompts.find(p => (p._id || p.id) === id);
-  if (!prompt) return;
-
+async function editPrompt(id) {
+  // Show modal immediately with loading state
   editingPromptId = id;
   modalTitle.textContent = 'Edit Prompt';
-  inputName.value = prompt.name || '';
-  inputDescription.value = prompt.description || '';
-  inputContent.value = prompt.content || '';
+  
+  // Pre-fill from cached list data
+  const cached = allPrompts.find(p => (p._id || p.id) === id);
+  inputName.value = cached?.name || '';
+  inputDescription.value = cached?.description || '';
+  inputContent.value = cached?.content || '';
   openModal();
+
+  // Fetch full prompt (with content) from GET /api/prompts/:id
+  try {
+    const res = await fetch(`${PROMPTS_API}/${id}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const prompt = data.data || data.prompt || data;
+    inputName.value = prompt.name || '';
+    inputDescription.value = prompt.description || '';
+    inputContent.value = prompt.content || '';
+  } catch (err) {
+    console.error('Failed to fetch prompt details:', err);
+    showToast('error', 'Error', 'Could not load prompt content: ' + err.message);
+  }
   inputName.focus();
 }
 window.editPrompt = editPrompt;
