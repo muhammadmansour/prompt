@@ -3410,3 +3410,53 @@ body.chat-page .navbar {
     align-items: flex-start;
   }
 }
+
+/* ─── Local Prompts Section ─── */
+.prompts-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding: 0 0.25rem;
+}
+
+.prompts-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.prompts-section-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.prompts-section-badge.secondary {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.prompt-card-local {
+  border-left: 3px solid #3b82f6;
+}
+
+.prompt-local-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  margin-left: 0.5rem;
+}

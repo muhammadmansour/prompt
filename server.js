@@ -57,6 +57,15 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+
+  CREATE TABLE IF NOT EXISTS local_prompts (
+    id TEXT PRIMARY KEY,
+    key TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 console.log('SQLite database initialized (sessions.db)');
@@ -86,11 +95,23 @@ const dbListSessions = db.prepare(`
 const dbDeleteSession = db.prepare(`DELETE FROM sessions WHERE id = ?`);
 const dbDeleteSessionMessages = db.prepare(`DELETE FROM messages WHERE session_id = ?`);
 
+// Local prompts DB helpers
+const dbGetLocalPrompt = db.prepare(`SELECT * FROM local_prompts WHERE id = ?`);
+const dbGetLocalPromptByKey = db.prepare(`SELECT * FROM local_prompts WHERE key = ?`);
+const dbListLocalPrompts = db.prepare(`SELECT * FROM local_prompts ORDER BY name ASC`);
+const dbInsertLocalPrompt = db.prepare(`
+  INSERT OR IGNORE INTO local_prompts (id, key, name, content, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+`);
+const dbUpdateLocalPrompt = db.prepare(`
+  UPDATE local_prompts SET name = ?, content = ?, updated_at = ? WHERE id = ?
+`);
+
 // Gemini SDK client + in-memory chat sessions (SDK ChatSession objects)
 let genai = null;
 const chatSessions = {};  // sessionId -> { chat: SDK ChatSession, systemPrompt: string }
 
-// Load prompt templates
+// Load prompt templates from files (used as seed defaults)
 const promptTemplatePath = path.join(__dirname, 'prompts', 'requirement-analyzer.txt');
 let promptTemplate = '';
 
@@ -102,12 +123,30 @@ try {
 }
 
 const chatPromptPath = path.join(__dirname, 'prompts', 'chat-auditor.txt');
-let chatPromptTemplate = '';
+let chatPromptFileContent = '';
 
 try {
-  chatPromptTemplate = fs.readFileSync(chatPromptPath, 'utf-8');
+  chatPromptFileContent = fs.readFileSync(chatPromptPath, 'utf-8');
 } catch (error) {
-  console.warn('Chat prompt template not found, using default.');
+  console.warn('Chat prompt template not found.');
+}
+
+// Seed the chat-auditor prompt into the DB if not already present
+const CHAT_AUDITOR_PROMPT_ID = 'local-chat-auditor';
+const now = new Date().toISOString();
+dbInsertLocalPrompt.run(
+  CHAT_AUDITOR_PROMPT_ID,
+  'chat_auditor',
+  'Chat Auditor (Start Audit Session)',
+  chatPromptFileContent || 'You are an expert compliance and governance auditor for the Wathbah Auditor platform.',
+  now,
+  now
+);
+
+// Helper: get the current chat auditor prompt from DB (always use DB as source of truth)
+function getChatAuditorPrompt() {
+  const row = dbGetLocalPromptByKey.get('chat_auditor');
+  return row ? row.content : (chatPromptFileContent || 'You are an expert compliance and governance auditor for the Wathbah Auditor platform.');
 }
 
 // MIME types for static files
@@ -668,8 +707,8 @@ const server = http.createServer(async (req, res) => {
       // Generate proper UUID
       const sessionId = crypto.randomUUID();
 
-      // Build the system instruction from context
-      let systemPrompt = chatPromptTemplate || `You are an expert compliance and governance auditor for the Wathbah Auditor platform.`;
+      // Build the system instruction from context (read from DB)
+      let systemPrompt = getChatAuditorPrompt();
 
       if (context) {
         // Inject selected requirements with full details
@@ -865,7 +904,7 @@ const server = http.createServer(async (req, res) => {
         } else {
           // No DB record — create a fresh session
           const createdAt = new Date().toISOString();
-          const sysPrompt = chatPromptTemplate || 'You are an expert compliance auditor.';
+          const sysPrompt = getChatAuditorPrompt();
           dbInsertSession.run(sessionId, '{}', sysPrompt, null, createdAt);
 
           chatSessions[sessionId] = {
@@ -906,6 +945,65 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ success: true, reply, sessionId }));
     } catch (error) {
       console.error('Chat API Error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Local Prompts API ----
+  if (url.pathname === '/api/local-prompts' && req.method === 'GET') {
+    try {
+      const rows = dbListLocalPrompts.all();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, prompts: rows }));
+    } catch (error) {
+      console.error('List local prompts error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  const localPromptMatch = url.pathname.match(/^\/api\/local-prompts\/([^\/]+)$/);
+  if (localPromptMatch && req.method === 'GET') {
+    try {
+      const row = dbGetLocalPrompt.get(localPromptMatch[1]);
+      if (!row) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Prompt not found.' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, prompt: row }));
+    } catch (error) {
+      console.error('Get local prompt error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (localPromptMatch && req.method === 'PUT') {
+    try {
+      const id = localPromptMatch[1];
+      const row = dbGetLocalPrompt.get(id);
+      if (!row) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Prompt not found.' }));
+        return;
+      }
+      const body = await parseBody(req);
+      const name = body.name || row.name;
+      const content = body.content !== undefined ? body.content : row.content;
+      const updatedAt = new Date().toISOString();
+      dbUpdateLocalPrompt.run(name, content, updatedAt, id);
+      console.log(`Local prompt updated: ${id} ("${name}", ${content.length} chars)`);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, prompt: { ...row, name, content, updated_at: updatedAt } }));
+    } catch (error) {
+      console.error('Update local prompt error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }
