@@ -18,6 +18,9 @@ const toastContainer = document.getElementById('toast-container');
 let allPrompts = [];
 let editingPromptId = null;
 
+// Prompts to hide from the UI
+const HIDDEN_PROMPT_IDS = ['b596eb43-d411-4fe6-9d80-0ab113673678'];
+
 // ─── Fetch & Render ────────────────────────────────────────────
 
 async function fetchPrompts() {
@@ -26,6 +29,7 @@ async function fetchPrompts() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     allPrompts = Array.isArray(data) ? data : (data.data || data.prompts || []);
+    allPrompts = allPrompts.filter(p => !HIDDEN_PROMPT_IDS.includes(p._id || p.id));
     renderPrompts(allPrompts);
   } catch (err) {
     console.error('Failed to fetch prompts:', err);
