@@ -3449,6 +3449,16 @@ body.chat-page .navbar {
   border-left: 3px solid #3b82f6;
 }
 
+.prompt-card-note {
+  padding: 0.6rem 1.25rem;
+  font-size: 0.78rem;
+  color: #6366f1;
+  background: #eef2ff;
+  border-top: 1px solid #e0e7ff;
+  font-weight: 500;
+  font-style: italic;
+}
+
 .prompt-local-badge {
   font-size: 0.6rem;
   font-weight: 700;
