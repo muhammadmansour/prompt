@@ -91,7 +91,7 @@ function card(p, src) {
   h += '</div></div>';
   // Special note for Audit Analysis prompt
   if (id === '8c0a228d-1fa7-47f6-9df6-4354b72f8134') {
-    h += '<div class="prompt-card-note">Used in both applied control and requirement assessments</div>';
+    h += '<div class="prompt-card-note">Used in both applied control and requirement evidence assessments</div>';
   }
   h += '</div>';
   return h;
