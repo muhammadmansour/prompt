@@ -18,7 +18,7 @@ let allPrompts = [];
 let localPrompts = [];
 let editingPromptId = null;
 let editingSource = null;
-const HIDDEN_IDS = ['b596eb43-d411-4fe6-9d80-0ab113673678', '64d28cc6-e8c2-4de1-8842-e1f9c65e9173'];
+const HIDDEN_IDS = ['64d28cc6-e8c2-4de1-8842-e1f9c65e9173'];
 
 // ─── Fetch ─────────────────────────────────────────────────────
 
