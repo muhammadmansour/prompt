@@ -1120,8 +1120,8 @@ const server = http.createServer(async (req, res) => {
         console.log(`Deleting document: ${documentName}`);
         
         await deleteDocument(documentName, apiKey);
-        
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
         return;
       }

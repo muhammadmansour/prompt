@@ -89,12 +89,12 @@ function card(p, src) {
   h += '<button class="btn-prompt-action btn-prompt-edit" onclick="editPrompt(\'' + esc(id) + '\',\'' + src + '\')" title="Edit"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Edit</button>';
   if (!isL) h += '<button class="btn-prompt-action btn-prompt-delete" onclick="deletePrompt(\'' + esc(id) + '\',\'' + esc(nm).replace(/'/g, "\\'") + '\')" title="Delete"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Delete</button>';
   h += '</div></div>';
-  // Special note for Audit Analysis prompt
+  // Special notes
   if (id === '8c0a228d-1fa7-47f6-9df6-4354b72f8134') {
     h += '<div class="prompt-card-note">Used in both applied control and requirement evidence assessments</div>';
   }
   if (id === 'b596eb43-d411-4fe6-9d80-0ab113673678') {
-    h += '<div class="prompt-card-note">Used in entity extraction from evidence documents</div>';
+    h += '<div class="prompt-card-note">Used in extracting evidences from evidence in CISO version</div>';
   }
   h += '</div>';
   return h;
