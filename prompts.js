@@ -93,6 +93,9 @@ function card(p, src) {
   if (id === '8c0a228d-1fa7-47f6-9df6-4354b72f8134') {
     h += '<div class="prompt-card-note">Used in both applied control and requirement evidence assessments</div>';
   }
+  if (id === 'b596eb43-d411-4fe6-9d80-0ab113673678') {
+    h += '<div class="prompt-card-note">Used in entity extraction from evidence documents</div>';
+  }
   h += '</div>';
   return h;
 }
