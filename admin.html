@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WathbaGRC — AI Admin Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body class="admin-body">
+
+  <!-- Admin Layout -->
+  <div class="admin-layout">
+
+    <!-- Sidebar -->
+    <aside class="admin-sidebar" id="admin-sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-logo">W</div>
+        <div class="sidebar-brand-text">
+          <span class="sidebar-brand-name">WathbaGRC</span>
+          <span class="sidebar-brand-tag">ADMIN</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="sidebar-item active" data-page="dashboard">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/></svg>
+          Dashboard
+        </button>
+
+        <div class="sidebar-divider"></div>
+
+        <button class="sidebar-section-toggle" data-section="ai-management">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M8 5V8L10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          AI MANAGEMENT
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 5L6 7L8 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <div class="sidebar-section open" id="section-ai-management">
+          <button class="sidebar-item" data-page="audit-sessions">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3H14M2 8H14M2 13H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Audit Sessions
+          </button>
+          <button class="sidebar-item" data-page="audit-studio">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12M4 12L2.5 13.5M13.5 2.5L12 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
+            Audit Studio
+          </button>
+        </div>
+
+        <button class="sidebar-section-toggle" data-section="ai-tools">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M8 2V5M8 11V14M2 8H5M11 8H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          AI TOOLS
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 5L6 7L8 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <div class="sidebar-section open" id="section-ai-tools">
+          <button class="sidebar-item" data-page="controls-studio">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Controls Studio
+          </button>
+          <button class="sidebar-item" data-page="merge-optimizer">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 2L12 14M4 4V8C4 10.2 5.8 12 8 12H12M4 4L2 6M4 4L6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Merge Optimizer
+          </button>
+          <button class="sidebar-item" data-page="org-contexts">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 13V4C2 3.4 2.4 3 3 3H13C13.6 3 14 3.4 14 4V13M5 7H11M5 10H9M8 3V1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Org Contexts
+          </button>
+        </div>
+
+        <button class="sidebar-section-toggle" data-section="config">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1V3M8 13V15M1 8H3M13 8H15M3.5 3.5L5 5M11 11L12.5 12.5M3.5 12.5L5 11M11 5L12.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          CONFIGURATION
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 5L6 7L8 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <div class="sidebar-section open" id="section-config">
+          <button class="sidebar-item" data-page="prompts">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3H14M2 6.5H10M2 10H12M2 13.5H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Prompts
+          </button>
+          <button class="sidebar-item" data-page="file-collections">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V12C2 12.6 2.4 13 3 13H13C13.6 13 14 12.6 14 12V7C14 6.4 13.6 6 13 6H8L6.5 4H3C2.4 4 2 4.4 2 5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            File Collections
+          </button>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="index.html" class="sidebar-back-btn">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 7H4M4 7L7 4M4 7L7 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back to Auditor
+        </a>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="admin-main">
+      <header class="admin-header">
+        <div class="admin-header-left">
+          <span class="admin-header-title" id="admin-header-title">Dashboard</span>
+        </div>
+        <div class="admin-header-right">
+          <span class="admin-header-env">Production</span>
+          <div class="admin-header-avatar">A</div>
+        </div>
+      </header>
+
+      <main class="admin-content" id="admin-content">
+
+        <!-- =================== DASHBOARD =================== -->
+        <section class="admin-page active" id="page-dashboard">
+          <div class="page-container">
+            <div class="page-header">
+              <h1 class="page-title">Dashboard</h1>
+              <p class="page-subtitle">Overview of your AI admin configuration and activity</p>
+            </div>
+
+            <div class="stats-grid" id="dash-stats">
+              <!-- Populated by JS -->
+            </div>
+
+            <div class="dash-grid">
+              <div class="dash-main">
+                <div class="admin-card">
+                  <div class="admin-card-header">
+                    <div class="admin-card-header-left">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M8 5V8L10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                      <h2>Recent Sessions</h2>
+                    </div>
+                    <button class="admin-link-btn" onclick="navigateTo('audit-sessions')">View All →</button>
+                  </div>
+                  <div class="dash-sessions-list" id="dash-sessions-list">
+                    <!-- Populated by JS -->
+                  </div>
+                  <div class="admin-card-footer" id="dash-sessions-footer"></div>
+                </div>
+              </div>
+
+              <div class="dash-side">
+                <div class="admin-card">
+                  <h2 class="admin-card-title-sm">Quick Actions</h2>
+                  <div class="quick-actions" id="quick-actions">
+                    <button class="quick-action-btn" onclick="navigateTo('audit-studio')">
+                      <div class="qa-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/></svg></div>
+                      <div class="qa-text">
+                        <div class="qa-label">New Audit Session</div>
+                        <div class="qa-desc">Start a new AI-assisted audit</div>
+                      </div>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    </button>
+                    <button class="quick-action-btn" onclick="navigateTo('controls-studio')">
+                      <div class="qa-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                      <div class="qa-text">
+                        <div class="qa-label">Generate Controls</div>
+                        <div class="qa-desc">Suggest controls for requirements</div>
+                      </div>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    </button>
+                    <button class="quick-action-btn" onclick="navigateTo('merge-optimizer')">
+                      <div class="qa-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 2L12 14M4 4V8C4 10.2 5.8 12 8 12H12M4 4L2 6M4 4L6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                      <div class="qa-text">
+                        <div class="qa-label">Optimize Controls</div>
+                        <div class="qa-desc">Merge overlapping controls</div>
+                      </div>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    </button>
+                    <button class="quick-action-btn" onclick="navigateTo('file-collections')">
+                      <div class="qa-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V12C2 12.6 2.4 13 3 13H13C13.6 13 14 12.6 14 12V7C14 6.4 13.6 6 13 6H8L6.5 4H3C2.4 4 2 4.4 2 5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                      <div class="qa-text">
+                        <div class="qa-label">Upload Files</div>
+                        <div class="qa-desc">Add files to collections</div>
+                      </div>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="admin-card">
+                  <div class="admin-card-header">
+                    <h2>Studio Sessions</h2>
+                    <button class="admin-link-btn" onclick="navigateTo('controls-studio')">Open Studio →</button>
+                  </div>
+                  <div id="dash-studio-sessions"><!-- Populated by JS --></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =================== AUDIT SESSIONS =================== -->
+        <section class="admin-page" id="page-audit-sessions">
+          <div class="page-container">
+            <div class="page-header">
+              <div>
+                <h1 class="page-title">Audit Sessions</h1>
+                <p class="page-subtitle">Review and continue previous audit sessions</p>
+              </div>
+            </div>
+            <div class="admin-search-bar">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <input type="text" placeholder="Search sessions..." id="sessions-search">
+            </div>
+            <div class="admin-card">
+              <div class="sessions-table-header">
+                <span class="col-name">Session Name</span>
+                <span class="col-center">Requirements</span>
+                <span class="col-center">Files</span>
+                <span class="col-center">Messages</span>
+                <span class="col-center">Created</span>
+                <span class="col-action"></span>
+              </div>
+              <div id="sessions-list-full"><!-- Populated by JS --></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =================== AUDIT STUDIO =================== -->
+        <section class="admin-page" id="page-audit-studio">
+          <div class="page-container">
+            <div class="page-header">
+              <h1 class="page-title">Audit Studio</h1>
+              <p class="page-subtitle">Build your context session with requirements, references, and queries</p>
+            </div>
+            <div class="studio-three-col">
+              <!-- Col 1: Requirements -->
+              <div class="admin-card studio-col-card">
+                <div class="studio-col-header navy">
+                  <div class="studio-col-label">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 8L7 10L11 6" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="8" r="6" stroke="white" stroke-width="1.5"/></svg>
+                    1. Framework Requirements
+                  </div>
+                  <p class="studio-col-desc">Select audit requirements</p>
+                  <div class="studio-col-stat">
+                    <span class="studio-stat-num" id="studio-req-count">0</span>
+                    <span class="studio-stat-label">requirements selected</span>
+                  </div>
+                </div>
+                <div class="studio-col-body">
+                  <p class="studio-placeholder-text">Requirements selection is available on the <a href="index.html">Auditor page</a>.</p>
+                </div>
+              </div>
+
+              <!-- Col 2: Reference Files -->
+              <div class="admin-card studio-col-card">
+                <div class="studio-col-header emerald">
+                  <div class="studio-col-label">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 10V13C14 13.6 13.6 14 13 14H3C2.4 14 2 13.6 2 13V10" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M11 5L8 2L5 5M8 2V10" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    2. Reference Files
+                  </div>
+                  <p class="studio-col-desc">Upload framework documents</p>
+                  <div class="studio-col-stat">
+                    <span class="studio-stat-num" id="studio-file-count">0</span>
+                    <span class="studio-stat-label">files in collections</span>
+                  </div>
+                </div>
+                <div class="studio-col-body">
+                  <p class="studio-placeholder-text">File management is available on the <a href="index.html">Auditor page</a> or <button class="inline-link" onclick="navigateTo('file-collections')">File Collections</button>.</p>
+                </div>
+              </div>
+
+              <!-- Col 3: Initial Query -->
+              <div class="admin-card studio-col-card">
+                <div class="studio-col-header navy">
+                  <div class="studio-col-label">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3H11L14 6V13C14 13.6 13.6 14 13 14H2C1.4 14 1 13.6 1 13V4C1 3.4 1.4 3 2 3Z" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    3. Initial Query
+                  </div>
+                  <p class="studio-col-desc">Set your audit question</p>
+                  <div class="studio-col-stat">
+                    <span class="studio-stat-num">0</span>
+                    <span class="studio-stat-label">context files attached</span>
+                  </div>
+                </div>
+                <div class="studio-col-body">
+                  <p class="studio-placeholder-text">Start an audit session from the <a href="index.html">Auditor page</a>.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="admin-card studio-summary">
+              <div class="studio-summary-top">
+                <div>
+                  <h3>Context Session Summary</h3>
+                  <p>Review your inputs before starting</p>
+                </div>
+                <a href="index.html" class="btn-admin-primary">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1V3M7 11V13M3 7H1M13 7H11M4 4L2.5 2.5M11.5 11.5L10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="7" r="2.5" stroke="currentColor" stroke-width="1.5"/></svg>
+                  Go to Audit Studio
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =================== CONTROLS STUDIO =================== -->
+        <section class="admin-page" id="page-controls-studio">
+          <div class="page-container">
+            <div class="page-header">
+              <div>
+                <div class="page-title-row">
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="var(--color-primary)" stroke-width="1.5"/><path d="M7 10L9 12L13 8" stroke="var(--color-primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <h1 class="page-title">Applied Controls Studio</h1>
+                </div>
+                <p class="page-subtitle">AI-powered control suggestions for framework requirements — proactive setup before audits</p>
+              </div>
+              <button class="btn-admin-ghost" id="cs-back-to-sessions" style="display:none" onclick="csShowSessions()">All Sessions</button>
+            </div>
+
+            <!-- Step Indicator -->
+            <div class="admin-card cs-step-indicator" id="cs-step-indicator" style="display:none">
+              <!-- Populated by JS -->
+            </div>
+
+            <!-- Content area swapped by JS -->
+            <div id="cs-content">
+              <!-- Session List (default) or wizard steps -->
+            </div>
+          </div>
+        </section>
+
+        <!-- =================== MERGE OPTIMIZER =================== -->
+        <section class="admin-page" id="page-merge-optimizer">
+          <div class="page-container">
+            <div class="page-header">
+              <div class="page-title-row">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M15 2.5L15 17.5M5 5V10C5 12.8 7.2 15 10 15H15M5 5L2.5 7.5M5 5L7.5 7.5" stroke="#d97706" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <h1 class="page-title">Control Merge Optimizer</h1>
+              </div>
+              <p class="page-subtitle">AI-powered analysis to merge newly generated controls into existing ones, reducing redundancy</p>
+            </div>
+            <div class="admin-card merge-placeholder">
+              <div class="empty-icon">
+                <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M24 4L24 28M8 8V16C8 20.4 11.6 24 16 24H24M8 8L4 12M8 8L12 12" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <h3>Merge Optimizer</h3>
+              <p>Select a studio session and analyze for merge opportunities to consolidate overlapping controls.</p>
+              <p class="coming-soon-badge">Coming Soon</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- =================== ORG CONTEXTS =================== -->
+        <section class="admin-page" id="page-org-contexts">
+          <div class="page-container">
+            <div class="page-header">
+              <div>
+                <h1 class="page-title">Organization Contexts</h1>
+                <p class="page-subtitle">Manage client and entity profiles for AI-contextualized control suggestions</p>
+              </div>
+              <button class="btn-admin-primary" id="btn-new-context">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                New Context
+              </button>
+            </div>
+            <div class="org-stats-grid" id="org-stats"><!-- Populated by JS --></div>
+            <div class="admin-search-bar">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <input type="text" placeholder="Search by name, sector..." id="org-search">
+            </div>
+            <div id="org-contexts-list"><!-- Populated by JS --></div>
+          </div>
+        </section>
+
+        <!-- =================== PROMPTS =================== -->
+        <section class="admin-page" id="page-prompts">
+          <div class="page-container">
+            <div class="page-header">
+              <div>
+                <h1 class="page-title">Prompts</h1>
+                <p class="page-subtitle">Manage and edit your prompt templates</p>
+              </div>
+            </div>
+            <p class="redirect-note">Prompts management is available on the dedicated <a href="prompts.html">Prompts page</a>.</p>
+          </div>
+        </section>
+
+        <!-- =================== FILE COLLECTIONS =================== -->
+        <section class="admin-page" id="page-file-collections">
+          <div class="page-container">
+            <div class="page-header">
+              <div>
+                <h1 class="page-title">File Collections</h1>
+                <p class="page-subtitle">Manage reference documents and file collections for AI analysis</p>
+              </div>
+            </div>
+            <div class="fc-stats-grid" id="fc-stats"><!-- Populated by JS --></div>
+            <div id="fc-collections-list"><!-- Populated by JS --></div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="admin.js"></script>
+</body>
+</html>
