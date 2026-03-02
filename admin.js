@@ -19,6 +19,9 @@ let orgContexts = [];      // placeholder for org contexts data
 let csMode = 'sessions';   // 'sessions' | 'wizard'
 let csCurrentStep = 0;
 let csSessionData = null;
+let csLibraries = [];          // fetched frameworks for controls studio
+let csCollectionsData = [];    // fetched collections with files for controls studio
+let csPendingPoll = null;
 
 // ─── DOM refs ─────────────────────────────────────────────────
 const headerTitle = document.getElementById('admin-header-title');
@@ -822,133 +825,721 @@ function csGoStep(i) {
 }
 window.csGoStep = csGoStep;
 
-// Step 1: Requirements
+// Step 1: Requirements — with real data
 function csRenderStepRequirements(el) {
   const reqs = csSessionData.requirements || [];
+  const fwCount = new Set(reqs.map(r => r.frameworkName)).size;
   el.innerHTML = `
     <div class="cs-wizard-card">
       <div class="cs-wizard-header navy">
         <div class="cs-wizard-header-title">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="white" stroke-width="1.5"/><path d="M6 9L8 11L12 7" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Select Framework Requirements
+          Step 1: Select Requirements
         </div>
-        <div class="cs-wizard-header-desc">Choose which framework requirements to generate controls for</div>
+        <div class="cs-wizard-header-desc">Choose which framework requirements to generate controls for. Select entire frameworks or expand to pick sections.</div>
         <div class="cs-wizard-header-stat">
-          <span class="big">${reqs.length}</span>
-          <span class="label">requirements selected</span>
+          <span class="big" id="cs-req-count">${reqs.length}</span>
+          <span class="label">requirements from ${fwCount} frameworks</span>
         </div>
       </div>
       <div class="cs-wizard-body">
-        <p style="font-size:12px;color:#6b7280;text-align:center;padding:20px">
-          Requirements are loaded from the Auditor page framework library. Select requirements on the <a href="index.html" style="color:var(--admin-primary)">main Auditor page</a> and they will be available here.
-        </p>
+        <div class="studio-search-bar" style="margin-bottom:10px">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <input type="text" placeholder="Search frameworks..." id="cs-fw-search" autocomplete="off">
+          <div class="studio-search-actions">
+            <button type="button" class="btn-studio-filter" id="cs-select-all-btn">Select All</button>
+            <button type="button" class="btn-studio-filter" id="cs-clear-all-btn">Clear</button>
+          </div>
+        </div>
+        <div id="cs-fw-list" class="studio-fw-list" style="max-height:360px;overflow-y:auto">
+          <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading frameworks...</span></div>
+        </div>
       </div>
       <div class="cs-wizard-footer">
         <div></div>
-        <button class="btn-admin-primary" onclick="csCurrentStep=1;csSessionData.step=1;csRenderWizard()">
-          Next: References →
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=1;csSessionData.step=1;csRenderWizard()">
+          Next &nbsp;→
         </button>
       </div>
     </div>`;
+
+  // Fetch and render frameworks
+  (async () => {
+    if (!csLibraries.length) {
+      try {
+        const d = await fetch(API.libraries).then(r => r.json());
+        if (d.success && d.data) csLibraries = d.data;
+      } catch (e) { console.error('CS libraries fetch:', e); }
+    }
+    csRenderFwList();
+    csAttachFwSearch();
+  })();
 }
 
-// Step 2: References
+function csRenderFwList() {
+  const listEl = document.getElementById('cs-fw-list');
+  if (!listEl) return;
+  const reqs = csSessionData.requirements || [];
+
+  if (!csLibraries.length) {
+    listEl.innerHTML = '<div class="studio-empty-msg">No frameworks loaded.</div>';
+    return;
+  }
+
+  let html = '';
+  csLibraries.forEach((lib, li) => {
+    const fw = lib.content?.framework;
+    if (!fw || !fw.requirement_nodes) return;
+    const fwName = fw.name || lib.name;
+    const nodes = fw.requirement_nodes.filter(n => n.description);
+    const groupId = 'csg-' + li;
+    const selectedInGroup = nodes.filter(n => reqs.some(r => r.nodeUrn === n.urn)).length;
+
+    html += `<div class="studio-fw-group collapsed" data-group-id="${groupId}">
+      <div class="studio-fw-group-header">
+        <div class="cs-fw-cb" onclick="event.stopPropagation();csToggleFwGroup('${groupId}','${esc(fwName)}')" style="cursor:pointer">
+          <span class="studio-cb-mark ${selectedInGroup === nodes.length && nodes.length > 0 ? 'checked' : (selectedInGroup > 0 ? 'indeterminate' : '')}"></span>
+        </div>
+        <div class="studio-fw-group-toggle" onclick="csFwToggleGroup(this)">
+          <svg class="chevron-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>${esc(fwName)}</span>
+        </div>
+        <div class="studio-fw-group-actions">
+          <span class="studio-fw-group-count">${selectedInGroup > 0 ? selectedInGroup + '/' : ''}${nodes.length} req</span>
+        </div>
+      </div>
+      <div class="studio-fw-group-items">`;
+
+    nodes.forEach(node => {
+      const opt = {
+        libraryId: lib.id,
+        frameworkUrn: fw.urn,
+        frameworkName: fwName,
+        nodeUrn: node.urn,
+        refId: node.ref_id,
+        name: node.name,
+        description: node.description,
+        depth: node.depth,
+        assessable: node.assessable,
+      };
+      const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(opt))));
+      const isSelected = reqs.some(r => r.nodeUrn === node.urn);
+      const depthDot = node.depth === 1 ? '●' : node.depth === 2 ? '○' : node.depth === 3 ? '◦' : '·';
+
+      html += `<div class="studio-fw-item${isSelected ? ' selected' : ''}" data-opt="${encoded}" data-group-id="${groupId}" data-search="${esc((node.ref_id + ' ' + node.description + ' ' + fwName).toLowerCase())}" onclick="csToggleReq(this)">
+        <div class="studio-fw-item-checkbox"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="studio-fw-item-content">
+          ${node.ref_id ? `<span class="studio-fw-ref">${esc(node.ref_id)}</span>` : ''}
+          <span class="studio-fw-desc"><span class="studio-fw-depth">${depthDot}</span> ${esc(node.description)}</span>
+        </div>
+      </div>`;
+    });
+
+    html += '</div></div>';
+  });
+
+  listEl.innerHTML = html;
+}
+
+function csDecodeOpt(enc) {
+  return JSON.parse(decodeURIComponent(escape(atob(enc))));
+}
+
+function csFwToggleGroup(el) {
+  el.closest('.studio-fw-group').classList.toggle('collapsed');
+}
+window.csFwToggleGroup = csFwToggleGroup;
+
+function csToggleReq(itemEl) {
+  const opt = csDecodeOpt(itemEl.dataset.opt);
+  if (!csSessionData.requirements) csSessionData.requirements = [];
+  const idx = csSessionData.requirements.findIndex(r => r.nodeUrn === opt.nodeUrn);
+  if (idx === -1) {
+    csSessionData.requirements.push(opt);
+    itemEl.classList.add('selected');
+  } else {
+    csSessionData.requirements.splice(idx, 1);
+    itemEl.classList.remove('selected');
+  }
+  csUpdateReqCount();
+  csUpdateFwGroupCheckboxes();
+}
+window.csToggleReq = csToggleReq;
+
+function csToggleFwGroup(groupId, fwName) {
+  if (!csSessionData.requirements) csSessionData.requirements = [];
+  const group = document.querySelector(`.studio-fw-group[data-group-id="${groupId}"]`);
+  if (!group) return;
+  const items = group.querySelectorAll('.studio-fw-item');
+  // Check if all visible items in group are selected
+  const allSelected = Array.from(items).every(i => i.classList.contains('selected'));
+
+  items.forEach(item => {
+    const opt = csDecodeOpt(item.dataset.opt);
+    const idx = csSessionData.requirements.findIndex(r => r.nodeUrn === opt.nodeUrn);
+    if (allSelected) {
+      // Deselect all in group
+      if (idx >= 0) csSessionData.requirements.splice(idx, 1);
+      item.classList.remove('selected');
+    } else {
+      // Select all in group
+      if (idx === -1) csSessionData.requirements.push(opt);
+      item.classList.add('selected');
+    }
+  });
+  csUpdateReqCount();
+  csUpdateFwGroupCheckboxes();
+}
+window.csToggleFwGroup = csToggleFwGroup;
+
+function csUpdateReqCount() {
+  const reqs = csSessionData.requirements || [];
+  const countEl = document.getElementById('cs-req-count');
+  if (countEl) countEl.textContent = reqs.length;
+  const fwCount = new Set(reqs.map(r => r.frameworkName)).size;
+  const labelEl = countEl?.nextElementSibling;
+  if (labelEl) labelEl.textContent = `requirements from ${fwCount} framework${fwCount !== 1 ? 's' : ''}`;
+}
+
+function csUpdateFwGroupCheckboxes() {
+  const reqs = csSessionData.requirements || [];
+  document.querySelectorAll('#cs-fw-list .studio-fw-group').forEach(group => {
+    const items = group.querySelectorAll('.studio-fw-item');
+    const total = items.length;
+    const selected = Array.from(items).filter(i => i.classList.contains('selected')).length;
+    const cb = group.querySelector('.cs-fw-cb .studio-cb-mark');
+    if (cb) {
+      cb.classList.toggle('checked', selected === total && total > 0);
+      cb.classList.toggle('indeterminate', selected > 0 && selected < total);
+    }
+    const countEl = group.querySelector('.studio-fw-group-count');
+    if (countEl) countEl.textContent = (selected > 0 ? selected + '/' : '') + total + ' req';
+  });
+}
+
+function csAttachFwSearch() {
+  const input = document.getElementById('cs-fw-search');
+  if (input) {
+    input.addEventListener('input', e => {
+      const q = e.target.value.toLowerCase().trim();
+      document.querySelectorAll('#cs-fw-list .studio-fw-group').forEach(group => {
+        const items = group.querySelectorAll('.studio-fw-item');
+        let vis = 0;
+        items.forEach(item => {
+          const match = !q || (item.dataset.search || '').includes(q);
+          item.style.display = match ? '' : 'none';
+          if (match) vis++;
+        });
+        group.style.display = vis > 0 ? '' : 'none';
+        if (q && vis > 0) group.classList.remove('collapsed');
+        else if (!q) group.classList.add('collapsed');
+      });
+    });
+  }
+  const selAllBtn = document.getElementById('cs-select-all-btn');
+  if (selAllBtn) {
+    selAllBtn.addEventListener('click', () => {
+      if (!csSessionData.requirements) csSessionData.requirements = [];
+      document.querySelectorAll('#cs-fw-list .studio-fw-item:not([style*="display: none"])').forEach(item => {
+        const opt = csDecodeOpt(item.dataset.opt);
+        if (!csSessionData.requirements.some(r => r.nodeUrn === opt.nodeUrn)) {
+          csSessionData.requirements.push(opt);
+          item.classList.add('selected');
+        }
+      });
+      csUpdateReqCount();
+      csUpdateFwGroupCheckboxes();
+    });
+  }
+  const clearBtn = document.getElementById('cs-clear-all-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      csSessionData.requirements = [];
+      document.querySelectorAll('#cs-fw-list .studio-fw-item.selected').forEach(i => i.classList.remove('selected'));
+      csUpdateReqCount();
+      csUpdateFwGroupCheckboxes();
+    });
+  }
+}
+
+function csSaveStep() {
+  // Save current session to localStorage
+  const list = csGetSessions();
+  const idx = list.findIndex(s => s.id === csSessionData.id);
+  if (idx >= 0) list[idx] = csSessionData; else list.push(csSessionData);
+  csSaveSessions(list);
+}
+window.csSaveStep = csSaveStep;
+
+// Step 2: References — with real data (collections + files + upload)
 function csRenderStepReferences(el) {
-  const cols = csSessionData.collections || [];
+  if (!csSessionData.selectedFiles) csSessionData.selectedFiles = [];
+  if (!csSessionData.collections) csSessionData.collections = [];
+  if (!csSessionData.sessionFiles) csSessionData.sessionFiles = [];
+
+  const selectedFileCount = csSessionData.selectedFiles.length;
+  const selectedCollCount = csSessionData.collections.length;
+
   el.innerHTML = `
     <div class="cs-wizard-card">
       <div class="cs-wizard-header emerald">
         <div class="cs-wizard-header-title">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M16 11V15C16 15.6 15.6 16 15 16H3C2.4 16 2 15.6 2 15V11" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M12 6L9 3L6 6M9 3V11" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Select Reference Collections
+          Step 2: Attach Reference Files
         </div>
-        <div class="cs-wizard-header-desc">Choose file collections that contain framework documents</div>
+        <div class="cs-wizard-header-desc">Select file collections with regulatory guidance, best practices, or existing control catalogs to inform AI suggestions.</div>
         <div class="cs-wizard-header-stat">
-          <span class="big">${cols.length}</span>
-          <span class="label">collections selected</span>
+          <span class="big" id="cs-ref-file-count">${selectedFileCount}</span>
+          <span class="label" id="cs-ref-coll-label">files from ${selectedCollCount} collections</span>
         </div>
       </div>
       <div class="cs-wizard-body">
-        <div id="cs-ref-collections" style="display:flex;flex-direction:column;gap:8px"></div>
+        <button class="btn-studio-new-coll" type="button" id="cs-new-coll-btn">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 5V11C2 11.6 2.4 12 3 12H11C11.6 12 12 11.6 12 11V7C12 6.4 11.6 6 11 6H7L5.5 4H3C2.4 4 2 4.4 2 5Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 7V10M5.5 8.5H8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          New Collection
+        </button>
+        <div id="cs-ref-collections" class="studio-coll-list" style="max-height:280px;overflow-y:auto">
+          <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading collections...</span></div>
+        </div>
+        <div class="cs-session-upload-section">
+          <label class="studio-field-label" style="margin-top:12px">Per-Session Upload</label>
+          <div class="cs-drop-zone" id="cs-drop-zone">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M17 12V15C17 15.6 16.6 16 16 16H4C3.4 16 3 15.6 3 15V12" stroke="#9ca3af" stroke-width="1.5" stroke-linecap="round"/><path d="M13 7L10 4L7 7" stroke="#9ca3af" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 4V13" stroke="#9ca3af" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <div class="cs-drop-text">Drop additional files for this session</div>
+            <div class="cs-drop-hint">PDF, DOCX, XLSX</div>
+          </div>
+          <div id="cs-session-files-list" class="cs-session-files"></div>
+        </div>
       </div>
       <div class="cs-wizard-footer">
-        <button class="btn-admin-ghost" onclick="csCurrentStep=0;csSessionData.step=0;csRenderWizard()">← Back</button>
-        <button class="btn-admin-primary" onclick="csCurrentStep=2;csSessionData.step=2;csRenderWizard()">
-          Next: Org Context →
+        <button class="btn-admin-ghost" onclick="csSaveStep();csCurrentStep=0;csSessionData.step=0;csRenderWizard()">← Back</button>
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=2;csSessionData.step=2;csRenderWizard()">
+          Next &nbsp;→
         </button>
       </div>
     </div>`;
 
-  // Load collections
+  // Load and render collections
   (async () => {
-    await fetchCollections();
-    const refEl = document.getElementById('cs-ref-collections');
-    if (!collections.length) {
-      refEl.innerHTML = '<p style="text-align:center;font-size:12px;color:#9ca3af;padding:16px">No collections available. Create collections from the <a href="index.html" style="color:var(--admin-primary)">Auditor page</a>.</p>';
-      return;
-    }
-    refEl.innerHTML = collections.map(c => {
-      const name = c.displayName || c.name || 'Untitled';
-      const id = (c.name || '').replace('fileSearchStores/', '');
-      const selected = (csSessionData.collections || []).includes(id);
-      return `
-        <div class="cs-col-row ${selected ? 'selected' : ''}" onclick="csToggleCollection('${esc(id)}',this)">
-          <div class="cs-col-left">
-            <input type="checkbox" ${selected ? 'checked' : ''} onclick="event.stopPropagation()">
-            <span style="font-size:12px;color:#374151">${esc(name)}</span>
-          </div>
-        </div>`;
-    }).join('');
+    await csFetchCollections();
+    csRenderRefCollections();
+    csRenderSessionFiles();
   })();
+
+  // New Collection button
+  const newCollBtn = document.getElementById('cs-new-coll-btn');
+  if (newCollBtn) {
+    newCollBtn.onclick = () => {
+      const name = prompt('Collection name:');
+      if (!name || !name.trim()) return;
+      (async () => {
+        try {
+          toast('info', 'Creating...', `Setting up "${name}"...`);
+          const res = await fetch('/api/collections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName: name.trim() }) });
+          const data = await res.json();
+          if (data.success) {
+            toast('success', 'Created', `"${name}" is ready.`);
+            await csFetchCollections();
+            csRenderRefCollections();
+          } else throw new Error(data.error || 'Failed');
+        } catch (err) { toast('error', 'Error', err.message); }
+      })();
+    };
+  }
+
+  // Per-session file upload (click + drag-and-drop)
+  const dropZone = document.getElementById('cs-drop-zone');
+  if (dropZone) {
+    dropZone.onclick = () => csUploadSessionFiles();
+    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); };
+    dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
+    dropZone.ondrop = (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      const files = Array.from(e.dataTransfer.files);
+      csProcessSessionFiles(files);
+    };
+  }
 }
 
-function csToggleCollection(id, row) {
-  const idx = (csSessionData.collections || []).indexOf(id);
+async function csFetchCollections() {
+  try {
+    const d = await fetchJSON(API.collections);
+    const stores = d.data?.fileSearchStores || d.data || [];
+    csCollectionsData = Array.isArray(stores) ? stores : [];
+    await Promise.all(csCollectionsData.map(async store => {
+      try {
+        const sid = store.name.split('/').pop();
+        const fd = await fetchJSON(API.collections + '/' + sid + '/files');
+        store.files = fd.data?.documents || fd.data?.fileSearchDocuments || [];
+      } catch { store.files = []; }
+    }));
+  } catch (e) { console.error('CS collections fetch:', e); csCollectionsData = []; }
+}
+
+function csRenderRefCollections() {
+  const listEl = document.getElementById('cs-ref-collections');
+  if (!listEl) return;
+
+  if (!csCollectionsData.length) {
+    listEl.innerHTML = '<div class="studio-empty-msg">No collections yet. Create one above.</div>';
+    return;
+  }
+
+  let html = '';
+  csCollectionsData.forEach(store => {
+    const storeId = store.name.split('/').pop();
+    const displayName = store.displayName || store.name || 'Untitled';
+    const files = store.files || [];
+    const activeFiles = files.filter(f => f.state === 'STATE_ACTIVE');
+    const isCollSelected = csSessionData.collections.includes(storeId);
+    const someFilesSelected = files.some(f => (csSessionData.selectedFiles || []).includes(storeId + '::' + (f.name || f.displayName)));
+
+    html += `<div class="studio-coll-group collapsed" data-store-id="${storeId}">
+      <div class="studio-coll-header">
+        <div class="studio-coll-cb" onclick="event.stopPropagation();csToggleColl('${esc(storeId)}')">
+          <span class="studio-cb-mark ${isCollSelected ? 'checked' : (someFilesSelected ? 'indeterminate' : '')}"></span>
+        </div>
+        <div class="studio-coll-toggle" onclick="this.closest('.studio-coll-group').classList.toggle('collapsed')">
+          <svg class="chevron-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="studio-coll-name">${esc(displayName)}</span>
+        </div>
+        <div class="studio-coll-actions">
+          <span class="studio-coll-badge">${files.length} files</span>
+          <button type="button" class="btn-studio-coll-upload" onclick="event.stopPropagation();csUploadToColl('${esc(storeId)}')" title="Upload">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M12 9V11.5C12 12.1 11.6 12.5 11 12.5H3C2.4 12.5 2 12.1 2 11.5V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.5 4.5L7 2L4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 2V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Upload
+          </button>
+          <button type="button" class="btn-studio-coll-delete" onclick="event.stopPropagation();csDeleteColl('${esc(storeId)}','${esc(displayName).replace(/'/g, "\\'")}')" title="Delete">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="studio-coll-files">`;
+
+    if (!files.length) {
+      html += '<div class="studio-empty-msg" style="font-size:11px">No files — click Upload.</div>';
+    } else {
+      files.forEach(f => {
+        const fName = f.displayName || f.name || 'File';
+        const state = f.state || 'UNKNOWN';
+        const isActive = state === 'STATE_ACTIVE';
+        const fileKey = storeId + '::' + (f.name || f.displayName);
+        const isFileSelected = (csSessionData.selectedFiles || []).includes(fileKey);
+        const stateClass = isActive ? 'active' : (state === 'STATE_PENDING' ? 'pending' : 'failed');
+        const stateLabel = isActive ? 'Active' : (state === 'STATE_PENDING' ? 'Processing...' : 'Failed');
+        const stateIcon = isActive ? '✓' : (state === 'STATE_PENDING' ? '◌' : '✗');
+
+        html += `<div class="studio-file-item ${isFileSelected ? 'file-selected' : ''}" data-file-key="${esc(fileKey)}">
+          ${isActive ? `<div class="studio-file-cb" onclick="event.stopPropagation();csToggleFile('${esc(storeId)}','${esc(fileKey).replace(/'/g, "\\'")}')"><span class="studio-cb-mark ${isFileSelected ? 'checked' : ''}"></span></div>` : '<span style="width:22px;display:inline-block"></span>'}
+          <svg class="studio-file-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span class="studio-file-name">${esc(fName)}</span>
+          <span class="studio-file-state ${stateClass}">${stateIcon} ${stateLabel}</span>
+        </div>`;
+      });
+    }
+
+    html += '</div></div>';
+  });
+
+  listEl.innerHTML = html;
+
+  // Auto-poll pending
+  const pendingTotal = csCollectionsData.reduce((s, c) => s + (c.files || []).filter(f => f.state === 'STATE_PENDING').length, 0);
+  if (csPendingPoll) clearTimeout(csPendingPoll);
+  if (pendingTotal > 0) {
+    csPendingPoll = setTimeout(async () => {
+      await csFetchCollections();
+      csRenderRefCollections();
+    }, 5000);
+  }
+}
+
+function csToggleColl(storeId) {
+  if (!csSessionData.collections) csSessionData.collections = [];
+  if (!csSessionData.selectedFiles) csSessionData.selectedFiles = [];
+  const store = csCollectionsData.find(s => s.name.split('/').pop() === storeId);
+  const activeFiles = (store?.files || []).filter(f => f.state === 'STATE_ACTIVE');
+  const idx = csSessionData.collections.indexOf(storeId);
+
   if (idx >= 0) {
     csSessionData.collections.splice(idx, 1);
-    row.classList.remove('selected');
-    row.querySelector('input').checked = false;
+    activeFiles.forEach(f => {
+      const key = storeId + '::' + (f.name || f.displayName);
+      const fi = csSessionData.selectedFiles.indexOf(key);
+      if (fi >= 0) csSessionData.selectedFiles.splice(fi, 1);
+    });
   } else {
-    if (!csSessionData.collections) csSessionData.collections = [];
-    csSessionData.collections.push(id);
-    row.classList.add('selected');
-    row.querySelector('input').checked = true;
+    csSessionData.collections.push(storeId);
+    activeFiles.forEach(f => {
+      const key = storeId + '::' + (f.name || f.displayName);
+      if (!csSessionData.selectedFiles.includes(key)) csSessionData.selectedFiles.push(key);
+    });
   }
-  // Update header stat
-  const stat = document.querySelector('.cs-wizard-header-stat .big');
-  if (stat) stat.textContent = csSessionData.collections.length;
+  csUpdateRefCheckboxes();
+  csUpdateRefCounts();
 }
-window.csToggleCollection = csToggleCollection;
+window.csToggleColl = csToggleColl;
 
-// Step 3: Org Context
+function csToggleFile(storeId, fileKey) {
+  if (!csSessionData.selectedFiles) csSessionData.selectedFiles = [];
+  if (!csSessionData.collections) csSessionData.collections = [];
+  const idx = csSessionData.selectedFiles.indexOf(fileKey);
+  if (idx >= 0) csSessionData.selectedFiles.splice(idx, 1);
+  else csSessionData.selectedFiles.push(fileKey);
+
+  // Update collection state
+  const store = csCollectionsData.find(s => s.name.split('/').pop() === storeId);
+  if (store) {
+    const activeFiles = (store.files || []).filter(f => f.state === 'STATE_ACTIVE');
+    const allSelected = activeFiles.length > 0 && activeFiles.every(f => csSessionData.selectedFiles.includes(storeId + '::' + (f.name || f.displayName)));
+    const ci = csSessionData.collections.indexOf(storeId);
+    if (allSelected && ci === -1) csSessionData.collections.push(storeId);
+    else if (!allSelected && ci >= 0) csSessionData.collections.splice(ci, 1);
+  }
+  csUpdateRefCheckboxes();
+  csUpdateRefCounts();
+}
+window.csToggleFile = csToggleFile;
+
+function csUpdateRefCheckboxes() {
+  document.querySelectorAll('#cs-ref-collections .studio-coll-group[data-store-id]').forEach(g => {
+    const sid = g.dataset.storeId;
+    const isC = csSessionData.collections.includes(sid);
+    const store = csCollectionsData.find(s => s.name.split('/').pop() === sid);
+    const someSelected = (store?.files || []).some(f => (csSessionData.selectedFiles || []).includes(sid + '::' + (f.name || f.displayName)));
+
+    const cb = g.querySelector('.studio-coll-header .studio-cb-mark');
+    if (cb) { cb.classList.toggle('checked', isC); cb.classList.toggle('indeterminate', !isC && someSelected); }
+
+    g.querySelectorAll('.studio-file-item[data-file-key]').forEach(fEl => {
+      const key = fEl.dataset.fileKey;
+      const isSel = (csSessionData.selectedFiles || []).includes(key);
+      fEl.classList.toggle('file-selected', isSel);
+      const fcb = fEl.querySelector('.studio-cb-mark');
+      if (fcb) fcb.classList.toggle('checked', isSel);
+    });
+  });
+}
+
+function csUpdateRefCounts() {
+  const fileCount = (csSessionData.selectedFiles || []).length;
+  const collCount = (csSessionData.collections || []).length;
+  const el1 = document.getElementById('cs-ref-file-count');
+  const el2 = document.getElementById('cs-ref-coll-label');
+  if (el1) el1.textContent = fileCount;
+  if (el2) el2.textContent = `files from ${collCount} collection${collCount !== 1 ? 's' : ''}`;
+}
+
+async function csUploadToColl(storeId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls,.json,.html,.xml,.md,.pptx,.rtf,.zip';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      toast('info', 'Uploading...', `Uploading "${file.name}"...`);
+      const res = await fetch(`/api/collections/${storeId}/files`, { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.success) {
+        toast('success', 'Uploaded', `"${file.name}" uploaded.`);
+        await csFetchCollections();
+        csRenderRefCollections();
+      } else throw new Error(data.error || 'Upload failed');
+    } catch (err) { toast('error', 'Upload Error', err.message); }
+  };
+  input.click();
+}
+window.csUploadToColl = csUploadToColl;
+
+async function csDeleteColl(storeId, displayName) {
+  if (!confirm(`Delete collection "${displayName}"? This removes all files.`)) return;
+  try {
+    const res = await fetch(`/api/collections/${storeId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      toast('success', 'Deleted', `"${displayName}" deleted.`);
+      // Remove from selections
+      csSessionData.collections = (csSessionData.collections || []).filter(c => c !== storeId);
+      csSessionData.selectedFiles = (csSessionData.selectedFiles || []).filter(f => !f.startsWith(storeId + '::'));
+      await csFetchCollections();
+      csRenderRefCollections();
+      csUpdateRefCounts();
+    } else throw new Error(data.error || 'Delete failed');
+  } catch (err) { toast('error', 'Delete Error', err.message); }
+}
+window.csDeleteColl = csDeleteColl;
+
+// Per-session file upload (context files embedded in prompt)
+function csUploadSessionFiles() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.accept = '.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls,.json,.html,.xml,.md,.pptx';
+  input.onchange = (e) => csProcessSessionFiles(Array.from(e.target.files));
+  input.click();
+}
+
+async function csProcessSessionFiles(files) {
+  if (!csSessionData.sessionFiles) csSessionData.sessionFiles = [];
+  for (const file of files) {
+    if (csSessionData.sessionFiles.some(f => f.name === file.name)) { toast('info', 'Duplicate', `"${file.name}" already attached.`); continue; }
+    if (file.size > 20 * 1024 * 1024) { toast('error', 'Too Large', `"${file.name}" exceeds 20MB.`); continue; }
+    try {
+      const content = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Read failed')); r.readAsText(file); });
+      csSessionData.sessionFiles.push({ name: file.name, size: file.size, content });
+    } catch (err) { toast('error', 'Read Error', err.message); }
+  }
+  csRenderSessionFiles();
+}
+
+function csRenderSessionFiles() {
+  const listEl = document.getElementById('cs-session-files-list');
+  if (!listEl) return;
+  const files = csSessionData.sessionFiles || [];
+  if (!files.length) { listEl.innerHTML = ''; return; }
+  listEl.innerHTML = files.map((f, i) => {
+    const sizeKB = (f.size / 1024).toFixed(1);
+    return `<div class="studio-ctx-item">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <div class="studio-ctx-item-info">
+        <span class="studio-ctx-item-name">${esc(f.name)}</span>
+        <span class="studio-ctx-item-size">${sizeKB} KB</span>
+      </div>
+      <button class="studio-ctx-item-remove" onclick="csRemoveSessionFile(${i})" title="Remove">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M9 3L3 9M3 3L9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function csRemoveSessionFile(idx) {
+  if (!csSessionData.sessionFiles) return;
+  csSessionData.sessionFiles.splice(idx, 1);
+  csRenderSessionFiles();
+}
+window.csRemoveSessionFile = csRemoveSessionFile;
+
+// Step 3: Org Context — with real data from DB
 function csRenderStepOrgContext(el) {
+  const selected = csSessionData.orgContext;
   el.innerHTML = `
     <div class="cs-wizard-card">
       <div class="cs-wizard-header sky">
         <div class="cs-wizard-header-title">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 15V5C2 4.4 2.4 4 3 4H15C15.6 4 16 4.4 16 5V15M5 8H13M5 11H10M9 4V2" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Organization Context
+          Step 3: Organization Context
         </div>
-        <div class="cs-wizard-header-desc">Select an organizational context to tailor AI suggestions</div>
+        <div class="cs-wizard-header-desc">Select an organizational context to tailor AI suggestions to a specific industry and entity.</div>
+        <div class="cs-wizard-header-stat">
+          <span class="big" id="cs-org-selected">${selected ? '1' : '0'}</span>
+          <span class="label">${selected ? esc(selected.nameEn || selected.name || '') : 'no context selected (generic mode)'}</span>
+        </div>
       </div>
       <div class="cs-wizard-body">
-        <div style="text-align:center;padding:24px">
-          <p style="font-size:12px;color:#6b7280">No organization contexts available yet. The AI will generate industry-agnostic controls.</p>
-          <p style="font-size:11px;color:#9ca3af;margin-top:8px">You can add contexts from the <button class="inline-link" onclick="navigateTo('org-contexts')">Org Contexts</button> page.</p>
+        <div id="cs-org-list" style="display:flex;flex-direction:column;gap:8px">
+          <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading contexts...</span></div>
         </div>
+        <p style="font-size:11px;color:#9ca3af;margin-top:10px;text-align:center">
+          Don't see your org? <button class="inline-link" onclick="navigateTo('org-contexts')">Add a new context</button>.
+          Or skip to use generic mode.
+        </p>
       </div>
       <div class="cs-wizard-footer">
-        <button class="btn-admin-ghost" onclick="csCurrentStep=1;csSessionData.step=1;csRenderWizard()">← Back</button>
-        <button class="btn-admin-primary" onclick="csCurrentStep=3;csSessionData.step=3;csRenderWizard()">
-          Next: Generate →
+        <button class="btn-admin-ghost" onclick="csSaveStep();csCurrentStep=1;csSessionData.step=1;csRenderWizard()">← Back</button>
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=3;csSessionData.step=3;csRenderWizard()">
+          Next &nbsp;→
         </button>
       </div>
     </div>`;
+
+  // Fetch org contexts
+  (async () => {
+    let contexts = [];
+    try {
+      const d = await fetchJSON(API.orgContexts);
+      contexts = d.contexts || [];
+    } catch (e) { console.error('CS org contexts fetch:', e); }
+
+    const listEl = document.getElementById('cs-org-list');
+    if (!listEl) return;
+
+    if (!contexts.length) {
+      listEl.innerHTML = '<div class="studio-empty-msg">No organization contexts created yet. The AI will generate industry-agnostic controls.</div>';
+      return;
+    }
+
+    const sectorLabels = { banking: 'Banking & Financial Services', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', other: 'Other' };
+    const sizeLabels = { small: 'Small', medium: 'Medium', large: 'Large', enterprise: 'Enterprise' };
+
+    // Add a "None (generic)" option
+    let html = `<div class="cs-org-option ${!selected ? 'selected' : ''}" onclick="csSelectOrg(null, this)">
+      <div class="cs-org-radio"><span class="cs-org-radio-dot ${!selected ? 'active' : ''}"></span></div>
+      <div class="cs-org-option-content">
+        <div class="cs-org-option-name">No context (generic mode)</div>
+        <div class="cs-org-option-desc">AI will generate industry-agnostic controls</div>
+      </div>
+    </div>`;
+
+    contexts.forEach(ctx => {
+      const isSelected = selected && selected.id === ctx.id;
+      const tags = (ctx.obligatoryFrameworks || []).map(f => `<span class="badge badge-primary badge-round" style="font-size:9px">${esc(f)}</span>`).join(' ');
+      html += `<div class="cs-org-option ${isSelected ? 'selected' : ''}" onclick="csSelectOrg(${ctx.id}, this)">
+        <div class="cs-org-radio"><span class="cs-org-radio-dot ${isSelected ? 'active' : ''}"></span></div>
+        <div class="cs-org-option-content">
+          <div class="cs-org-option-name">${esc(ctx.nameEn || ctx.name)}${ctx.nameAr ? ` <span style="color:#9ca3af;font-weight:400">${esc(ctx.nameAr)}</span>` : ''}</div>
+          <div class="cs-org-option-desc">
+            ${ctx.sector ? esc(sectorLabels[ctx.sector] || ctx.sector) : ''}
+            ${ctx.size ? ' • ' + esc(sizeLabels[ctx.size] || ctx.size) : ''}
+            ${tags ? ' ' + tags : ''}
+          </div>
+        </div>
+      </div>`;
+    });
+
+    listEl.innerHTML = html;
+
+    // Store contexts for selection lookup
+    listEl._contexts = contexts;
+  })();
 }
+
+function csSelectOrg(ctxId, rowEl) {
+  // Deselect all
+  document.querySelectorAll('#cs-org-list .cs-org-option').forEach(o => {
+    o.classList.remove('selected');
+    const dot = o.querySelector('.cs-org-radio-dot');
+    if (dot) dot.classList.remove('active');
+  });
+  // Select clicked
+  rowEl.classList.add('selected');
+  const dot = rowEl.querySelector('.cs-org-radio-dot');
+  if (dot) dot.classList.add('active');
+
+  if (ctxId === null) {
+    csSessionData.orgContext = null;
+  } else {
+    const listEl = document.getElementById('cs-org-list');
+    const contexts = listEl?._contexts || [];
+    csSessionData.orgContext = contexts.find(c => c.id === ctxId) || null;
+  }
+  // Update header
+  const countEl = document.getElementById('cs-org-selected');
+  if (countEl) {
+    countEl.textContent = csSessionData.orgContext ? '1' : '0';
+    const labelEl = countEl.nextElementSibling;
+    if (labelEl) labelEl.textContent = csSessionData.orgContext ? (csSessionData.orgContext.nameEn || csSessionData.orgContext.name || '') : 'no context selected (generic mode)';
+  }
+}
+window.csSelectOrg = csSelectOrg;
 
 // Step 4: Generate
 function csRenderStepGenerate(el) {
   const reqs = (csSessionData.requirements || []).length;
+  const files = (csSessionData.selectedFiles || []).length + (csSessionData.sessionFiles || []).length;
   const cols = (csSessionData.collections || []).length;
   const ctx = csSessionData.orgContext ? 1 : 0;
 
@@ -974,17 +1565,17 @@ function csRenderStepGenerate(el) {
           <div class="cs-gen-box">
             <div class="cs-gen-box-header">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 5V11C2 11.6 2.4 12 3 12H11C11.6 12 12 11.6 12 11V7C12 6.4 11.6 6 11 6H7L5.5 4H3C2.4 4 2 4.4 2 5Z" stroke="#6b7280" stroke-width="1.2" stroke-linecap="round"/></svg>
-              Collections
+              Reference Files
             </div>
-            <div class="cs-gen-box-val">${cols}</div>
-            <div class="cs-gen-box-sub">reference document sets</div>
+            <div class="cs-gen-box-val">${files}</div>
+            <div class="cs-gen-box-sub">${cols} collection${cols !== 1 ? 's' : ''} + session files</div>
           </div>
           <div class="cs-gen-box">
             <div class="cs-gen-box-header">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H10L12 6V12C12 12.6 11.6 13 11 13H2V4Z" stroke="#6b7280" stroke-width="1.2" stroke-linecap="round"/></svg>
               Org Context
             </div>
-            <div class="cs-gen-box-val">${ctx}</div>
+            <div class="cs-gen-box-val">${ctx ? esc(csSessionData.orgContext.nameEn || csSessionData.orgContext.name || '1') : 'None'}</div>
             <div class="cs-gen-box-sub">${ctx ? 'industry-specific' : 'generic mode'}</div>
           </div>
         </div>
