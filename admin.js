@@ -1485,9 +1485,9 @@ function csRenderStepOrgContext(el) {
     </div>`;
 
     contexts.forEach(ctx => {
-      const isSelected = selected && selected.id === ctx.id;
+      const isSelected = selected && String(selected.id) === String(ctx.id);
       const tags = (ctx.obligatoryFrameworks || []).map(f => `<span class="badge badge-primary badge-round" style="font-size:9px">${esc(f)}</span>`).join(' ');
-      html += `<div class="cs-org-option ${isSelected ? 'selected' : ''}" onclick="csSelectOrg(${ctx.id}, this)">
+      html += `<div class="cs-org-option ${isSelected ? 'selected' : ''}" onclick="csSelectOrg('${esc(String(ctx.id))}', this)">
         <div class="cs-org-radio"><span class="cs-org-radio-dot ${isSelected ? 'active' : ''}"></span></div>
         <div class="cs-org-option-content">
           <div class="cs-org-option-name">${esc(ctx.nameEn || ctx.name)}${ctx.nameAr ? ` <span style="color:#9ca3af;font-weight:400">${esc(ctx.nameAr)}</span>` : ''}</div>
@@ -1519,12 +1519,12 @@ function csSelectOrg(ctxId, rowEl) {
   const dot = rowEl.querySelector('.cs-org-radio-dot');
   if (dot) dot.classList.add('active');
 
-  if (ctxId === null) {
+  if (ctxId === null || ctxId === 'null') {
     csSessionData.orgContext = null;
   } else {
     const listEl = document.getElementById('cs-org-list');
     const contexts = listEl?._contexts || [];
-    csSessionData.orgContext = contexts.find(c => c.id === ctxId) || null;
+    csSessionData.orgContext = contexts.find(c => String(c.id) === String(ctxId)) || null;
   }
   // Update header
   const countEl = document.getElementById('cs-org-selected');
