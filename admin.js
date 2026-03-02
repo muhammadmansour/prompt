@@ -53,6 +53,7 @@ function navigateTo(page) {
   // Load data for the page
   if (page === 'dashboard') loadDashboard();
   if (page === 'audit-sessions') loadSessions();
+  if (page === 'audit-studio') loadAuditStudio();
   if (page === 'file-collections') loadCollections();
   if (page === 'org-contexts') loadOrgContexts();
   if (page === 'controls-studio') loadControlsStudio();
@@ -1111,6 +1112,542 @@ function csDoExport() {
   csRenderWizard();
 }
 window.csDoExport = csDoExport;
+
+// ─── Audit Studio ─────────────────────────────────────────────
+
+let studioLibraries = [];
+let studioAllOptions = [];       // flat list of all requirement nodes
+let studioSelections = [];       // selected requirement objects
+let studioCollections = [];      // fetched collection stores (with .files)
+let studioSelectedColls = new Set();
+let studioSelectedFiles = new Set();
+let studioContextFiles = [];     // uploaded context files [{name, content, size}]
+let studioPendingPoll = null;
+
+async function loadAuditStudio() {
+  // Fetch frameworks and collections in parallel
+  const [libRes] = await Promise.allSettled([
+    fetch(API.libraries).then(r => r.json()),
+    studioFetchCollections(),
+  ]);
+  if (libRes.status === 'fulfilled' && libRes.value?.success) {
+    studioLibraries = libRes.value.data || [];
+  }
+  studioRenderFrameworks();
+  studioRenderCollections();
+  studioUpdateSummary();
+}
+
+// ── Frameworks ───────────────────────────────────────────────
+
+function studioRenderFrameworks() {
+  const listEl = document.getElementById('studio-fw-list');
+  if (!listEl) return;
+  studioAllOptions = [];
+
+  if (!studioLibraries.length) {
+    listEl.innerHTML = '<div class="studio-empty-msg">No frameworks loaded.</div>';
+    return;
+  }
+
+  let html = '';
+  studioLibraries.forEach((lib, li) => {
+    const fw = lib.content?.framework;
+    if (!fw || !fw.requirement_nodes) return;
+    const fwName = fw.name || lib.name;
+    const nodes = fw.requirement_nodes.filter(n => n.description);
+    const groupId = 'sg-' + li;
+
+    html += `<div class="studio-fw-group collapsed" data-group-id="${groupId}">
+      <div class="studio-fw-group-header">
+        <div class="studio-fw-group-toggle" onclick="studioToggleGroup(this)">
+          <svg class="chevron-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>${esc(fwName)}</span>
+        </div>
+        <div class="studio-fw-group-actions">
+          <span class="studio-fw-group-count">${nodes.length} requirements</span>
+          <button type="button" class="btn-studio-group-select" onclick="event.stopPropagation();studioSelectAllInGroup('${groupId}')" title="Select All">Select All</button>
+        </div>
+      </div>
+      <div class="studio-fw-group-items">`;
+
+    nodes.forEach(node => {
+      const opt = {
+        libraryId: lib.id,
+        frameworkUrn: fw.urn,
+        frameworkName: fwName,
+        nodeUrn: node.urn,
+        refId: node.ref_id,
+        name: node.name,
+        description: node.description,
+        depth: node.depth,
+        assessable: node.assessable,
+      };
+      studioAllOptions.push(opt);
+      const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(opt))));
+      const isSelected = studioSelections.some(s => s.nodeUrn === node.urn);
+      const depthDot = node.depth === 1 ? '●' : node.depth === 2 ? '○' : node.depth === 3 ? '◦' : '·';
+
+      html += `<div class="studio-fw-item${isSelected ? ' selected' : ''}" data-opt="${encoded}" data-group-id="${groupId}" data-search="${esc((node.ref_id + ' ' + node.description + ' ' + fwName).toLowerCase())}" onclick="studioToggleOption(this)">
+        <div class="studio-fw-item-checkbox"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="studio-fw-item-content">
+          ${node.ref_id ? `<span class="studio-fw-ref">${esc(node.ref_id)}</span>` : ''}
+          <span class="studio-fw-desc"><span class="studio-fw-depth">${depthDot}</span> ${esc(node.description)}</span>
+        </div>
+      </div>`;
+    });
+
+    html += '</div></div>';
+  });
+
+  listEl.innerHTML = html;
+}
+
+function studioDecodeOpt(enc) {
+  return JSON.parse(decodeURIComponent(escape(atob(enc))));
+}
+
+function studioToggleGroup(el) {
+  el.closest('.studio-fw-group').classList.toggle('collapsed');
+}
+window.studioToggleGroup = studioToggleGroup;
+
+function studioToggleOption(itemEl) {
+  const opt = studioDecodeOpt(itemEl.dataset.opt);
+  const idx = studioSelections.findIndex(s => s.nodeUrn === opt.nodeUrn);
+  if (idx === -1) {
+    studioSelections.push(opt);
+    itemEl.classList.add('selected');
+  } else {
+    studioSelections.splice(idx, 1);
+    itemEl.classList.remove('selected');
+  }
+  studioUpdateSummary();
+}
+window.studioToggleOption = studioToggleOption;
+
+function studioSelectAllInGroup(groupId) {
+  const group = document.querySelector(`.studio-fw-group[data-group-id="${groupId}"]`);
+  if (!group) return;
+  group.classList.remove('collapsed');
+  const items = group.querySelectorAll('.studio-fw-item:not([style*="display: none"])');
+  let added = 0;
+  items.forEach(item => {
+    const opt = studioDecodeOpt(item.dataset.opt);
+    if (!studioSelections.some(s => s.nodeUrn === opt.nodeUrn)) {
+      studioSelections.push(opt);
+      item.classList.add('selected');
+      added++;
+    }
+  });
+  studioUpdateSummary();
+  if (added > 0) toast('success', 'Selected', `Added ${added} requirements.`);
+  else toast('info', 'Already Selected', 'All visible requirements are already selected.');
+}
+window.studioSelectAllInGroup = studioSelectAllInGroup;
+
+// Search frameworks
+const studioFwSearch = document.getElementById('studio-fw-search');
+if (studioFwSearch) {
+  studioFwSearch.addEventListener('input', e => {
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll('.studio-fw-group').forEach(group => {
+      const items = group.querySelectorAll('.studio-fw-item');
+      let vis = 0;
+      items.forEach(item => {
+        const match = !q || (item.dataset.search || '').includes(q);
+        item.style.display = match ? '' : 'none';
+        if (match) vis++;
+      });
+      group.style.display = vis > 0 ? '' : 'none';
+      if (q && vis > 0) group.classList.remove('collapsed');
+      else if (!q) group.classList.add('collapsed');
+    });
+  });
+}
+
+// Select All / Clear All
+const studioSelectAllBtn = document.getElementById('studio-select-all');
+const studioClearAllBtn = document.getElementById('studio-clear-all');
+if (studioSelectAllBtn) {
+  studioSelectAllBtn.addEventListener('click', () => {
+    document.querySelectorAll('.studio-fw-item:not([style*="display: none"])').forEach(item => {
+      const opt = studioDecodeOpt(item.dataset.opt);
+      if (!studioSelections.some(s => s.nodeUrn === opt.nodeUrn)) {
+        studioSelections.push(opt);
+        item.classList.add('selected');
+      }
+    });
+    studioUpdateSummary();
+  });
+}
+if (studioClearAllBtn) {
+  studioClearAllBtn.addEventListener('click', () => {
+    studioSelections = [];
+    document.querySelectorAll('.studio-fw-item.selected').forEach(i => i.classList.remove('selected'));
+    studioUpdateSummary();
+  });
+}
+
+// ── Collections ──────────────────────────────────────────────
+
+async function studioFetchCollections() {
+  try {
+    const d = await fetchJSON(API.collections);
+    const stores = d.data?.fileSearchStores || d.data || [];
+    // Normalize to array
+    studioCollections = Array.isArray(stores) ? stores : [];
+    // Fetch files for each collection in parallel
+    await Promise.all(studioCollections.map(async store => {
+      try {
+        const sid = store.name.split('/').pop();
+        const fd = await fetchJSON(API.collections + '/' + sid + '/files');
+        store.files = fd.data?.documents || fd.data?.fileSearchDocuments || [];
+      } catch { store.files = []; }
+    }));
+  } catch (e) { console.error('Studio collections fetch error:', e); studioCollections = []; }
+}
+
+function studioRenderCollections() {
+  const listEl = document.getElementById('studio-coll-list');
+  if (!listEl) return;
+
+  if (!studioCollections.length) {
+    listEl.innerHTML = '<div class="studio-empty-msg">No collections yet. Create one or upload from <a href="index.html" style="color:var(--admin-primary)">Auditor</a>.</div>';
+    return;
+  }
+
+  // Remember expanded states
+  const expanded = new Set();
+  listEl.querySelectorAll('.studio-coll-group:not(.collapsed)').forEach(g => expanded.add(g.dataset.storeId));
+
+  let html = '';
+  studioCollections.forEach((store, idx) => {
+    const storeId = store.name.split('/').pop();
+    const displayName = store.displayName || store.name || 'Untitled';
+    const files = store.files || [];
+    const activeFiles = files.filter(f => f.state === 'STATE_ACTIVE');
+    const isCollSelected = studioSelectedColls.has(storeId);
+    const someFilesSelected = files.some(f => studioSelectedFiles.has(storeId + '::' + (f.name || f.displayName)));
+    const isExpanded = expanded.has(storeId);
+
+    html += `<div class="studio-coll-group${isExpanded ? '' : ' collapsed'}" data-store-id="${storeId}">
+      <div class="studio-coll-header">
+        <div class="studio-coll-cb" onclick="event.stopPropagation();studioToggleCollSel('${esc(storeId)}')">
+          <span class="studio-cb-mark ${isCollSelected ? 'checked' : (someFilesSelected ? 'indeterminate' : '')}"></span>
+        </div>
+        <div class="studio-coll-toggle" onclick="studioToggleCollGroup(this)">
+          <svg class="chevron-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="studio-coll-name">${esc(displayName)}</span>
+        </div>
+        <div class="studio-coll-actions">
+          <span class="studio-coll-badge">${files.length}</span>
+          <button type="button" class="btn-studio-coll-upload" onclick="event.stopPropagation();studioUploadFile('${esc(storeId)}')" title="Upload file">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M12 9V11.5C12 12.1 11.6 12.5 11 12.5H3C2.4 12.5 2 12.1 2 11.5V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.5 4.5L7 2L4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 2V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Upload
+          </button>
+          <button type="button" class="btn-studio-coll-delete" onclick="event.stopPropagation();studioDeleteColl('${esc(storeId)}','${esc(displayName).replace(/'/g, "\\'")}')" title="Delete">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="studio-coll-files">`;
+
+    if (!files.length) {
+      html += '<div class="studio-empty-msg" style="font-size:11px">No files — click Upload.</div>';
+    } else {
+      files.forEach(f => {
+        const fName = f.displayName || f.name || 'File';
+        const state = f.state || 'UNKNOWN';
+        const isActive = state === 'STATE_ACTIVE';
+        const isPending = state === 'STATE_PENDING';
+        const isFailed = state === 'STATE_FAILED';
+        const fileKey = storeId + '::' + (f.name || f.displayName);
+        const isFileSelected = studioSelectedFiles.has(fileKey);
+        const stateClass = isActive ? 'active' : (isPending ? 'pending' : 'failed');
+        const stateLabel = isActive ? 'Active' : (isPending ? 'Processing...' : 'Failed');
+        const stateIcon = isActive ? '✓' : (isPending ? '◌' : '✗');
+
+        html += `<div class="studio-file-item ${isFailed ? 'file-failed' : ''} ${isFileSelected ? 'file-selected' : ''}" data-file-key="${esc(fileKey)}">
+          ${isActive ? `<div class="studio-file-cb" onclick="event.stopPropagation();studioToggleFileSel('${esc(storeId)}','${esc(fileKey).replace(/'/g, "\\'")}')"><span class="studio-cb-mark ${isFileSelected ? 'checked' : ''}"></span></div>` : '<span style="width:22px;display:inline-block"></span>'}
+          <svg class="studio-file-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span class="studio-file-name">${esc(fName)}</span>
+          <span class="studio-file-state ${stateClass}">${stateIcon} ${stateLabel}</span>
+        </div>`;
+      });
+    }
+
+    html += '</div></div>';
+  });
+
+  listEl.innerHTML = html;
+
+  // Update file/coll counts in header
+  const totalFiles = studioCollections.reduce((s, c) => s + (c.files?.length || 0), 0);
+  const el1 = document.getElementById('studio-file-count');
+  const el2 = document.getElementById('studio-coll-count');
+  if (el1) el1.textContent = totalFiles;
+  if (el2) el2.textContent = studioCollections.length;
+
+  // Auto-poll for pending files
+  const pendingTotal = studioCollections.reduce((s, c) => s + (c.files || []).filter(f => f.state === 'STATE_PENDING').length, 0);
+  if (studioPendingPoll) clearTimeout(studioPendingPoll);
+  if (pendingTotal > 0) {
+    studioPendingPoll = setTimeout(async () => {
+      await studioFetchCollections();
+      studioRenderCollections();
+      studioUpdateSummary();
+    }, 5000);
+  }
+}
+
+function studioToggleCollGroup(el) {
+  el.closest('.studio-coll-group').classList.toggle('collapsed');
+}
+window.studioToggleCollGroup = studioToggleCollGroup;
+
+function studioToggleCollSel(storeId) {
+  const store = studioCollections.find(s => s.name.split('/').pop() === storeId);
+  if (!store) return;
+  const activeFiles = (store.files || []).filter(f => f.state === 'STATE_ACTIVE');
+
+  if (studioSelectedColls.has(storeId)) {
+    // Deselect collection + all its files
+    studioSelectedColls.delete(storeId);
+    activeFiles.forEach(f => studioSelectedFiles.delete(storeId + '::' + (f.name || f.displayName)));
+  } else {
+    // Select collection + all its active files
+    studioSelectedColls.add(storeId);
+    activeFiles.forEach(f => studioSelectedFiles.add(storeId + '::' + (f.name || f.displayName)));
+  }
+  studioUpdateCollCheckboxes();
+  studioUpdateSummary();
+}
+window.studioToggleCollSel = studioToggleCollSel;
+
+function studioToggleFileSel(storeId, fileKey) {
+  if (studioSelectedFiles.has(fileKey)) studioSelectedFiles.delete(fileKey);
+  else studioSelectedFiles.add(fileKey);
+
+  // Update collection selection state
+  const store = studioCollections.find(s => s.name.split('/').pop() === storeId);
+  if (store) {
+    const activeFiles = (store.files || []).filter(f => f.state === 'STATE_ACTIVE');
+    const allSelected = activeFiles.length > 0 && activeFiles.every(f => studioSelectedFiles.has(storeId + '::' + (f.name || f.displayName)));
+    if (allSelected) studioSelectedColls.add(storeId);
+    else studioSelectedColls.delete(storeId);
+  }
+  studioUpdateCollCheckboxes();
+  studioUpdateSummary();
+}
+window.studioToggleFileSel = studioToggleFileSel;
+
+function studioUpdateCollCheckboxes() {
+  document.querySelectorAll('.studio-coll-group[data-store-id]').forEach(g => {
+    const sid = g.dataset.storeId;
+    const isC = studioSelectedColls.has(sid);
+    const store = studioCollections.find(s => s.name.split('/').pop() === sid);
+    const someSelected = (store?.files || []).some(f => studioSelectedFiles.has(sid + '::' + (f.name || f.displayName)));
+
+    const cb = g.querySelector('.studio-coll-header .studio-cb-mark');
+    if (cb) { cb.classList.toggle('checked', isC); cb.classList.toggle('indeterminate', !isC && someSelected); }
+
+    g.querySelectorAll('.studio-file-item[data-file-key]').forEach(fEl => {
+      const key = fEl.dataset.fileKey;
+      const isSel = studioSelectedFiles.has(key);
+      fEl.classList.toggle('file-selected', isSel);
+      const fcb = fEl.querySelector('.studio-cb-mark');
+      if (fcb) fcb.classList.toggle('checked', isSel);
+    });
+  });
+}
+
+// Upload file to collection
+async function studioUploadFile(storeId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls,.json,.html,.xml,.md,.pptx,.rtf,.zip';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      toast('info', 'Uploading...', `Uploading "${file.name}"...`);
+      const res = await fetch(`/api/collections/${storeId}/files`, { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.success) {
+        toast('success', 'Uploaded', `"${file.name}" uploaded.`);
+        await studioFetchCollections();
+        studioRenderCollections();
+        studioUpdateSummary();
+      } else throw new Error(data.error || 'Upload failed');
+    } catch (err) { toast('error', 'Upload Error', err.message); }
+  };
+  input.click();
+}
+window.studioUploadFile = studioUploadFile;
+
+// Delete collection
+async function studioDeleteColl(storeId, displayName) {
+  if (!confirm(`Delete collection "${displayName}"? This removes all files.`)) return;
+  try {
+    const res = await fetch(`/api/collections/${storeId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      toast('success', 'Deleted', `"${displayName}" deleted.`);
+      studioSelectedColls.delete(storeId);
+      studioCollections = studioCollections.filter(s => s.name.split('/').pop() !== storeId);
+      studioRenderCollections();
+      studioUpdateSummary();
+    } else throw new Error(data.error || 'Delete failed');
+  } catch (err) { toast('error', 'Delete Error', err.message); }
+}
+window.studioDeleteColl = studioDeleteColl;
+
+// New Collection button
+const studioNewCollBtn = document.getElementById('studio-new-coll-btn');
+if (studioNewCollBtn) {
+  studioNewCollBtn.addEventListener('click', () => {
+    const name = prompt('Collection name:');
+    if (!name || !name.trim()) return;
+    (async () => {
+      try {
+        toast('info', 'Creating...', `Setting up "${name}"...`);
+        const res = await fetch('/api/collections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName: name.trim() }) });
+        const data = await res.json();
+        if (data.success) {
+          toast('success', 'Created', `"${name}" is ready.`);
+          await studioFetchCollections();
+          studioRenderCollections();
+          studioUpdateSummary();
+        } else throw new Error(data.error || 'Failed');
+      } catch (err) { toast('error', 'Error', err.message); }
+    })();
+  });
+}
+
+// ── Context Files ────────────────────────────────────────────
+
+const studioUploadCtxBtn = document.getElementById('studio-upload-ctx');
+if (studioUploadCtxBtn) {
+  studioUploadCtxBtn.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.accept = '.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls,.json,.html,.xml,.md,.pptx,.rtf,.log,.yaml,.yml';
+    input.onchange = async (e) => {
+      const files = Array.from(e.target.files);
+      for (const file of files) {
+        if (studioContextFiles.some(c => c.name === file.name)) { toast('info', 'Duplicate', `"${file.name}" already attached.`); continue; }
+        if (file.size > 20 * 1024 * 1024) { toast('error', 'Too Large', `"${file.name}" exceeds 20MB.`); continue; }
+        try {
+          const content = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Read failed')); r.readAsText(file); });
+          studioContextFiles.push({ name: file.name, size: file.size, content });
+        } catch (err) { toast('error', 'Read Error', err.message); }
+      }
+      studioRenderContextFiles();
+      studioUpdateSummary();
+    };
+    input.click();
+  });
+}
+
+function studioRenderContextFiles() {
+  const listEl = document.getElementById('studio-ctx-list');
+  const countEl = document.getElementById('studio-ctx-count');
+  if (countEl) countEl.textContent = studioContextFiles.length;
+  if (!listEl) return;
+  if (!studioContextFiles.length) { listEl.innerHTML = ''; return; }
+
+  listEl.innerHTML = studioContextFiles.map((cf, i) => {
+    const sizeKB = (cf.size / 1024).toFixed(1);
+    return `<div class="studio-ctx-item">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <div class="studio-ctx-item-info">
+        <span class="studio-ctx-item-name">${esc(cf.name)}</span>
+        <span class="studio-ctx-item-size">${sizeKB} KB</span>
+      </div>
+      <button class="studio-ctx-item-remove" onclick="studioRemoveCtxFile(${i})" title="Remove">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M9 3L3 9M3 3L9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function studioRemoveCtxFile(idx) {
+  studioContextFiles.splice(idx, 1);
+  studioRenderContextFiles();
+  studioUpdateSummary();
+}
+window.studioRemoveCtxFile = studioRemoveCtxFile;
+
+// Query character count
+const studioQueryEl = document.getElementById('studio-query');
+const studioCharCountEl = document.getElementById('studio-char-count');
+if (studioQueryEl && studioCharCountEl) {
+  studioQueryEl.addEventListener('input', () => {
+    studioCharCountEl.textContent = studioQueryEl.value.length;
+  });
+}
+
+// ── Summary & Start ──────────────────────────────────────────
+
+function studioUpdateSummary() {
+  const reqCount = studioSelections.length;
+  const collCount = studioSelectedColls.size;
+  const fileCount = studioSelectedFiles.size;
+  const ctxCount = studioContextFiles.length;
+
+  const e = id => document.getElementById(id);
+  const set = (id, v) => { const el = e(id); if (el) el.textContent = v; };
+
+  set('studio-req-count', reqCount);
+  set('studio-sum-reqs', reqCount);
+  set('studio-sum-colls', collCount);
+  set('studio-sum-files', fileCount);
+  set('studio-sum-ctx', ctxCount);
+
+  const startBtn = document.getElementById('studio-start-btn');
+  if (startBtn) startBtn.disabled = reqCount === 0;
+}
+
+// Start Audit Session button
+const studioStartBtn = document.getElementById('studio-start-btn');
+if (studioStartBtn) {
+  studioStartBtn.addEventListener('click', () => {
+    if (!studioSelections.length) return;
+
+    // Build file resources from selected files
+    const fileResources = [];
+    studioCollections.forEach(store => {
+      const storeId = store.name.split('/').pop();
+      (store.files || []).forEach(f => {
+        const key = storeId + '::' + (f.name || f.displayName);
+        if (studioSelectedFiles.has(key)) {
+          fileResources.push({ storeId, name: f.name, displayName: f.displayName || f.name });
+        }
+      });
+    });
+
+    // Build selected collections
+    const selectedColls = studioCollections
+      .filter(s => studioSelectedColls.has(s.name.split('/').pop()))
+      .map(s => ({ storeId: s.name.split('/').pop(), displayName: s.displayName || s.name }));
+
+    const query = (document.getElementById('studio-query')?.value || '').trim();
+
+    const auditSession = {
+      requirements: studioSelections,
+      fileResources,
+      collections: selectedColls,
+      query,
+      contextFiles: studioContextFiles.map(cf => ({ name: cf.name, content: cf.content })),
+    };
+    sessionStorage.setItem('auditSession', JSON.stringify(auditSession));
+    window.location.href = '/chat.html';
+  });
+}
 
 // ─── Init ─────────────────────────────────────────────────────
 

@@ -223,7 +223,7 @@
               <p class="page-subtitle">Build your context session with requirements, references, and queries</p>
             </div>
             <div class="studio-three-col">
-              <!-- Col 1: Requirements -->
+              <!-- Col 1: Framework Requirements -->
               <div class="admin-card studio-col-card">
                 <div class="studio-col-header navy">
                   <div class="studio-col-label">
@@ -237,7 +237,20 @@
                   </div>
                 </div>
                 <div class="studio-col-body">
-                  <p class="studio-placeholder-text">Requirements selection is available on the <a href="index.html">Auditor page</a>.</p>
+                  <div class="studio-search-bar">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    <input type="text" placeholder="Search frameworks..." id="studio-fw-search" autocomplete="off">
+                    <div class="studio-search-actions">
+                      <button type="button" class="btn-studio-filter" id="studio-select-all">All</button>
+                      <button type="button" class="btn-studio-filter" id="studio-clear-all">Clear</button>
+                    </div>
+                  </div>
+                  <div class="studio-fw-list" id="studio-fw-list">
+                    <div class="studio-loading">
+                      <svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                      <span>Loading frameworks...</span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -251,11 +264,17 @@
                   <p class="studio-col-desc">Upload framework documents</p>
                   <div class="studio-col-stat">
                     <span class="studio-stat-num" id="studio-file-count">0</span>
-                    <span class="studio-stat-label">files in collections</span>
+                    <span class="studio-stat-label">files in <span id="studio-coll-count">0</span> collections</span>
                   </div>
                 </div>
                 <div class="studio-col-body">
-                  <p class="studio-placeholder-text">File management is available on the <a href="index.html">Auditor page</a> or <button class="inline-link" onclick="navigateTo('file-collections')">File Collections</button>.</p>
+                  <button class="btn-studio-new-coll" type="button" id="studio-new-coll-btn">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 5V11C2 11.6 2.4 12 3 12H11C11.6 12 12 11.6 12 11V7C12 6.4 11.6 6 11 6H7L5.5 4H3C2.4 4 2 4.4 2 5Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 7V10M5.5 8.5H8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                    New Collection
+                  </button>
+                  <div class="studio-coll-list" id="studio-coll-list">
+                    <!-- Collections rendered by JS -->
+                  </div>
                 </div>
               </div>
 
@@ -268,26 +287,59 @@
                   </div>
                   <p class="studio-col-desc">Set your audit question</p>
                   <div class="studio-col-stat">
-                    <span class="studio-stat-num">0</span>
+                    <span class="studio-stat-num" id="studio-ctx-count">0</span>
                     <span class="studio-stat-label">context files attached</span>
                   </div>
                 </div>
                 <div class="studio-col-body">
-                  <p class="studio-placeholder-text">Start an audit session from the <a href="index.html">Auditor page</a>.</p>
+                  <div class="studio-query-section">
+                    <label class="studio-field-label">Your Query</label>
+                    <textarea id="studio-query" placeholder="What would you like to audit or analyze?" rows="4"></textarea>
+                    <p class="studio-hint">Example: "Review compliance with SAMA Cybersecurity Framework requirements 1.1 through 1.5."</p>
+                    <div class="studio-char-count"><span id="studio-char-count">0</span> characters</div>
+                  </div>
+                  <div class="studio-ctx-section">
+                    <label class="studio-field-label">Context Files</label>
+                    <p class="studio-hint">Upload documents to provide additional context for the AI analysis.</p>
+                    <button class="btn-studio-upload-ctx" type="button" id="studio-upload-ctx">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 8V11C12 11.6 11.6 12 11 12H3C2.4 12 2 11.6 2 11V8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M9.5 4L7 1.5L4.5 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 1.5V8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                      Upload Context Files
+                    </button>
+                    <div class="studio-ctx-list" id="studio-ctx-list"></div>
+                  </div>
                 </div>
               </div>
             </div>
 
+            <!-- Session Summary -->
             <div class="admin-card studio-summary">
               <div class="studio-summary-top">
                 <div>
                   <h3>Context Session Summary</h3>
                   <p>Review your inputs before starting</p>
                 </div>
-                <a href="index.html" class="btn-admin-primary">
+                <button class="btn-admin-primary" id="studio-start-btn" disabled>
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1V3M7 11V13M3 7H1M13 7H11M4 4L2.5 2.5M11.5 11.5L10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="7" r="2.5" stroke="currentColor" stroke-width="1.5"/></svg>
-                  Go to Audit Studio
-                </a>
+                  Start Audit Session
+                </button>
+              </div>
+              <div class="studio-summary-stats">
+                <div class="studio-summary-stat">
+                  <div class="studio-summary-val" id="studio-sum-reqs">0</div>
+                  <div class="studio-summary-label">Requirements</div>
+                </div>
+                <div class="studio-summary-stat">
+                  <div class="studio-summary-val" id="studio-sum-colls">0</div>
+                  <div class="studio-summary-label">Collections</div>
+                </div>
+                <div class="studio-summary-stat">
+                  <div class="studio-summary-val" id="studio-sum-files">0</div>
+                  <div class="studio-summary-label">Reference Files</div>
+                </div>
+                <div class="studio-summary-stat">
+                  <div class="studio-summary-val" id="studio-sum-ctx">0</div>
+                  <div class="studio-summary-label">Context Files</div>
+                </div>
               </div>
             </div>
           </div>
