@@ -66,6 +66,19 @@ db.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS org_contexts (
+    id TEXT PRIMARY KEY,
+    name_en TEXT NOT NULL,
+    name_ar TEXT DEFAULT '',
+    sector TEXT DEFAULT '',
+    size TEXT DEFAULT '',
+    obligatory_frameworks TEXT DEFAULT '[]',
+    notes TEXT DEFAULT '',
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 console.log('SQLite database initialized (sessions.db)');
@@ -106,6 +119,18 @@ const dbInsertLocalPrompt = db.prepare(`
 const dbUpdateLocalPrompt = db.prepare(`
   UPDATE local_prompts SET name = ?, content = ?, updated_at = ? WHERE id = ?
 `);
+
+// Org contexts DB helpers
+const dbListOrgContexts = db.prepare(`SELECT * FROM org_contexts ORDER BY created_at DESC`);
+const dbGetOrgContext = db.prepare(`SELECT * FROM org_contexts WHERE id = ?`);
+const dbInsertOrgContext = db.prepare(`
+  INSERT INTO org_contexts (id, name_en, name_ar, sector, size, obligatory_frameworks, notes, is_active, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const dbUpdateOrgContext = db.prepare(`
+  UPDATE org_contexts SET name_en = ?, name_ar = ?, sector = ?, size = ?, obligatory_frameworks = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?
+`);
+const dbDeleteOrgContext = db.prepare(`DELETE FROM org_contexts WHERE id = ?`);
 
 // Gemini SDK client + in-memory chat sessions (SDK ChatSession objects)
 let genai = null;
@@ -1004,6 +1029,150 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ success: true, prompt: { ...row, name, content, updated_at: updatedAt } }));
     } catch (error) {
       console.error('Update local prompt error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Org Contexts API ----
+  if (url.pathname === '/api/org-contexts' && req.method === 'GET') {
+    try {
+      const rows = dbListOrgContexts.all();
+      const contexts = rows.map(r => ({
+        id: r.id,
+        nameEn: r.name_en,
+        nameAr: r.name_ar,
+        sector: r.sector,
+        size: r.size,
+        obligatoryFrameworks: JSON.parse(r.obligatory_frameworks || '[]'),
+        notes: r.notes,
+        isActive: !!r.is_active,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+      }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, contexts }));
+    } catch (error) {
+      console.error('List org contexts error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/org-contexts' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const id = body.id || crypto.randomUUID();
+      const now = new Date().toISOString();
+      dbInsertOrgContext.run(
+        id,
+        body.nameEn || body.name || '',
+        body.nameAr || '',
+        body.sector || '',
+        body.size || '',
+        JSON.stringify(body.obligatoryFrameworks || []),
+        body.notes || '',
+        body.isActive !== undefined ? (body.isActive ? 1 : 0) : 1,
+        now,
+        now
+      );
+      const row = dbGetOrgContext.get(id);
+      console.log(`Org context created: ${id} ("${body.nameEn || body.name}")`);
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        context: {
+          id: row.id,
+          nameEn: row.name_en,
+          nameAr: row.name_ar,
+          sector: row.sector,
+          size: row.size,
+          obligatoryFrameworks: JSON.parse(row.obligatory_frameworks || '[]'),
+          notes: row.notes,
+          isActive: !!row.is_active,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+        }
+      }));
+    } catch (error) {
+      console.error('Create org context error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  const orgCtxMatch = url.pathname.match(/^\/api\/org-contexts\/([^\/]+)$/);
+  if (orgCtxMatch && req.method === 'GET') {
+    try {
+      const row = dbGetOrgContext.get(orgCtxMatch[1]);
+      if (!row) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Not found.' })); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        context: {
+          id: row.id, nameEn: row.name_en, nameAr: row.name_ar, sector: row.sector,
+          size: row.size, obligatoryFrameworks: JSON.parse(row.obligatory_frameworks || '[]'),
+          notes: row.notes, isActive: !!row.is_active, created_at: row.created_at, updated_at: row.updated_at,
+        }
+      }));
+    } catch (error) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (orgCtxMatch && req.method === 'PUT') {
+    try {
+      const id = orgCtxMatch[1];
+      const row = dbGetOrgContext.get(id);
+      if (!row) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Not found.' })); return; }
+      const body = await parseBody(req);
+      const now = new Date().toISOString();
+      dbUpdateOrgContext.run(
+        body.nameEn !== undefined ? body.nameEn : row.name_en,
+        body.nameAr !== undefined ? body.nameAr : row.name_ar,
+        body.sector !== undefined ? body.sector : row.sector,
+        body.size !== undefined ? body.size : row.size,
+        body.obligatoryFrameworks !== undefined ? JSON.stringify(body.obligatoryFrameworks) : row.obligatory_frameworks,
+        body.notes !== undefined ? body.notes : row.notes,
+        body.isActive !== undefined ? (body.isActive ? 1 : 0) : row.is_active,
+        now,
+        id
+      );
+      const updated = dbGetOrgContext.get(id);
+      console.log(`Org context updated: ${id}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        context: {
+          id: updated.id, nameEn: updated.name_en, nameAr: updated.name_ar, sector: updated.sector,
+          size: updated.size, obligatoryFrameworks: JSON.parse(updated.obligatory_frameworks || '[]'),
+          notes: updated.notes, isActive: !!updated.is_active, created_at: updated.created_at, updated_at: updated.updated_at,
+        }
+      }));
+    } catch (error) {
+      console.error('Update org context error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (orgCtxMatch && req.method === 'DELETE') {
+    try {
+      const id = orgCtxMatch[1];
+      const row = dbGetOrgContext.get(id);
+      if (!row) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Not found.' })); return; }
+      dbDeleteOrgContext.run(id);
+      console.log(`Org context deleted: ${id}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (error) {
+      console.error('Delete org context error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }

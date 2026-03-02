@@ -8,6 +8,7 @@ const API = {
   localPrompts: '/api/local-prompts',
   prompts: 'https://muraji-api.wathbahs.com/api/prompts',
   libraries: 'https://muraji-api.wathbahs.com/api/libraries',
+  orgContexts: '/api/org-contexts',
 };
 
 // ─── State ────────────────────────────────────────────────────
@@ -417,8 +418,10 @@ function renderFCFiles(storeId) {
 // ─── Organization Contexts Page ───────────────────────────────
 
 async function loadOrgContexts() {
-  // Load from localStorage
-  try { orgContexts = JSON.parse(localStorage.getItem('org_contexts') || '[]'); } catch { orgContexts = []; }
+  try {
+    const d = await fetchJSON(API.orgContexts);
+    orgContexts = d.contexts || [];
+  } catch (e) { console.error('Org contexts fetch error:', e); orgContexts = []; }
   renderOrgStats();
   renderOrgContextsList();
 }
@@ -541,7 +544,7 @@ orgModalCancel.addEventListener('click', closeOrgModal);
 orgModal.addEventListener('click', e => { if (e.target === orgModal) closeOrgModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && orgModal.classList.contains('active')) closeOrgModal(); });
 
-orgModalSave.addEventListener('click', () => {
+orgModalSave.addEventListener('click', async () => {
   const nameEn = document.getElementById('org-name-en').value.trim();
   const nameAr = document.getElementById('org-name-ar').value.trim();
   const sector = document.getElementById('org-sector').value;
@@ -552,35 +555,36 @@ orgModalSave.addEventListener('click', () => {
   if (!nameEn) { toast('error', 'Validation', 'Name (English) is required.'); document.getElementById('org-name-en').focus(); return; }
   if (!sector) { toast('error', 'Validation', 'Sector is required.'); document.getElementById('org-sector').focus(); return; }
 
-  const ctx = {
-    id: editingOrgIdx !== null ? orgContexts[editingOrgIdx].id : Date.now().toString(),
+  const body = {
     nameEn,
     nameAr,
-    name: nameEn,
     sector,
     size,
     obligatoryFrameworks: frameworks ? frameworks.split(',').map(s => s.trim()).filter(Boolean) : [],
     notes,
     isActive: true,
-    documents: [],
-    created_at: editingOrgIdx !== null ? orgContexts[editingOrgIdx].created_at : new Date().toISOString(),
-    updated_at: new Date().toISOString(),
   };
 
-  if (editingOrgIdx !== null) {
-    orgContexts[editingOrgIdx] = ctx;
-    toast('success', 'Updated', 'Context "' + nameEn + '" updated.');
-  } else {
-    orgContexts.push(ctx);
-    toast('success', 'Created', 'Context "' + nameEn + '" created.');
+  orgModalSave.disabled = true;
+  try {
+    let r;
+    if (editingOrgIdx !== null) {
+      const id = orgContexts[editingOrgIdx].id;
+      r = await fetch(API.orgContexts + '/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      r = await fetch(API.orgContexts, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'HTTP ' + r.status); }
+
+    toast('success', editingOrgIdx !== null ? 'Updated' : 'Created', 'Context "' + nameEn + '" saved.');
+    closeOrgModal();
+    await loadOrgContexts();
+  } catch (e) {
+    console.error('Save org context error:', e);
+    toast('error', 'Save Failed', e.message);
+  } finally {
+    orgModalSave.disabled = false;
   }
-
-  // Persist to localStorage
-  localStorage.setItem('org_contexts', JSON.stringify(orgContexts));
-
-  closeOrgModal();
-  renderOrgStats();
-  renderOrgContextsList();
 });
 
 // Edit org context
@@ -602,15 +606,19 @@ function editOrgContext(idx) {
 window.editOrgContext = editOrgContext;
 
 // Delete org context
-function deleteOrgContext(idx) {
+async function deleteOrgContext(idx) {
   const ctx = orgContexts[idx];
   if (!ctx) return;
   if (!confirm('Delete "' + (ctx.nameEn || ctx.name) + '"?')) return;
-  orgContexts.splice(idx, 1);
-  localStorage.setItem('org_contexts', JSON.stringify(orgContexts));
-  toast('success', 'Deleted', 'Context deleted.');
-  renderOrgStats();
-  renderOrgContextsList();
+  try {
+    const r = await fetch(API.orgContexts + '/' + ctx.id, { method: 'DELETE' });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'HTTP ' + r.status); }
+    toast('success', 'Deleted', 'Context deleted.');
+    await loadOrgContexts();
+  } catch (e) {
+    console.error('Delete org context error:', e);
+    toast('error', 'Delete Failed', e.message);
+  }
 }
 window.deleteOrgContext = deleteOrgContext;
 
