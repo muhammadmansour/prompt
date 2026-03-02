@@ -417,6 +417,8 @@ function renderFCFiles(storeId) {
 // ─── Organization Contexts Page ───────────────────────────────
 
 async function loadOrgContexts() {
+  // Load from localStorage
+  try { orgContexts = JSON.parse(localStorage.getItem('org_contexts') || '[]'); } catch { orgContexts = []; }
   renderOrgStats();
   renderOrgContextsList();
 }
@@ -441,27 +443,42 @@ function renderOrgStats() {
     </div>`;
 }
 
-function renderOrgContextsList() {
+function renderOrgContextsList(query) {
   const el = document.getElementById('org-contexts-list');
+  let list = orgContexts;
+  if (query) {
+    list = orgContexts.filter((ctx, i) => {
+      const text = (ctx.nameEn || ctx.name || '') + ' ' + (ctx.nameAr || '') + ' ' + (ctx.sector || '') + ' ' + (ctx.obligatoryFrameworks || []).join(' ');
+      return text.toLowerCase().includes(query);
+    });
+  }
 
-  if (!orgContexts.length) {
+  if (!list.length && !orgContexts.length) {
     el.innerHTML = `
       <div class="admin-card empty-state-box">
         <div class="empty-icon"><svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M4 8V24C4 25.1 4.9 26 6 26H26C27.1 26 28 25.1 28 24V12C28 10.9 27.1 10 26 10H17L14.5 7H6C4.9 7 4 7.9 4 9Z" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round"/></svg></div>
         <h3>No organization contexts</h3>
-        <p>Organization contexts help the AI generate more relevant and industry-specific controls. This feature is under development.</p>
-        <span class="coming-soon-badge">Coming Soon</span>
+        <p>Organization contexts help the AI generate more relevant and industry-specific controls. Click "New Context" to create one.</p>
       </div>`;
     return;
   }
 
-  el.innerHTML = orgContexts.map((ctx, i) => {
+  if (!list.length) {
+    el.innerHTML = '<div style="padding:32px 20px;text-align:center;color:#9ca3af;font-size:13px">No contexts match your search.</div>';
+    return;
+  }
+
+  // Map filtered items back to their original index in orgContexts
+  el.innerHTML = list.map(ctx => {
+    const origIdx = orgContexts.indexOf(ctx);
     const tags = (ctx.obligatoryFrameworks || []).map(f => `<span class="badge badge-primary badge-round">${esc(f)}</span>`).join('');
+    const sectorLabels = { banking: 'Banking & Financial Services', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', other: 'Other' };
+    const sizeLabels = { small: 'Small', medium: 'Medium', large: 'Large', enterprise: 'Enterprise' };
     return `
       <div class="org-ctx-card">
-        <div class="org-ctx-header" onclick="toggleOrgContext(${i})">
+        <div class="org-ctx-header">
           <div class="org-ctx-header-left">
-            <div class="org-ctx-icon" style="background:${ctx.isActive ? 'rgba(0,119,204,0.1)' : '#f3f4f6'};color:${ctx.isActive ? 'var(--admin-primary)' : '#9ca3af'}">
+            <div class="org-ctx-icon" style="background:rgba(0,119,204,0.1);color:var(--admin-primary)">
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 5V15C3 15.6 3.4 16 4 16H16C16.6 16 17 15.6 17 15V8C17 7.4 16.6 7 16 7H10.5L9 5H4C3.4 5 3 5.4 3 6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </div>
             <div class="org-ctx-names">
@@ -469,11 +486,21 @@ function renderOrgContextsList() {
                 <span class="org-ctx-name">${esc(ctx.nameEn || ctx.name)}</span>
                 ${ctx.nameAr ? `<span class="org-ctx-name-ar">${esc(ctx.nameAr)}</span>` : ''}
               </div>
-              <div class="org-ctx-tags">${tags}</div>
+              <div class="org-ctx-tags">
+                ${ctx.sector ? `<span class="badge badge-gray badge-round">${esc(sectorLabels[ctx.sector] || ctx.sector)}</span>` : ''}
+                ${ctx.size ? `<span class="badge badge-gray badge-round">${esc(sizeLabels[ctx.size] || ctx.size)}</span>` : ''}
+                ${tags}
+              </div>
             </div>
           </div>
           <div class="org-ctx-right">
-            <span class="badge ${ctx.isActive ? 'badge-emerald' : 'badge-gray'}">${ctx.isActive ? 'Active' : 'Inactive'}</span>
+            <span class="badge badge-emerald">Active</span>
+            <button class="btn-admin-ghost btn-admin-sm" onclick="editOrgContext(${origIdx})" title="Edit">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button class="btn-admin-ghost btn-admin-sm" onclick="deleteOrgContext(${origIdx})" title="Delete">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
           </div>
         </div>
       </div>`;
@@ -481,13 +508,118 @@ function renderOrgContextsList() {
 }
 window.toggleOrgContext = function(i) {};
 
+// Org Context Modal
+const orgModal = document.getElementById('org-modal-overlay');
+const orgModalClose = document.getElementById('org-modal-close');
+const orgModalCancel = document.getElementById('org-modal-cancel');
+const orgModalSave = document.getElementById('org-modal-save');
+const orgModalTitle = document.getElementById('org-modal-title');
+let editingOrgIdx = null;
+
+function openOrgModal() { orgModal.classList.add('active'); document.body.style.overflow = 'hidden'; }
+function closeOrgModal() { orgModal.classList.remove('active'); document.body.style.overflow = ''; editingOrgIdx = null; clearOrgForm(); }
+function clearOrgForm() {
+  document.getElementById('org-name-en').value = '';
+  document.getElementById('org-name-ar').value = '';
+  document.getElementById('org-sector').value = '';
+  document.getElementById('org-size').value = '';
+  document.getElementById('org-frameworks').value = '';
+  document.getElementById('org-notes').value = '';
+}
+
+document.getElementById('btn-new-context').addEventListener('click', () => {
+  editingOrgIdx = null;
+  orgModalTitle.textContent = 'New Organization Context';
+  orgModalSave.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Create Context';
+  clearOrgForm();
+  openOrgModal();
+  document.getElementById('org-name-en').focus();
+});
+
+orgModalClose.addEventListener('click', closeOrgModal);
+orgModalCancel.addEventListener('click', closeOrgModal);
+orgModal.addEventListener('click', e => { if (e.target === orgModal) closeOrgModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && orgModal.classList.contains('active')) closeOrgModal(); });
+
+orgModalSave.addEventListener('click', () => {
+  const nameEn = document.getElementById('org-name-en').value.trim();
+  const nameAr = document.getElementById('org-name-ar').value.trim();
+  const sector = document.getElementById('org-sector').value;
+  const size = document.getElementById('org-size').value;
+  const frameworks = document.getElementById('org-frameworks').value.trim();
+  const notes = document.getElementById('org-notes').value.trim();
+
+  if (!nameEn) { toast('error', 'Validation', 'Name (English) is required.'); document.getElementById('org-name-en').focus(); return; }
+  if (!sector) { toast('error', 'Validation', 'Sector is required.'); document.getElementById('org-sector').focus(); return; }
+
+  const ctx = {
+    id: editingOrgIdx !== null ? orgContexts[editingOrgIdx].id : Date.now().toString(),
+    nameEn,
+    nameAr,
+    name: nameEn,
+    sector,
+    size,
+    obligatoryFrameworks: frameworks ? frameworks.split(',').map(s => s.trim()).filter(Boolean) : [],
+    notes,
+    isActive: true,
+    documents: [],
+    created_at: editingOrgIdx !== null ? orgContexts[editingOrgIdx].created_at : new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (editingOrgIdx !== null) {
+    orgContexts[editingOrgIdx] = ctx;
+    toast('success', 'Updated', 'Context "' + nameEn + '" updated.');
+  } else {
+    orgContexts.push(ctx);
+    toast('success', 'Created', 'Context "' + nameEn + '" created.');
+  }
+
+  // Persist to localStorage
+  localStorage.setItem('org_contexts', JSON.stringify(orgContexts));
+
+  closeOrgModal();
+  renderOrgStats();
+  renderOrgContextsList();
+});
+
+// Edit org context
+function editOrgContext(idx) {
+  const ctx = orgContexts[idx];
+  if (!ctx) return;
+  editingOrgIdx = idx;
+  orgModalTitle.textContent = 'Edit Organization Context';
+  orgModalSave.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Save Changes';
+  document.getElementById('org-name-en').value = ctx.nameEn || ctx.name || '';
+  document.getElementById('org-name-ar').value = ctx.nameAr || '';
+  document.getElementById('org-sector').value = ctx.sector || '';
+  document.getElementById('org-size').value = ctx.size || '';
+  document.getElementById('org-frameworks').value = (ctx.obligatoryFrameworks || []).join(', ');
+  document.getElementById('org-notes').value = ctx.notes || '';
+  openOrgModal();
+  document.getElementById('org-name-en').focus();
+}
+window.editOrgContext = editOrgContext;
+
+// Delete org context
+function deleteOrgContext(idx) {
+  const ctx = orgContexts[idx];
+  if (!ctx) return;
+  if (!confirm('Delete "' + (ctx.nameEn || ctx.name) + '"?')) return;
+  orgContexts.splice(idx, 1);
+  localStorage.setItem('org_contexts', JSON.stringify(orgContexts));
+  toast('success', 'Deleted', 'Context deleted.');
+  renderOrgStats();
+  renderOrgContextsList();
+}
+window.deleteOrgContext = deleteOrgContext;
+
 // Org search
 const orgSearch = document.getElementById('org-search');
 if (orgSearch) {
   orgSearch.addEventListener('input', e => {
     const q = e.target.value.toLowerCase().trim();
-    // For now just re-render since data is empty/placeholder
-    renderOrgContextsList();
+    renderOrgContextsList(q);
   });
 }
 

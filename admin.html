@@ -393,6 +393,70 @@
     </div>
   </div>
 
+  <!-- Org Context Modal -->
+  <div class="admin-modal-overlay" id="org-modal-overlay">
+    <div class="admin-modal">
+      <div class="admin-modal-header">
+        <h3 class="admin-modal-title" id="org-modal-title">New Organization Context</h3>
+        <button class="admin-modal-close" id="org-modal-close">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="admin-modal-body">
+        <div class="admin-form-row">
+          <label class="admin-form-label">Name (English) <span class="required">*</span></label>
+          <input type="text" class="admin-form-input" id="org-name-en" placeholder="e.g. Saudi Central Bank">
+        </div>
+        <div class="admin-form-row">
+          <label class="admin-form-label">Name (Arabic)</label>
+          <input type="text" class="admin-form-input font-arabic text-right" id="org-name-ar" placeholder="مثال: البنك المركزي السعودي">
+        </div>
+        <div class="admin-form-row">
+          <label class="admin-form-label">Sector / Industry <span class="required">*</span></label>
+          <select class="admin-form-select" id="org-sector">
+            <option value="">Select sector…</option>
+            <option value="banking">Banking & Financial Services</option>
+            <option value="government">Government</option>
+            <option value="healthcare">Healthcare</option>
+            <option value="energy">Energy & Utilities</option>
+            <option value="telecom">Telecommunications</option>
+            <option value="education">Education</option>
+            <option value="retail">Retail & E-Commerce</option>
+            <option value="insurance">Insurance</option>
+            <option value="technology">Technology</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="admin-form-row">
+          <label class="admin-form-label">Entity Size</label>
+          <select class="admin-form-select" id="org-size">
+            <option value="">Select size…</option>
+            <option value="small">Small (1–50 employees)</option>
+            <option value="medium">Medium (51–500 employees)</option>
+            <option value="large">Large (501–5000 employees)</option>
+            <option value="enterprise">Enterprise (5000+ employees)</option>
+          </select>
+        </div>
+        <div class="admin-form-row">
+          <label class="admin-form-label">Obligatory Frameworks</label>
+          <input type="text" class="admin-form-input" id="org-frameworks" placeholder="e.g. NCA ECC, ISO 27001 (comma-separated)">
+          <span class="admin-form-hint">Comma-separated list of framework abbreviations</span>
+        </div>
+        <div class="admin-form-row">
+          <label class="admin-form-label">Notes</label>
+          <textarea class="admin-form-textarea" id="org-notes" rows="3" placeholder="Additional context about this organization…"></textarea>
+        </div>
+      </div>
+      <div class="admin-modal-footer">
+        <button class="btn-admin-ghost" id="org-modal-cancel">Cancel</button>
+        <button class="btn-admin-primary" id="org-modal-save">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Create Context
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div class="toast-container" id="toast-container"></div>
 
