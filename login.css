@@ -351,14 +351,6 @@
 
 /* Proto note */
 
-.login-proto-note {
-  text-align: center;
-  font-size: 11px;
-  color: #c0c5cc;
-  margin-top: 16px;
-  font-style: italic;
-}
-
 /* Footer */
 
 .login-footer {
@@ -375,6 +367,12 @@
   font-weight: 800;
   letter-spacing: 3px;
   color: #1f2937;
+}
+.login-footer-logo {
+  max-width: 120px;
+  height: auto;
+  margin-top: 8px;
+  opacity: 0.85;
 }
 
 /* ---------- Responsive ---------- */
