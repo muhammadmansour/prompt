@@ -82,6 +82,7 @@ function navigateTo(page) {
   if (page === 'org-contexts') loadOrgContexts();
   if (page === 'prompts') loadPrompts();
   if (page === 'controls-studio') loadControlsStudio();
+  if (page === 'merge-optimizer') loadMergeOptimizer();
 }
 window.navigateTo = navigateTo;
 
@@ -2805,6 +2806,427 @@ async function csDoExport() {
   csRenderWizard();
 }
 window.csDoExport = csDoExport;
+
+// ─── Merge Optimizer ──────────────────────────────────────────
+
+let moPhase = 'setup'; // setup | analyzing | results | applied
+let moSessions = [];
+let moExistingControls = [];
+let moSuggestions = [];
+let moMergeHistory = [];
+let moSelectedSessionId = '';
+let moSearchQuery = '';
+
+async function loadMergeOptimizer() {
+  moPhase = 'setup';
+  moSuggestions = [];
+  moSelectedSessionId = '';
+
+  // Fetch sessions from CS API
+  try {
+    const res = await fetch(API.csSessions);
+    const data = await res.json();
+    moSessions = (data.success ? data.data : []).filter(s => s.status === 'exported' || s.status === 'generated' || (s.controls && s.controls.length > 0));
+  } catch (e) { moSessions = []; console.error('loadMergeOptimizer sessions:', e); }
+
+  // Build existing controls from all exported sessions
+  moExistingControls = [];
+  moSessions.filter(s => s.status === 'exported').forEach(s => {
+    (s.controls || []).forEach(c => {
+      moExistingControls.push({
+        id: c.id,
+        name: c.name || c.name_ar || '',
+        description: c.description || '',
+        requirementIds: [c.requirementRefId].filter(Boolean),
+        frameworkNames: [c.framework].filter(Boolean),
+        exportedAt: s.updated_at || s.created_at || '',
+        sessionId: s.id,
+      });
+    });
+  });
+
+  // Build merge history from localStorage
+  moMergeHistory = JSON.parse(localStorage.getItem('mo_merge_history') || '[]');
+
+  moRender();
+}
+
+function moRender() {
+  const gridEl = document.getElementById('mo-grid');
+  const analyzingEl = document.getElementById('mo-analyzing');
+  const appliedEl = document.getElementById('mo-applied');
+
+  if (moPhase === 'analyzing') {
+    gridEl.style.display = 'none';
+    appliedEl.style.display = 'none';
+    analyzingEl.style.display = '';
+    analyzingEl.innerHTML = `
+      <div class="mo-analyzing-card">
+        <div class="mo-analyzing-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 4L16.5 10L23 10.5L18 15L19.5 22L14 19L8.5 22L10 15L5 10.5L11.5 10L14 4Z" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round" class="mo-pulse"/></svg>
+        </div>
+        <h3>Analyzing Controls for Merge Opportunities</h3>
+        <p>AI is comparing new controls against existing platform controls to find merge candidates...</p>
+        <div class="mo-progress-bar"><div class="mo-progress-fill" id="mo-progress-fill"></div></div>
+        <div class="mo-progress-text">
+          <svg class="spinner" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/></svg>
+          <span>Comparing requirement mappings and control scope...</span>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (moPhase === 'applied') {
+    gridEl.style.display = 'none';
+    analyzingEl.style.display = 'none';
+    appliedEl.style.display = '';
+    const accepted = moSuggestions.filter(s => s.status === 'accepted').length;
+    const rejected = moSuggestions.filter(s => s.status === 'rejected').length;
+    const unchanged = moExistingControls.length - accepted;
+    appliedEl.innerHTML = `
+      <div class="cs-review-card">
+        <div class="cs-export-header-done">
+          <div class="cs-review-header-row">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M5 9L8 12L13 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="9" r="7" stroke="white" stroke-width="1.5"/></svg>
+            <span class="cs-review-header-title">Merges Applied Successfully</span>
+          </div>
+          <p class="cs-review-header-desc" style="color:#bbf7d0">Controls have been merged and updated in WathbaGRC.</p>
+        </div>
+        <div class="cs-export-done-body">
+          <div class="cs-export-done-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M24 8L24 24M8 10V16C8 19.3 10.7 22 14 22H24M8 10L5 13M8 10L11 13" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <h3 class="cs-export-done-title">Merge Operation Complete</h3>
+          <p style="font-size:12px;color:#6b7280;margin:0 0 20px">Your controls have been consolidated in WathbaGRC</p>
+          <div class="cs-export-done-stats" style="grid-template-columns:repeat(3,1fr);max-width:400px">
+            <div class="cs-export-done-stat cs-export-done-stat-emerald">
+              <div class="cs-export-done-stat-val">${accepted}</div>
+              <div class="cs-export-done-stat-label">Controls Merged</div>
+            </div>
+            <div class="cs-export-done-stat cs-export-done-stat-gray">
+              <div class="cs-export-done-stat-val">${unchanged}</div>
+              <div class="cs-export-done-stat-label">Unchanged</div>
+            </div>
+            <div class="cs-export-done-stat" style="background:#fef2f2;border-color:#fecaca">
+              <div class="cs-export-done-stat-val" style="color:#ef4444">${rejected}</div>
+              <div class="cs-export-done-stat-label" style="color:#ef4444">Rejected</div>
+            </div>
+          </div>
+          <div class="cs-export-done-meta">
+            <div class="cs-export-meta-row"><span>Applied At</span><span>${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>
+            <div class="cs-export-meta-row"><span>Service Account</span><span style="font-family:var(--font-mono);font-size:10px">admin@wathba-grc</span></div>
+            <div class="cs-export-meta-row"><span>Method</span><span>In-place update (existing IDs preserved)</span></div>
+          </div>
+          <div class="cs-export-done-actions">
+            <button class="btn-admin-primary" onclick="moReset()">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              Run Another Analysis
+            </button>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  // setup or results
+  gridEl.style.display = '';
+  analyzingEl.style.display = 'none';
+  appliedEl.style.display = 'none';
+
+  // Populate session dropdown
+  const select = document.getElementById('mo-session-select');
+  const currentVal = select.value;
+  select.innerHTML = '<option value="">Select a session...</option>' +
+    moSessions.map(s => `<option value="${esc(s.id)}">${esc(s.name || 'Unnamed')} (${(s.controls || []).length} controls)</option>`).join('');
+  select.value = moSelectedSessionId || currentVal || '';
+  select.onchange = function () {
+    moSelectedSessionId = this.value;
+    moRenderSessionInfo();
+    document.getElementById('mo-analyze-btn').disabled = !moSelectedSessionId;
+  };
+  document.getElementById('mo-analyze-btn').disabled = !moSelectedSessionId;
+  document.getElementById('mo-analyze-btn').style.display = moPhase === 'setup' ? '' : 'none';
+
+  moRenderSessionInfo();
+  moRenderHistory();
+  moRenderCenter();
+  moRenderExisting();
+}
+
+function moRenderSessionInfo() {
+  const el = document.getElementById('mo-session-info');
+  const session = moSessions.find(s => s.id === moSelectedSessionId);
+  if (!session) { el.innerHTML = ''; return; }
+  const ctrls = session.controls || [];
+  const fwSet = new Set();
+  (session.requirements || []).forEach(r => { if (r.frameworkName) fwSet.add(r.frameworkName); });
+  const orgName = session.orgContext?.nameEn || session.orgContext?.name || '';
+  el.innerHTML = `
+    <div class="mo-session-detail">
+      <div class="mo-session-detail-name">${esc(session.name || 'Unnamed')}</div>
+      ${orgName ? `<div class="mo-session-detail-org">${esc(orgName)}</div>` : ''}
+      <div class="mo-session-detail-meta">${ctrls.length} generated <span class="mo-sep">|</span> ${ctrls.filter(c => c.selected !== false).length} selected</div>
+      ${fwSet.size ? `<div class="mo-session-fw-pills">${[...fwSet].map(f => `<span class="cs-tag cs-tag-sky">${esc(f)}</span>`).join('')}</div>` : ''}
+    </div>`;
+}
+
+function moRenderHistory() {
+  const el = document.getElementById('mo-history-list');
+  if (!moMergeHistory.length) {
+    el.innerHTML = '<div class="mo-history-empty">No merge history yet</div>';
+    return;
+  }
+  el.innerHTML = moMergeHistory.map(rec => `
+    <div class="mo-history-row">
+      <div class="mo-history-name">${esc(rec.sessionName)}</div>
+      <div class="mo-history-stats">
+        <span class="mo-history-accepted">${rec.accepted} accepted</span>
+        <span class="mo-sep">|</span>
+        <span class="mo-history-rejected">${rec.rejected} rejected</span>
+      </div>
+      <div class="mo-history-date">${esc(rec.timestamp)}</div>
+    </div>`).join('');
+}
+
+function moRenderCenter() {
+  const el = document.getElementById('mo-center');
+  if (moPhase === 'results' && moSuggestions.length > 0) {
+    const pending = moSuggestions.filter(s => s.status === 'pending').length;
+    const accepted = moSuggestions.filter(s => s.status === 'accepted').length;
+    const rejected = moSuggestions.filter(s => s.status === 'rejected').length;
+
+    let h = `
+      <div class="mo-suggestions-header">
+        <div>
+          <h2 class="mo-suggestions-title">Merge Suggestions</h2>
+          <p class="mo-suggestions-subtitle">${pending} pending, ${accepted} accepted, ${rejected} rejected</p>
+        </div>
+        ${accepted > 0 && pending === 0 ? `
+          <button class="mo-apply-btn" onclick="moApplyMerges()">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Apply ${accepted} Merges
+          </button>` : ''}
+      </div>
+      <div class="mo-suggestions-list">`;
+
+    moSuggestions.forEach(sug => {
+      const confCfg = { high: { label: 'High confidence', cls: 'mo-conf-high' }, medium: { label: 'Medium confidence', cls: 'mo-conf-medium' }, low: { label: 'Low confidence', cls: 'mo-conf-low' } };
+      const conf = confCfg[sug.confidence] || confCfg.medium;
+      const statusBadge = sug.status === 'accepted' ? '<span class="mo-status-badge mo-status-accepted">Accepted</span>' : sug.status === 'rejected' ? '<span class="mo-status-badge mo-status-rejected">Rejected</span>' : '';
+
+      h += `
+        <div class="mo-sug-card mo-sug-${sug.status}" data-sug-id="${esc(sug.id)}">
+          <div class="mo-sug-top">
+            <div class="mo-sug-badges">
+              <span class="mo-conf-badge ${conf.cls}"><span class="mo-conf-dot"></span>${conf.label}</span>
+              ${statusBadge}
+            </div>
+            <button class="mo-sug-expand-btn" onclick="moToggleSuggestion('${esc(sug.id)}')">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="mo-sug-chevron"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div class="mo-sug-controls">
+            <div class="mo-sug-box mo-sug-box-new">
+              <div class="mo-sug-box-label">New Control</div>
+              <div class="mo-sug-box-name" dir="rtl">${esc(sug.sourceControlName)}</div>
+            </div>
+            <svg class="mo-sug-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8H13M10 5L13 8L10 11" stroke="#d1d5db" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div class="mo-sug-box mo-sug-box-existing">
+              <div class="mo-sug-box-label">Existing Control</div>
+              <div class="mo-sug-box-name" dir="rtl">${esc(sug.targetControlName)}</div>
+            </div>
+          </div>
+          <div class="mo-sug-merged">
+            <div class="mo-sug-box-label" style="color:var(--admin-primary)">Merged Result</div>
+            <div class="mo-sug-box-name" dir="rtl">${esc(sug.mergedName)}</div>
+            <div class="mo-sug-merged-desc" dir="rtl">${esc(sug.mergedDescription)}</div>
+          </div>
+          <div class="mo-sug-expand" id="mo-sug-expand-${esc(sug.id)}">
+            <div class="mo-sug-detail"><span class="mo-sug-detail-label">AI Rationale</span><p>${esc(sug.rationale)}</p></div>
+            ${sug.combinedRequirementIds?.length ? `<div class="mo-sug-detail"><span class="mo-sug-detail-label">Combined Requirements</span><div class="mo-sug-pills">${sug.combinedRequirementIds.map(r => `<span class="cs-tag cs-tag-mono">${esc(r)}</span>`).join('')}</div></div>` : ''}
+            ${sug.combinedFrameworkNames?.length ? `<div class="mo-sug-detail"><span class="mo-sug-detail-label">Frameworks</span><div class="mo-sug-pills">${sug.combinedFrameworkNames.map(f => `<span class="cs-tag cs-tag-primary">${esc(f)}</span>`).join('')}</div></div>` : ''}
+          </div>
+          ${sug.status === 'pending' ? `
+            <div class="mo-sug-actions">
+              <button class="mo-accept-btn" onclick="moAcceptSuggestion('${esc(sug.id)}')">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Accept Merge
+              </button>
+              <button class="mo-reject-btn" onclick="moRejectSuggestion('${esc(sug.id)}')">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                Reject
+              </button>
+            </div>` : ''}
+        </div>`;
+    });
+
+    h += '</div>';
+    if (accepted > 0 && pending > 0) {
+      h += `<div class="mo-pending-warning">Review all suggestions before applying. You can apply merges once all ${pending} remaining suggestions are resolved.</div>`;
+    }
+    el.innerHTML = h;
+  } else {
+    el.innerHTML = `
+      <div class="mo-empty-state">
+        <div class="mo-empty-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M18 3L18 21M6 6V12C6 15.3 8.7 18 12 18H18M6 6L3 9M6 6L9 9" stroke="#d1d5db" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>No Analysis Yet</h3>
+        <p>Select a studio session and click "Analyze for Merges" to find optimization opportunities.</p>
+      </div>`;
+  }
+}
+
+function moRenderExisting() {
+  const listEl = document.getElementById('mo-existing-list');
+  const countEl = document.getElementById('mo-existing-count');
+  const q = (document.getElementById('mo-search')?.value || '').toLowerCase();
+
+  const filtered = moExistingControls.filter(ec => {
+    if (!q) return true;
+    return ec.name.toLowerCase().includes(q) || ec.description.toLowerCase().includes(q) ||
+      ec.requirementIds.some(r => r.toLowerCase().includes(q)) || ec.frameworkNames.some(f => f.toLowerCase().includes(q));
+  });
+
+  countEl.textContent = moExistingControls.length + ' controls';
+
+  if (!filtered.length) {
+    listEl.innerHTML = '<div class="mo-history-empty">' + (moExistingControls.length ? 'No matches' : 'No exported controls yet') + '</div>';
+    return;
+  }
+
+  listEl.innerHTML = filtered.map(ec => {
+    const hasMerge = moSuggestions.some(s => s.targetControlId === ec.id && s.status === 'accepted');
+    return `
+      <div class="mo-existing-row ${hasMerge ? 'mo-existing-merged' : ''}">
+        <div class="mo-existing-name" dir="rtl">${esc(ec.name)}</div>
+        ${hasMerge ? '<span class="mo-merge-queued">merge queued</span>' : ''}
+        <div class="mo-existing-desc" dir="rtl">${esc(ec.description)}</div>
+        <div class="mo-existing-reqs">
+          ${ec.requirementIds.slice(0, 3).map(r => `<span class="cs-tag cs-tag-mono">${esc(r)}</span>`).join('')}
+          ${ec.requirementIds.length > 3 ? `<span class="mo-more">+${ec.requirementIds.length - 3}</span>` : ''}
+        </div>
+        <div class="mo-existing-date">Exported ${fmtDate(ec.exportedAt)}</div>
+      </div>`;
+  }).join('');
+}
+
+function moFilterExisting() { moRenderExisting(); }
+window.moFilterExisting = moFilterExisting;
+
+async function moAnalyze() {
+  if (!moSelectedSessionId) return;
+  moPhase = 'analyzing';
+  moRender();
+
+  // Simulate analysis progress
+  const fillEl = document.getElementById('mo-progress-fill');
+  const steps = 20;
+  for (let i = 1; i <= steps; i++) {
+    if (fillEl) fillEl.style.width = Math.round((i / steps) * 100) + '%';
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  // Generate mock suggestions by comparing session controls with existing
+  const session = moSessions.find(s => s.id === moSelectedSessionId);
+  const sessionControls = session?.controls || [];
+  moSuggestions = [];
+
+  sessionControls.forEach((sc, idx) => {
+    // Try to find an existing control with overlapping requirement
+    const match = moExistingControls.find(ec =>
+      ec.requirementIds.some(r => r === sc.requirementRefId) && ec.id !== sc.id
+    );
+    if (match) {
+      moSuggestions.push({
+        id: 'sug-' + idx,
+        sourceControlId: sc.id,
+        sourceControlName: sc.name || sc.name_ar || 'New Control',
+        targetControlId: match.id,
+        targetControlName: match.name,
+        mergedName: sc.name || match.name,
+        mergedDescription: (sc.description || '') + ' — ' + (match.description || ''),
+        rationale: 'Both controls address the same requirement (' + (sc.requirementRefId || '') + ') and have overlapping scope.',
+        confidence: 'high',
+        status: 'pending',
+        combinedRequirementIds: [...new Set([...(match.requirementIds || []), sc.requirementRefId].filter(Boolean))],
+        combinedFrameworkNames: [...new Set([...(match.frameworkNames || []), sc.framework].filter(Boolean))],
+      });
+    }
+  });
+
+  // If no real matches, create a couple sample suggestions for demo
+  if (moSuggestions.length === 0 && sessionControls.length >= 2) {
+    moSuggestions.push({
+      id: 'sug-demo-1',
+      sourceControlId: sessionControls[0]?.id || 'sc0',
+      sourceControlName: sessionControls[0]?.name || 'New Control 1',
+      targetControlId: moExistingControls[0]?.id || 'ec0',
+      targetControlName: moExistingControls[0]?.name || 'Existing Control',
+      mergedName: sessionControls[0]?.name || 'Merged Control',
+      mergedDescription: 'AI-suggested merge combining scope of both controls',
+      rationale: 'Controls share similar scope and can be consolidated for better coverage.',
+      confidence: 'medium',
+      status: 'pending',
+      combinedRequirementIds: [sessionControls[0]?.requirementRefId].filter(Boolean),
+      combinedFrameworkNames: [sessionControls[0]?.framework].filter(Boolean),
+    });
+  }
+
+  moPhase = 'results';
+  moRender();
+}
+window.moAnalyze = moAnalyze;
+
+function moToggleSuggestion(sugId) {
+  const card = document.querySelector(`.mo-sug-card[data-sug-id="${sugId}"]`);
+  if (card) card.classList.toggle('expanded');
+}
+window.moToggleSuggestion = moToggleSuggestion;
+
+function moAcceptSuggestion(sugId) {
+  const sug = moSuggestions.find(s => s.id === sugId);
+  if (sug) sug.status = 'accepted';
+  moRenderCenter();
+  moRenderExisting();
+}
+window.moAcceptSuggestion = moAcceptSuggestion;
+
+function moRejectSuggestion(sugId) {
+  const sug = moSuggestions.find(s => s.id === sugId);
+  if (sug) sug.status = 'rejected';
+  moRenderCenter();
+  moRenderExisting();
+}
+window.moRejectSuggestion = moRejectSuggestion;
+
+function moApplyMerges() {
+  const accepted = moSuggestions.filter(s => s.status === 'accepted').length;
+  const rejected = moSuggestions.filter(s => s.status === 'rejected').length;
+  const session = moSessions.find(s => s.id === moSelectedSessionId);
+
+  // Save to history
+  moMergeHistory.unshift({
+    sessionName: session?.name || 'Unknown',
+    accepted,
+    rejected,
+    timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+  });
+  localStorage.setItem('mo_merge_history', JSON.stringify(moMergeHistory));
+
+  moPhase = 'applied';
+  moRender();
+  toast('success', 'Merges Applied', `${accepted} controls merged successfully.`);
+}
+window.moApplyMerges = moApplyMerges;
+
+function moReset() {
+  moPhase = 'setup';
+  moSelectedSessionId = '';
+  moSuggestions = [];
+  loadMergeOptimizer();
+}
+window.moReset = moReset;
 
 // ─── Audit Studio ─────────────────────────────────────────────
 

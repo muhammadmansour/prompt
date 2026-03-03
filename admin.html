@@ -392,13 +392,72 @@
               </div>
               <p class="page-subtitle">AI-powered analysis to merge newly generated controls into existing ones, reducing redundancy</p>
             </div>
-            <div class="admin-card merge-placeholder">
-              <div class="empty-icon">
-                <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M24 4L24 28M8 8V16C8 20.4 11.6 24 16 24H24M8 8L4 12M8 8L12 12" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <!-- Analyzing overlay -->
+            <div id="mo-analyzing" style="display:none"></div>
+            <!-- Applied overlay -->
+            <div id="mo-applied" style="display:none"></div>
+            <!-- Main 3-column grid -->
+            <div class="mo-grid" id="mo-grid">
+              <!-- Left: Source Controls + Merge History -->
+              <div class="mo-col-left">
+                <div class="mo-card">
+                  <div class="mo-card-header mo-card-header-sky">
+                    <div class="mo-card-header-row">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="7" r="1.5" fill="currentColor"/></svg>
+                      <h2>Source Controls</h2>
+                    </div>
+                    <p>Select a studio session to load new controls</p>
+                  </div>
+                  <div class="mo-card-body">
+                    <select id="mo-session-select" class="admin-form-select mo-select">
+                      <option value="">Select a session...</option>
+                    </select>
+                    <div id="mo-session-info"></div>
+                    <button class="mo-analyze-btn" id="mo-analyze-btn" onclick="moAnalyze()" disabled>
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2L8.5 5L12 5.5L9.5 8L10 11.5L7 10L4 11.5L4.5 8L2 5.5L5.5 5L7 2Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                      Analyze for Merges
+                    </button>
+                  </div>
+                </div>
+                <div class="mo-card">
+                  <div class="mo-card-header mo-card-header-gray">
+                    <div class="mo-card-header-row">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.2"/><path d="M7 4V7L9 8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                      <h2>Merge History</h2>
+                    </div>
+                  </div>
+                  <div id="mo-history-list" class="mo-history-list"></div>
+                </div>
               </div>
-              <h3>Merge Optimizer</h3>
-              <p>Select a studio session and analyze for merge opportunities to consolidate overlapping controls.</p>
-              <p class="coming-soon-badge">Coming Soon</p>
+              <!-- Center: Analysis Results -->
+              <div class="mo-col-center" id="mo-center">
+                <div class="mo-empty-state">
+                  <div class="mo-empty-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M18 3L18 21M6 6V12C6 15.3 8.7 18 12 18H18M6 6L3 9M6 6L9 9" stroke="#d1d5db" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
+                  <h3>No Analysis Yet</h3>
+                  <p>Select a studio session and click "Analyze for Merges" to find optimization opportunities.</p>
+                </div>
+              </div>
+              <!-- Right: Existing Platform Controls -->
+              <div class="mo-col-right">
+                <div class="mo-card">
+                  <div class="mo-card-header mo-card-header-gray">
+                    <div class="mo-card-header-row" style="justify-content:space-between">
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="7" r="1.5" fill="currentColor"/></svg>
+                        <h2>Existing Platform Controls</h2>
+                      </div>
+                      <span class="mo-count" id="mo-existing-count">0 controls</span>
+                    </div>
+                  </div>
+                  <div class="mo-search-bar">
+                    <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.3"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                    <input type="text" placeholder="Search existing controls..." id="mo-search" oninput="moFilterExisting()">
+                  </div>
+                  <div class="mo-existing-list" id="mo-existing-list"></div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
