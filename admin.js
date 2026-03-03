@@ -2464,7 +2464,11 @@ window.csStartGenerate = csStartGenerate;
 function csRenderStepReview(el) {
   const controls = csSessionData.controls || [];
   const selectedCount = controls.filter(c => c.selected !== false).length;
-  const exportedIds = csSessionData.exportedControlIds || [];
+  let exportedIds = csSessionData.exportedControlIds || [];
+  // Legacy: if session exported but no IDs tracked, treat all as exported
+  if (exportedIds.length === 0 && csSessionData.status === 'exported') {
+    exportedIds = controls.map(c => c.id).filter(Boolean);
+  }
   const hasExported = exportedIds.length > 0;
   const alreadyExportedCount = hasExported ? controls.filter(c => exportedIds.includes(c.id)).length : 0;
   const newCount = hasExported ? controls.length - alreadyExportedCount : controls.length;
@@ -2738,8 +2742,11 @@ function csRenderStepExport(el) {
     return;
   }
 
-  // Exported tracking
-  const exportedIds = csSessionData.exportedControlIds || [];
+  // Exported tracking — if session was already exported but exportedControlIds is empty (legacy), treat all as exported
+  let exportedIds = csSessionData.exportedControlIds || [];
+  if (exportedIds.length === 0 && csSessionData.status === 'exported') {
+    exportedIds = selected.map(c => c.id).filter(Boolean);
+  }
   const hasExportedIds = exportedIds.length > 0;
   const newControls = hasExportedIds ? selected.filter(c => !exportedIds.includes(c.id)) : selected;
   const skippedControls = hasExportedIds ? selected.filter(c => exportedIds.includes(c.id)) : [];
@@ -2781,7 +2788,7 @@ function csRenderStepExport(el) {
           </div>
         `}
         <div class="cs-export-cta">
-          <button class="btn-admin-primary" id="cs-export-btn" onclick="csDoExport()" ${allExist ? 'disabled' : ''}>Confirm Export</button>
+          <button class="btn-admin-primary" id="cs-export-btn" onclick="csDoExport()">Confirm Export</button>
         </div>
         <div id="cs-export-progress" style="display:none">
           <div class="cs-export-progress-row">
