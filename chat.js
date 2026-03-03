@@ -14,6 +14,26 @@ const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send-btn');
 const toastContainer = document.getElementById('toast-container');
 
+// ── Sidebar section toggles ──
+document.querySelectorAll('.sidebar-section-toggle').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const sectionId = 'section-' + btn.getAttribute('data-section');
+    const section = document.getElementById(sectionId);
+    if (!section) return;
+    btn.classList.toggle('collapsed');
+    section.classList.toggle('open');
+  });
+});
+
+// ── Logout ──
+function adminLogout() {
+  fetch('/api/auth/logout', { method: 'POST' }).finally(() => {
+    document.cookie = 'wathba_token=; path=/; max-age=0';
+    window.location.replace('/login.html');
+  });
+}
+window.adminLogout = adminLogout;
+
 // Session context loaded from sessionStorage
 let sessionContext = {
   sessionId: null,
@@ -40,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // New session — load context from sessionStorage and create
     loadSessionContext();
     renderContextBar();
+    updateHeaderSessionInfo();
     initSession();
   }
 });
@@ -198,6 +219,20 @@ function renderContextBar() {
   }
 }
 
+function updateHeaderSessionInfo() {
+  const idEl = document.getElementById('chat-header-session-id');
+  const titleEl = document.getElementById('chat-header-title');
+  if (idEl && sessionContext.sessionId) {
+    idEl.textContent = sessionContext.sessionId.substring(0, 8) + '...';
+    idEl.title = sessionContext.sessionId;
+  }
+  // Update title with framework info if available
+  if (titleEl && sessionContext.requirements && sessionContext.requirements.length > 0) {
+    const fw = sessionContext.requirements[0].frameworkName;
+    if (fw) titleEl.textContent = `Audit: ${fw}`;
+  }
+}
+
 function toggleContextExpand(panelId) {
   const panel = document.getElementById(panelId);
   if (!panel) return;
@@ -341,8 +376,9 @@ async function resumeSession(sessionId) {
       sessionContext.contextFiles = data.context.contextFiles || [];
     }
 
-    // Update context bar with detailed info
+    // Update context bar and header with detailed info
     renderContextBar();
+    updateHeaderSessionInfo();
 
     // Render all history messages
     if (data.history && data.history.length > 0) {
@@ -390,6 +426,9 @@ async function initSession() {
       // Push UUID into URL so it's shareable / bookmarkable
       const newUrl = `${window.location.pathname}?session=${sessionContext.sessionId}`;
       window.history.replaceState({ sessionId: sessionContext.sessionId }, '', newUrl);
+
+      // Update header with session ID
+      updateHeaderSessionInfo();
     } else {
       throw new Error(createData.error || 'Failed to create session');
     }
