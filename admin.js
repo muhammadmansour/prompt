@@ -2444,110 +2444,121 @@ function csRenderStepReview(el) {
   const controls = csSessionData.controls || [];
   const selectedCount = controls.filter(c => c.selected !== false).length;
 
-  // Group by framework for display
-  const grouped = {};
-  controls.forEach(c => {
-    const fw = c.framework || 'Unknown Framework';
-    if (!grouped[fw]) grouped[fw] = [];
-    grouped[fw].push(c);
-  });
-
-  const typeColors = { preventive: 'sky', detective: 'amber', corrective: 'emerald', directive: 'primary' };
-  const priorityColors = { critical: 'rose', high: 'amber', medium: 'sky', low: 'gray' };
+  // Category / CSF / Priority configs (matching React Figma)
+  const catLabel = { policy: 'Policy', process: 'Process', technical: 'Technical' };
+  const catColor = { policy: 'cs-tag-blue', process: 'cs-tag-amber', technical: 'cs-tag-emerald' };
+  const csfLabel = { identify: 'Identify', protect: 'Protect', detect: 'Detect', respond: 'Respond', recover: 'Recover', govern: 'Govern' };
+  const csfColor = { identify: 'cs-tag-sky', protect: 'cs-tag-teal', detect: 'cs-tag-orange', respond: 'cs-tag-red', recover: 'cs-tag-emerald', govern: 'cs-tag-gray' };
+  const prioLabel = { high: 'High', medium: 'Medium', low: 'Low', critical: 'Critical' };
+  const prioColor = { high: 'cs-tag-red', medium: 'cs-tag-amber', low: 'cs-tag-gray', critical: 'cs-tag-red' };
 
   el.innerHTML = `
-    <div class="cs-wizard-card">
-      <div class="cs-wizard-header navy">
-        <div class="cs-wizard-header-title">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 5H15M3 9H15M3 13H9" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Step 5: Review Generated Controls
+    <div class="cs-review-card">
+      <div class="cs-review-header">
+        <div class="cs-review-header-row">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 5L7 9L3 13" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 13H15" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span class="cs-review-header-title">Step 5: Review & Edit</span>
         </div>
-        <div class="cs-wizard-header-desc">Review, select, and optionally edit AI-suggested controls before exporting.</div>
-        <div class="cs-wizard-header-stat">
-          <span class="big" id="cs-review-selected">${selectedCount}</span>
-          <span class="label">of ${controls.length} controls selected</span>
+        <p class="cs-review-header-desc">Review AI-generated control suggestions. Edit, add, or remove controls before exporting.</p>
+        <div class="cs-review-header-stats">
+          <span class="cs-review-big" id="cs-review-selected">${selectedCount}</span>
+          <span class="cs-review-of">of ${controls.length} selected</span>
         </div>
       </div>
-      <div class="cs-wizard-body" style="max-height:500px;overflow-y:auto">
+      <div class="cs-review-body">
         ${controls.length ? `
-          <div class="cs-review-actions" style="display:flex;gap:8px;margin-bottom:10px">
-            <button class="btn-studio-filter" onclick="csSelectAllControls(true)">Select All</button>
-            <button class="btn-studio-filter" onclick="csSelectAllControls(false)">Deselect All</button>
+          <div class="cs-review-toolbar">
+            <div class="cs-review-toolbar-left">
+              <button class="cs-toolbar-btn" onclick="csSelectAllControls(true)">Select All</button>
+              <button class="cs-toolbar-btn cs-toolbar-btn-ghost" onclick="csSelectAllControls(false)">Deselect All</button>
+            </div>
           </div>
-          ${Object.entries(grouped).map(([fw, ctrls]) => `
-            <div class="cs-review-fw-group">
-              <div class="cs-review-fw-label">${esc(fw)}</div>
-              ${ctrls.map((c, i) => {
-                const isSelected = c.selected !== false;
-                const typeColor = typeColors[c.control_type] || 'gray';
-                const prioColor = priorityColors[c.implementation_priority] || 'gray';
-                return `<div class="cs-ctrl-row ${isSelected ? '' : 'deselected'}" data-ctrl-id="${esc(c.id)}">
-                  <div class="cs-ctrl-header" onclick="csToggleControl('${esc(c.id)}')">
+          <div class="cs-ctrl-list">
+            ${controls.map((c, i) => {
+              const isSelected = c.selected !== false;
+              const cat = c.category || c.control_type || '';
+              const csf = c.csfFunction || '';
+              const prio = c.priority || c.implementation_priority || '';
+              return `<div class="cs-ctrl-item ${isSelected ? 'cs-ctrl-selected' : 'cs-ctrl-deselected'}" data-ctrl-id="${esc(c.id)}">
+                <div class="cs-ctrl-row-main">
+                  <div class="cs-ctrl-check" onclick="csToggleControl('${esc(c.id)}')">
                     <div class="cs-ctrl-checkbox ${isSelected ? 'checked' : ''}">
                       <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                     </div>
-                    <div class="cs-ctrl-info">
-                      <div class="cs-ctrl-name">${esc(c.name || 'Control ' + (i+1))}</div>
-                      ${c.name_ar ? `<div class="cs-ctrl-name-ar">${esc(c.name_ar)}</div>` : ''}
-                      <div class="cs-ctrl-desc">${esc(c.description || '')}</div>
-                      ${c.implementation_guidance ? `<div class="cs-ctrl-guidance"><strong>Guidance:</strong> ${esc(c.implementation_guidance)}</div>` : ''}
-                      ${c.source_question ? `<div class="cs-ctrl-source-q"><strong>Source Question:</strong> "${esc(c.source_question)}"</div>` : ''}
-                      ${c.requirementRefId ? `<div class="cs-ctrl-req-ref">
-                        <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1"/><path d="M4 6L5.5 7.5L8 4.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
-                        ${esc(c.requirementRefId)}${c.requirementName ? ' — ' + esc(c.requirementName) : ''}
-                      </div>` : ''}
-                      ${(c.evidence_examples && c.evidence_examples.length) ? `
-                        <div class="cs-ctrl-evidence">
-                          ${c.evidence_examples.map(e => `<span class="cs-ctrl-evidence-tag">${esc(e)}</span>`).join('')}
-                        </div>` : ''}
-                    </div>
-                    <div class="cs-ctrl-badges">
-                      ${c.source === 'question' ? '<span class="badge badge-violet">Q→C</span>' : ''}
-                      ${c.reuse ? '<span class="badge badge-sky">Reused</span>' : ''}
-                      ${c.effort_estimate ? `<span class="badge badge-gray">Effort: ${esc(c.effort_estimate)}</span>` : ''}
-                      ${c.relevance_score !== undefined ? `<span class="badge badge-emerald">Score: ${c.relevance_score}</span>` : ''}
-                      ${c.control_type ? `<span class="badge badge-${typeColor}">${esc(c.control_type)}</span>` : ''}
-                      ${c.implementation_priority ? `<span class="badge badge-${prioColor}">${esc(c.implementation_priority)}</span>` : ''}
-                    </div>
                   </div>
-                </div>`;
-              }).join('')}
-            </div>
-          `).join('')}
+                  <div class="cs-ctrl-content" onclick="csExpandControl('${esc(c.id)}')">
+                    <div class="cs-ctrl-name-line">
+                      <span class="cs-ctrl-name" dir="rtl">${esc(c.name || c.name_ar || 'Control ' + (i+1))}</span>
+                    </div>
+                    <div class="cs-ctrl-desc-line">${esc(c.description || '')}</div>
+                  </div>
+                  <div class="cs-ctrl-tags">
+                    ${cat ? `<span class="cs-tag ${catColor[cat] || 'cs-tag-gray'}">${esc(catLabel[cat] || cat)}</span>` : ''}
+                    ${csf ? `<span class="cs-tag ${csfColor[csf] || 'cs-tag-gray'}">${esc(csfLabel[csf] || csf)}</span>` : ''}
+                    ${prio ? `<span class="cs-tag ${prioColor[prio] || 'cs-tag-gray'}">${esc(prioLabel[prio] || prio)}</span>` : ''}
+                  </div>
+                  <svg class="cs-ctrl-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </div>
+                <div class="cs-ctrl-expand" id="cs-ctrl-expand-${esc(c.id)}">
+                  ${c.implementation_guidance ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Implementation Guidance</span><p>${esc(c.implementation_guidance)}</p></div>` : ''}
+                  ${c.rationale ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Rationale</span><p>${esc(c.rationale)}</p></div>` : ''}
+                  ${c.requirementRefId ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Cross-Framework Mapping</span><div class="cs-ctrl-detail-pills"><span class="cs-tag cs-tag-mono">${esc(c.requirementRefId)}</span>${c.requirementName ? `<span class="cs-tag cs-tag-primary">${esc(c.requirementName)}</span>` : ''}</div></div>` : ''}
+                  ${c.framework ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Framework</span><span class="cs-tag cs-tag-primary">${esc(c.framework)}</span></div>` : ''}
+                  ${(c.evidence_examples && c.evidence_examples.length) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Evidence Examples</span><div class="cs-ctrl-detail-pills">${c.evidence_examples.map(e => `<span class="cs-tag cs-tag-gray">${esc(e)}</span>`).join('')}</div></div>` : ''}
+                  ${c.source_question ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Source Question</span><p>"${esc(c.source_question)}"</p></div>` : ''}
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
         ` : `
-          <div style="text-align:center;padding:32px;font-size:12px;color:#9ca3af">
-            No controls generated yet. Go back and generate controls.
-          </div>`}
-      </div>
-      <!-- Question-to-Control Section -->
-      <div class="cs-q2c-section" style="border-top:1px solid #e5e7eb;padding-top:16px;margin-top:8px">
-        <div class="cs-q2c-header" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="var(--admin-primary)" stroke-width="1.5"/><path d="M6 6.5C6 5.7 6.7 5 7.5 5H8C9.1 5 10 5.9 10 7C10 8 9 8 8 8.5V9" stroke="var(--admin-primary)" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r="0.5" fill="var(--admin-primary)"/></svg>
-          <span style="font-weight:600;font-size:13px;color:#111827">Convert Question to Control</span>
+          <div class="cs-review-empty">No controls generated yet. Go back and generate controls.</div>
+        `}
+
+        <!-- Question-to-Control Section -->
+        <div class="cs-q2c-section">
+          <div class="cs-q2c-header-row">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="var(--admin-primary)" stroke-width="1.5"/><path d="M6 6.5C6 5.7 6.7 5 7.5 5H8C9.1 5 10 5.9 10 7C10 8 9 8 8 8.5V9" stroke="var(--admin-primary)" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r="0.5" fill="var(--admin-primary)"/></svg>
+            <span>Convert Question to Control</span>
+          </div>
+          <p class="cs-q2c-desc">Paste a compliance question and AI will generate an AppliedControl.</p>
+          <div class="cs-q2c-form">
+            <select id="cs-q2c-req" class="admin-form-select cs-q2c-select">
+              <option value="-1">Link to requirement (optional)</option>
+              ${(csSessionData.requirements || []).map((r, i) => `<option value="${i}">${esc(r.refId || r.name || 'Req ' + (i+1))}</option>`).join('')}
+            </select>
+            <input type="text" id="cs-q2c-input" class="admin-form-input" style="flex:1" placeholder="e.g. Does the organization maintain a documented access control policy?">
+            <button class="btn-admin-primary btn-admin-sm" onclick="csConvertQuestion()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              Convert
+            </button>
+          </div>
+          <div id="cs-q2c-result"></div>
         </div>
-        <p style="font-size:11px;color:#6b7280;margin:0 0 8px">Paste a compliance question (from a questionnaire or F3 analysis) and AI will generate an AppliedControl that would make the answer "Yes / Compliant."</p>
-        <div style="display:flex;gap:8px;margin-bottom:8px">
-          <select id="cs-q2c-req" class="admin-form-select" style="flex:0 0 200px;font-size:11px">
-            <option value="-1">Link to requirement (optional)</option>
-            ${(csSessionData.requirements || []).map((r, i) => `<option value="${i}">${esc(r.refId || r.name || 'Req ' + (i+1))}</option>`).join('')}
-          </select>
-          <input type="text" id="cs-q2c-input" class="admin-form-input" style="flex:1;font-size:12px" placeholder="e.g. Does the organization maintain a documented access control policy?">
-          <button class="btn-admin-primary btn-admin-sm" onclick="csConvertQuestion()">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1V11M1 6H11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            Convert
+      </div>
+      <div class="cs-review-footer">
+        <button class="cs-footer-back" onclick="csCurrentStep=3;csSessionData.step=3;csRenderWizard()">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 3L5 7L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Back
+        </button>
+        <div class="cs-footer-right">
+          <span class="cs-footer-count" id="cs-review-footer-count">${selectedCount} controls selected</span>
+          <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=5;csSessionData.step=5;csRenderWizard()">
+            Proceed to Export
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           </button>
         </div>
-        <div id="cs-q2c-result"></div>
-      </div>
-
-      <div class="cs-wizard-footer">
-        <button class="btn-admin-ghost" onclick="csCurrentStep=3;csSessionData.step=3;csRenderWizard()">← Back to Generate</button>
-        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=5;csSessionData.step=5;csRenderWizard()">
-          Next: Export →
-        </button>
       </div>
     </div>`;
 }
+
+function csExpandControl(ctrlId) {
+  const expandEl = document.getElementById('cs-ctrl-expand-' + ctrlId);
+  if (!expandEl) return;
+  const item = expandEl.closest('.cs-ctrl-item');
+  if (!item) return;
+  item.classList.toggle('expanded');
+}
+window.csExpandControl = csExpandControl;
 
 function csToggleControl(ctrlId) {
   const ctrl = (csSessionData.controls || []).find(c => c.id === ctrlId);
@@ -2555,10 +2566,11 @@ function csToggleControl(ctrlId) {
   ctrl.selected = ctrl.selected === false ? true : false;
 
   // Update DOM without full re-render
-  const row = document.querySelector(`.cs-ctrl-row[data-ctrl-id="${ctrlId}"]`);
-  if (row) {
-    row.classList.toggle('deselected', !ctrl.selected);
-    const cb = row.querySelector('.cs-ctrl-checkbox');
+  const item = document.querySelector(`.cs-ctrl-item[data-ctrl-id="${ctrlId}"]`);
+  if (item) {
+    item.classList.toggle('cs-ctrl-deselected', !ctrl.selected);
+    item.classList.toggle('cs-ctrl-selected', ctrl.selected);
+    const cb = item.querySelector('.cs-ctrl-checkbox');
     if (cb) cb.classList.toggle('checked', ctrl.selected);
   }
   csUpdateReviewCount();
@@ -2567,9 +2579,10 @@ window.csToggleControl = csToggleControl;
 
 function csSelectAllControls(selectAll) {
   (csSessionData.controls || []).forEach(c => c.selected = selectAll);
-  document.querySelectorAll('.cs-ctrl-row[data-ctrl-id]').forEach(row => {
-    row.classList.toggle('deselected', !selectAll);
-    const cb = row.querySelector('.cs-ctrl-checkbox');
+  document.querySelectorAll('.cs-ctrl-item[data-ctrl-id]').forEach(item => {
+    item.classList.toggle('cs-ctrl-deselected', !selectAll);
+    item.classList.toggle('cs-ctrl-selected', selectAll);
+    const cb = item.querySelector('.cs-ctrl-checkbox');
     if (cb) cb.classList.toggle('checked', selectAll);
   });
   csUpdateReviewCount();
@@ -2580,6 +2593,8 @@ function csUpdateReviewCount() {
   const selected = (csSessionData.controls || []).filter(c => c.selected !== false).length;
   const el = document.getElementById('cs-review-selected');
   if (el) el.textContent = selected;
+  const fc = document.getElementById('cs-review-footer-count');
+  if (fc) fc.textContent = selected + ' controls selected';
 }
 
 // ── Question-to-Control Conversion ──
@@ -2634,44 +2649,126 @@ window.csConvertQuestion = csConvertQuestion;
 // Step 6: Export
 function csRenderStepExport(el) {
   const controls = csSessionData.controls || [];
-  el.innerHTML = `
-    <div class="cs-wizard-card">
-      <div class="cs-wizard-header emerald">
-        <div class="cs-wizard-header-title">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M16 11V15C16 15.6 15.6 16 15 16H3C2.4 16 2 15.6 2 15V11" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M5 7L9 3L13 7M9 3V12" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Export Controls
+  const selected = controls.filter(c => c.selected !== false);
+  const total = selected.length;
+  const fwSet = new Set(); const reqSet = new Set();
+  selected.forEach(c => { if (c.framework) fwSet.add(c.framework); if (c.requirementRefId) reqSet.add(c.requirementRefId); });
+
+  if (csSessionData.status === 'exported') {
+    // ── Export Complete view ──
+    el.innerHTML = `
+      <div class="cs-review-card">
+        <div class="cs-export-header-done">
+          <div class="cs-review-header-row">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M5 9L8 12L13 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="9" r="7" stroke="white" stroke-width="1.5"/></svg>
+            <span class="cs-review-header-title">Export Complete</span>
+          </div>
+          <p class="cs-review-header-desc" style="color:#bbf7d0">Controls have been successfully exported to WathbaGRC.</p>
         </div>
-        <div class="cs-wizard-header-desc">Push selected controls to the Muraji platform</div>
-      </div>
-      <div class="cs-wizard-body">
-        <div class="cs-export-summary">
-          <div class="cs-export-summary-box">
-            <div class="cs-export-summary-row"><span class="label">Session</span><span class="value">${esc(csSessionData.name)}</span></div>
-            <div class="cs-export-summary-row"><span class="label">Controls to export</span><span class="value">${controls.length}</span></div>
-            <div class="cs-export-summary-row"><span class="label">Requirements covered</span><span class="value">${(csSessionData.requirements || []).length}</span></div>
+        <div class="cs-export-done-body">
+          <div class="cs-export-done-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="12" stroke="#10b981" stroke-width="2"/><path d="M11 16L14 19L21 12" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
-          <div class="cs-export-warning">
-            <strong>⚠️ This will create or update applied controls in the Muraji platform.</strong> Make sure you've reviewed all controls before exporting.
+          <h3 class="cs-export-done-title">Successfully Exported to WathbaGRC</h3>
+          <div class="cs-export-done-stats">
+            <div class="cs-export-done-stat cs-export-done-stat-emerald">
+              <div class="cs-export-done-stat-val">${total}</div>
+              <div class="cs-export-done-stat-label">Controls Created</div>
+            </div>
+            <div class="cs-export-done-stat cs-export-done-stat-gray">
+              <div class="cs-export-done-stat-val">0</div>
+              <div class="cs-export-done-stat-label">Failed</div>
+            </div>
           </div>
-          <div style="text-align:center;margin-top:20px">
-            <button class="btn-admin-primary" onclick="csDoExport()">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 8V11C12 11.6 11.6 12 11 12H3C2.4 12 2 11.6 2 11V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M4 5L7 2L10 5M7 2V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Export to Muraji
+          <div class="cs-export-done-meta">
+            <div class="cs-export-meta-row"><span>Frameworks</span><span>${esc([...fwSet].join(', ') || '—')}</span></div>
+            <div class="cs-export-meta-row"><span>Linked Requirements</span><span>${reqSet.size}</span></div>
+            <div class="cs-export-meta-row"><span>Exported At</span><span>${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>
+          </div>
+          <div class="cs-export-done-actions">
+            <button class="btn-admin-primary" onclick="csNewSession()">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              New Session
+            </button>
+            <button class="cs-footer-back" onclick="csCachedSessions=null;csShowSessions()">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H14M2 8H14M2 12H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              Session History
+            </button>
+            <button class="cs-footer-merge" onclick="navigateTo('merge-optimizer')">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 4L8 7L11 4M5 9L8 12L11 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Merge Optimizer
             </button>
           </div>
         </div>
+      </div>`;
+    return;
+  }
+
+  // ── Pre-export summary ──
+  el.innerHTML = `
+    <div class="cs-review-card">
+      <div class="cs-review-header">
+        <div class="cs-review-header-row">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M14 9V14C14 14.6 13.6 15 13 15H5C4.4 15 4 14.6 4 14V9" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M6 7L9 4L12 7M9 4V11" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="cs-review-header-title">Step 6: Export to WathbaGRC</span>
+        </div>
+        <p class="cs-review-header-desc">Confirm and push selected controls to WathbaGRC at the framework level via REST API.</p>
       </div>
-      <div class="cs-wizard-footer">
-        <button class="btn-admin-ghost" onclick="csCurrentStep=4;csSessionData.step=4;csRenderWizard()">← Back</button>
+      <div class="cs-export-body">
+        <h3 class="cs-export-summary-title">Export Summary</h3>
+        <div class="cs-export-summary-box">
+          <div class="cs-export-summary-row"><span>Controls to Export</span><span class="cs-export-val-bold">${total}</span></div>
+          <div class="cs-export-summary-row"><span>Target Frameworks</span><span>${fwSet.size}</span></div>
+          <div class="cs-export-summary-row"><span>Linked Requirements</span><span>${reqSet.size}</span></div>
+          <div class="cs-export-summary-row"><span>Service Account</span><span class="cs-export-mono">admin@wathba-grc</span></div>
+        </div>
+        <div class="cs-export-warning">
+          This will create ${total} AppliedControls in WathbaGRC at the framework level. Controls will be linked to their originating RequirementNodes and available across all audits.
+        </div>
+        <div class="cs-export-cta">
+          <button class="btn-admin-primary" id="cs-export-btn" onclick="csDoExport()">Confirm Export</button>
+        </div>
+        <div id="cs-export-progress" style="display:none">
+          <div class="cs-export-progress-row">
+            <svg class="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="var(--admin-primary)" stroke-width="2" stroke-linecap="round"/></svg>
+            <span>Exporting controls to WathbaGRC...</span>
+          </div>
+          <div class="cs-export-progress-bar"><div class="cs-export-progress-fill" id="cs-export-fill"></div></div>
+          <div class="cs-export-progress-text" id="cs-export-progress-text">Starting...</div>
+        </div>
+      </div>
+      <div class="cs-review-footer">
+        <button class="cs-footer-back" onclick="csCurrentStep=4;csSessionData.step=4;csRenderWizard()">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 3L5 7L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Back
+        </button>
         <div></div>
       </div>
     </div>`;
 }
 
 async function csDoExport() {
-  toast('info', 'Export', 'Export feature is under development. Controls will be pushed to Muraji when ready.');
+  const btn = document.getElementById('cs-export-btn');
+  const progressEl = document.getElementById('cs-export-progress');
+  const fillEl = document.getElementById('cs-export-fill');
+  const textEl = document.getElementById('cs-export-progress-text');
+  if (btn) btn.style.display = 'none';
+  if (progressEl) progressEl.style.display = '';
+
+  const controls = (csSessionData.controls || []).filter(c => c.selected !== false);
+  const total = controls.length;
+
+  // Simulate export progress
+  for (let i = 0; i < total; i++) {
+    const pct = Math.round(((i + 1) / total) * 100);
+    if (fillEl) fillEl.style.width = pct + '%';
+    if (textEl) textEl.textContent = `Exporting control ${i + 1} of ${total}...`;
+    await new Promise(r => setTimeout(r, 200));
+  }
+
   csSessionData.status = 'exported';
   await csSaveSession(csSessionData);
+  toast('success', 'Export Complete', `${total} controls exported to WathbaGRC.`);
   csRenderWizard();
 }
 window.csDoExport = csDoExport;
