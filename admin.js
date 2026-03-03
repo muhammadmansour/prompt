@@ -28,7 +28,6 @@ const API = {
   orgContexts: '/api/org-contexts',
   csSessions: '/api/cs-sessions',
   controlsGenerate: '/api/controls/generate',
-  questionToControl: '/api/controls/from-question',
 };
 
 // ─── State ────────────────────────────────────────────────────
@@ -2514,26 +2513,6 @@ function csRenderStepReview(el) {
           <div class="cs-review-empty">No controls generated yet. Go back and generate controls.</div>
         `}
 
-        <!-- Question-to-Control Section -->
-        <div class="cs-q2c-section">
-          <div class="cs-q2c-header-row">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="var(--admin-primary)" stroke-width="1.5"/><path d="M6 6.5C6 5.7 6.7 5 7.5 5H8C9.1 5 10 5.9 10 7C10 8 9 8 8 8.5V9" stroke="var(--admin-primary)" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r="0.5" fill="var(--admin-primary)"/></svg>
-            <span>Convert Question to Control</span>
-          </div>
-          <p class="cs-q2c-desc">Paste a compliance question and AI will generate an AppliedControl.</p>
-          <div class="cs-q2c-form">
-            <select id="cs-q2c-req" class="admin-form-select cs-q2c-select">
-              <option value="-1">Link to requirement (optional)</option>
-              ${(csSessionData.requirements || []).map((r, i) => `<option value="${i}">${esc(r.refId || r.name || 'Req ' + (i+1))}</option>`).join('')}
-            </select>
-            <input type="text" id="cs-q2c-input" class="admin-form-input" style="flex:1" placeholder="e.g. Does the organization maintain a documented access control policy?">
-            <button class="btn-admin-primary btn-admin-sm" onclick="csConvertQuestion()">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-              Convert
-            </button>
-          </div>
-          <div id="cs-q2c-result"></div>
-        </div>
       </div>
       <div class="cs-review-footer">
         <button class="cs-footer-back" onclick="csCurrentStep=3;csSessionData.step=3;csRenderWizard()">
@@ -2597,54 +2576,6 @@ function csUpdateReviewCount() {
   if (fc) fc.textContent = selected + ' controls selected';
 }
 
-// ── Question-to-Control Conversion ──
-async function csConvertQuestion() {
-  const input = document.getElementById('cs-q2c-input');
-  const reqSelect = document.getElementById('cs-q2c-req');
-  const resultEl = document.getElementById('cs-q2c-result');
-  if (!input || !reqSelect) return;
-  const question = input.value.trim();
-  if (!question) { toast('error', 'Missing', 'Please enter a compliance question.'); input.focus(); return; }
-  if (!csSessionData.orgContext) { toast('error', 'Context Required', 'Organization Context required.'); return; }
-
-  const reqIdx = parseInt(reqSelect.value);
-  const req = (csSessionData.requirements || [])[reqIdx] || null;
-
-  resultEl.innerHTML = '<div class="studio-loading"><svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Converting question to control...</div>';
-
-  try {
-    const res = await fetch(API.questionToControl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        question,
-        requirement: req ? { refId: req.refId, name: req.name, description: req.description, frameworkName: req.frameworkName } : null,
-        orgContext: csSessionData.orgContext,
-      }),
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error || 'Conversion failed');
-
-    const c = data.control;
-    c.id = 'ctrl-q2c-' + Date.now();
-    c.selected = true;
-    c.source = 'question';
-    c.source_question = question;
-    c.requirementRefId = req?.refId || '';
-    c.requirementName = req?.name || '';
-    c.framework = req?.frameworkName || '';
-    csSessionData.controls = csSessionData.controls || [];
-    csSessionData.controls.push(c);
-    csSaveStep();
-
-    toast('success', 'Converted', `Control "${c.name}" created from question.`);
-    csRenderWizard(); // Re-render review step
-  } catch (err) {
-    resultEl.innerHTML = `<div style="color:#ef4444;font-size:12px">Error: ${esc(err.message)}</div>`;
-    toast('error', 'Failed', err.message);
-  }
-}
-window.csConvertQuestion = csConvertQuestion;
 
 // Step 6: Export
 function csRenderStepExport(el) {

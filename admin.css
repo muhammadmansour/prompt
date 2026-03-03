@@ -2041,35 +2041,6 @@
   margin-top: 2px;
 }
 
-/* Q2C section */
-.cs-q2c-section {
-  border-top: 1px solid #e5e7eb;
-  padding-top: 16px;
-  margin-top: 12px;
-}
-.cs-q2c-header-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 13px;
-  color: #111827;
-  margin-bottom: 4px;
-}
-.cs-q2c-desc {
-  font-size: 11px;
-  color: #6b7280;
-  margin: 0 0 8px;
-}
-.cs-q2c-form {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.cs-q2c-select {
-  flex: 0 0 200px;
-  font-size: 11px;
-}
 
 /* Review footer */
 .cs-review-footer {
@@ -2979,8 +2950,6 @@
 }
 
 /* Question-to-Control section */
-.cs-q2c-section .admin-form-select,
-.cs-q2c-section .admin-form-input { height: 32px; font-size: 11px; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1024px) {
