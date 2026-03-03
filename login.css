@@ -362,16 +362,10 @@
   align-items: center;
   gap: 2px;
 }
-.login-footer-brand {
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: 3px;
-  color: #1f2937;
-}
 .login-footer-logo {
   max-width: 120px;
   height: auto;
-  margin-top: 8px;
+  margin-top: 6px;
   opacity: 0.85;
 }
 
