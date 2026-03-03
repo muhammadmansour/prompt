@@ -151,6 +151,14 @@ db.exec(`
   );
 `);
 
+// Migrate cs_sessions: add exported_control_ids if missing
+try {
+  const csCols = db.pragma('table_info(cs_sessions)').map(c => c.name);
+  if (!csCols.includes('exported_control_ids')) {
+    db.exec(`ALTER TABLE cs_sessions ADD COLUMN exported_control_ids TEXT NOT NULL DEFAULT '[]'`);
+  }
+} catch (migErr) { console.warn('CS sessions migration:', migErr.message); }
+
 // Migrate org_contexts: add new profile columns if missing
 try {
   const cols = db.pragma('table_info(org_contexts)').map(c => c.name);
@@ -243,11 +251,11 @@ function orgContextToJSON(r) {
 const dbListCsSessions = db.prepare(`SELECT * FROM cs_sessions ORDER BY updated_at DESC`);
 const dbGetCsSession = db.prepare(`SELECT * FROM cs_sessions WHERE id = ?`);
 const dbInsertCsSession = db.prepare(`
-  INSERT INTO cs_sessions (id, name, status, step, requirements, collections, selected_files, session_files, org_context, controls, framework, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO cs_sessions (id, name, status, step, requirements, collections, selected_files, session_files, org_context, controls, framework, exported_control_ids, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const dbUpdateCsSession = db.prepare(`
-  UPDATE cs_sessions SET name = ?, status = ?, step = ?, requirements = ?, collections = ?, selected_files = ?, session_files = ?, org_context = ?, controls = ?, framework = ?, updated_at = ? WHERE id = ?
+  UPDATE cs_sessions SET name = ?, status = ?, step = ?, requirements = ?, collections = ?, selected_files = ?, session_files = ?, org_context = ?, controls = ?, framework = ?, exported_control_ids = ?, updated_at = ? WHERE id = ?
 `);
 const dbDeleteCsSession = db.prepare(`DELETE FROM cs_sessions WHERE id = ?`);
 
@@ -264,6 +272,7 @@ function csSessionToJSON(row) {
     orgContext: row.org_context ? JSON.parse(row.org_context) : null,
     controls: JSON.parse(row.controls || '[]'),
     framework: row.framework || '',
+    exportedControlIds: JSON.parse(row.exported_control_ids || '[]'),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1599,6 +1608,7 @@ const server = http.createServer(async (req, res) => {
         body.orgContext ? JSON.stringify(body.orgContext) : null,
         JSON.stringify(body.controls || []),
         body.framework || '',
+        JSON.stringify(body.exportedControlIds || []),
         now,
         now
       );
@@ -1645,6 +1655,7 @@ const server = http.createServer(async (req, res) => {
         body.orgContext !== undefined ? (body.orgContext ? JSON.stringify(body.orgContext) : null) : existing.org_context,
         body.controls !== undefined ? JSON.stringify(body.controls) : existing.controls,
         body.framework !== undefined ? body.framework : existing.framework,
+        body.exportedControlIds !== undefined ? JSON.stringify(body.exportedControlIds) : existing.exported_control_ids,
         now,
         id
       );

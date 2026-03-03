@@ -1270,6 +1270,10 @@ async function csShowSessions() {
   document.getElementById('cs-step-indicator').style.display = 'none';
   document.getElementById('cs-back-to-sessions').style.display = 'none';
 
+  // Reset subtitle
+  const subtitleEl = document.querySelector('#page-controls-studio .page-subtitle');
+  if (subtitleEl) subtitleEl.textContent = 'AI-powered control suggestions for framework requirements — proactive setup before audits';
+
   const content = document.getElementById('cs-content');
   content.innerHTML = '<div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading sessions...</span></div>';
 
@@ -1441,9 +1445,21 @@ async function csOpenSession(id) {
     const d = await fetchJSON(API.csSessions + '/' + id);
     if (d.success && d.session) {
       csSessionData = d.session;
-      csCurrentStep = csSessionData.step || 0;
+      // For exported/generated sessions, jump straight to the review step
+      if (csSessionData.status === 'exported' || csSessionData.status === 'generated') {
+        csCurrentStep = 4; // Review step
+      } else {
+        csCurrentStep = csSessionData.step || 0;
+      }
       csMode = 'wizard';
       document.getElementById('cs-back-to-sessions').style.display = '';
+
+      // Update subtitle with session name
+      const subtitleEl = document.querySelector('#page-controls-studio .page-subtitle');
+      if (subtitleEl && csSessionData.name) {
+        subtitleEl.innerHTML = 'Viewing results for: <strong>' + esc(csSessionData.name) + '</strong>';
+      }
+
       csRenderWizard();
     }
   } catch (e) {
@@ -1463,9 +1479,14 @@ async function csDeleteSessionConfirm(id, name) {
 window.csDeleteSessionConfirm = csDeleteSessionConfirm;
 
 function csRenderWizard() {
-  // Step indicator
+  // Step indicator - hide for exported/generated sessions viewing results
   const indEl = document.getElementById('cs-step-indicator');
-  indEl.style.display = '';
+  const isReadOnly = csSessionData.status === 'exported' || csSessionData.status === 'generated';
+  if (isReadOnly && csCurrentStep === 4) {
+    indEl.style.display = 'none';
+  } else {
+    indEl.style.display = '';
+  }
   let stepsH = '<div class="cs-steps-row">';
   CS_STEPS.forEach((s, i) => {
     const state = i < csCurrentStep ? 'completed' : (i === csCurrentStep ? 'current' : 'future');
@@ -2800,6 +2821,10 @@ async function csDoExport() {
     await new Promise(r => setTimeout(r, 200));
   }
 
+  // Mark exported control IDs so review can show "Already exported" badges
+  const prevExported = csSessionData.exportedControlIds || [];
+  const newlyExported = controls.map(c => c.id).filter(Boolean);
+  csSessionData.exportedControlIds = [...new Set([...prevExported, ...newlyExported])];
   csSessionData.status = 'exported';
   await csSaveSession(csSessionData);
   toast('success', 'Export Complete', `${total} controls exported to WathbaGRC.`);
