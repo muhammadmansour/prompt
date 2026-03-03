@@ -2716,6 +2716,13 @@ function csRenderStepExport(el) {
     return;
   }
 
+  // Exported tracking
+  const exportedIds = csSessionData.exportedControlIds || [];
+  const hasExportedIds = exportedIds.length > 0;
+  const newControls = hasExportedIds ? selected.filter(c => !exportedIds.includes(c.id)) : selected;
+  const skippedControls = hasExportedIds ? selected.filter(c => exportedIds.includes(c.id)) : [];
+  const allExist = hasExportedIds && newControls.length === 0;
+
   // ── Pre-export summary ──
   el.innerHTML = `
     <div class="cs-review-card">
@@ -2730,15 +2737,29 @@ function csRenderStepExport(el) {
         <h3 class="cs-export-summary-title">Export Summary</h3>
         <div class="cs-export-summary-box">
           <div class="cs-export-summary-row"><span>Controls to Export</span><span class="cs-export-val-bold">${total}</span></div>
+          ${hasExportedIds ? `
+            <div class="cs-export-summary-row"><span>New Controls</span><span class="cs-export-val-sky">${newControls.length}</span></div>
+            <div class="cs-export-summary-row"><span>Already Exist (will skip)</span><span class="cs-export-val-amber">${skippedControls.length}</span></div>
+          ` : ''}
           <div class="cs-export-summary-row"><span>Target Frameworks</span><span>${fwSet.size}</span></div>
           <div class="cs-export-summary-row"><span>Linked Requirements</span><span>${reqSet.size}</span></div>
           <div class="cs-export-summary-row"><span>Service Account</span><span class="cs-export-mono">admin@wathba-grc</span></div>
         </div>
-        <div class="cs-export-warning">
-          This will create ${total} AppliedControls in WathbaGRC at the framework level. Controls will be linked to their originating RequirementNodes and available across all audits.
-        </div>
+        ${allExist ? `
+          <div class="cs-export-merge-warning">
+            <p>All selected controls already exist in WathbaGRC. Consider using the <strong>Merge Optimizer</strong> to consolidate and upgrade existing controls instead of re-exporting.</p>
+            <button class="cs-merge-btn" onclick="navigateTo('merge-optimizer')">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M5 4L8 7L11 4M5 9L8 12L11 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Open Merge Optimizer
+            </button>
+          </div>
+        ` : `
+          <div class="cs-export-warning">
+            This will create ${newControls.length || total} AppliedControls in WathbaGRC at the framework level. Controls will be linked to their originating RequirementNodes and available across all audits.
+          </div>
+        `}
         <div class="cs-export-cta">
-          <button class="btn-admin-primary" id="cs-export-btn" onclick="csDoExport()">Confirm Export</button>
+          <button class="btn-admin-primary" id="cs-export-btn" onclick="csDoExport()" ${allExist ? 'disabled' : ''}>Confirm Export</button>
         </div>
         <div id="cs-export-progress" style="display:none">
           <div class="cs-export-progress-row">
