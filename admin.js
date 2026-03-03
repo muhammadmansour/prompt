@@ -1267,6 +1267,7 @@ function loadControlsStudio() {
 
 async function csShowSessions() {
   csMode = 'sessions';
+  csJustExported = false;
   document.getElementById('cs-step-indicator').style.display = 'none';
   document.getElementById('cs-back-to-sessions').style.display = 'none';
 
@@ -2324,6 +2325,7 @@ function csRenderStepGenerate(el) {
 }
 
 let csGenerating = false;
+let csJustExported = false; // true right after csDoExport, reset when navigating away
 
 async function csStartGenerate() {
   if (csGenerating) return;
@@ -2692,8 +2694,9 @@ function csRenderStepExport(el) {
   const fwSet = new Set(); const reqSet = new Set();
   selected.forEach(c => { if (c.framework) fwSet.add(c.framework); if (c.requirementRefId) reqSet.add(c.requirementRefId); });
 
-  if (csSessionData.status === 'exported') {
-    // ── Export Complete view ──
+  if (csSessionData.status === 'exported' && csJustExported) {
+    csJustExported = false; // reset the flag
+    // ── Export Complete view (only shown right after actual export) ──
     el.innerHTML = `
       <div class="cs-review-card">
         <div class="cs-export-header-done">
@@ -2835,6 +2838,7 @@ async function csDoExport() {
   csSessionData.status = 'exported';
   await csSaveSession(csSessionData);
   toast('success', 'Export Complete', `${total} controls exported to WathbaGRC.`);
+  csJustExported = true; // flag so Export step shows completion view
   csRenderWizard();
 }
 window.csDoExport = csDoExport;
