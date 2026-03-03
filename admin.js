@@ -1273,91 +1273,140 @@ async function csShowSessions() {
   const content = document.getElementById('cs-content');
   content.innerHTML = '<div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading sessions...</span></div>';
 
-  csCachedSessions = null; // Force refresh from DB
+  csCachedSessions = null;
   const csSessions = await csGetSessions();
 
-  // Stats
+  // Compute stats
   const totalSessions = csSessions.length;
   const totalControls = csSessions.reduce((a, s) => a + (s.controls || []).length, 0);
+  const totalExported = csSessions.filter(s => s.status === 'exported').reduce((a, s) => a + (s.controls || []).length, 0);
   const exported = csSessions.filter(s => s.status === 'exported').length;
+  const mergeAvailable = 0; // placeholder for future merge feature
 
   let h = `
-    <div class="cs-sessions-stats">
-      <div class="cs-sessions-stat">
-        <div class="cs-sessions-stat-icon stat-bg-primary"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3H14M2 8H14M2 13H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-        <div class="cs-sessions-stat-val">${totalSessions}</div>
-        <div class="cs-sessions-stat-label">Total Sessions</div>
+    <div class="cs-stats-grid">
+      <div class="cs-stat-card">
+        <div class="cs-stat-icon cs-stat-icon-primary">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4H14M2 8H14M2 12H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div class="cs-stat-value">${totalSessions}</div>
+        <div class="cs-stat-label">Total Sessions</div>
       </div>
-      <div class="cs-sessions-stat">
-        <div class="cs-sessions-stat-icon stat-bg-emerald"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div class="cs-sessions-stat-val">${totalControls}</div>
-        <div class="cs-sessions-stat-label">Controls Generated</div>
+      <div class="cs-stat-card">
+        <div class="cs-stat-icon cs-stat-icon-emerald">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M6 8L7.5 9.5L10 6.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="cs-stat-value">${totalControls}</div>
+        <div class="cs-stat-label">Controls Generated</div>
       </div>
-      <div class="cs-sessions-stat">
-        <div class="cs-sessions-stat-icon stat-bg-amber"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V12C2 12.6 2.4 13 3 13H13C13.6 13 14 12.6 14 12V7C14 6.4 13.6 6 13 6H8L6.5 4H3C2.4 4 2 4.4 2 5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div class="cs-sessions-stat-val">${exported}</div>
-        <div class="cs-sessions-stat-label">Exported</div>
+      <div class="cs-stat-card">
+        <div class="cs-stat-icon cs-stat-icon-sky">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 8L7 11L12 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 8A5 5 0 1 1 3 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div class="cs-stat-value">${totalExported}</div>
+        <div class="cs-stat-label">Controls Exported</div>
       </div>
-      <div class="cs-sessions-stat">
-        <div class="cs-sessions-stat-icon stat-bg-sky"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/></svg></div>
-        <div class="cs-sessions-stat-val">${totalSessions - exported}</div>
-        <div class="cs-sessions-stat-label">In Progress</div>
+      <div class="cs-stat-card">
+        <div class="cs-stat-icon cs-stat-icon-amber">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 4L8 7L11 4M5 9L8 12L11 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="cs-stat-value">${mergeAvailable}</div>
+        <div class="cs-stat-label">Merge Available</div>
       </div>
     </div>`;
 
+  // Session list card
+  h += `<div class="cs-list-card">`;
+  h += `<div class="cs-list-header">
+    <div>
+      <h2 class="cs-list-title">Studio Sessions</h2>
+      <p class="cs-list-subtitle">${exported} exported, ${totalSessions - exported} in progress</p>
+    </div>
+    <button class="btn-admin-primary btn-admin-sm" onclick="csNewSession()">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      New Session
+    </button>
+  </div>`;
+
   if (!csSessions.length) {
-    h += `
-      <div class="admin-card empty-state-box">
-        <div class="empty-icon"><svg width="32" height="32" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="12" stroke="#cbd5e1" stroke-width="2"/><path d="M10 16L14 20L22 12" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <h3>No studio sessions yet</h3>
-        <p>Start a new session to generate AI-suggested applied controls for your framework requirements.</p>
-        <button class="btn-admin-primary" style="margin-top:16px" onclick="csNewSession()">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          New Session
-        </button>
-      </div>`;
+    h += `<div class="cs-empty-state">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><circle cx="20" cy="20" r="16" stroke="#e5e7eb" stroke-width="2"/><path d="M14 20L18 24L26 16" stroke="#d1d5db" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <h3>No studio sessions yet</h3>
+      <p>Start a new session to generate AI-suggested applied controls for your framework requirements.</p>
+    </div>`;
   } else {
-    h += '<div class="admin-card">';
+    h += '<div class="cs-list-rows">';
     h += csSessions.map(s => {
       const reqCount = (s.requirements || []).length;
       const ctrlCount = (s.controls || []).length;
-      const statusBadge = s.status === 'exported'
-        ? '<span class="badge badge-emerald">Exported</span>'
+      const exportedCtrl = s.status === 'exported' ? ctrlCount : 0;
+
+      // Status badge
+      const statusCfg = s.status === 'exported'
+        ? { label: 'Exported', cls: 'cs-badge-emerald' }
         : s.status === 'generated'
-        ? '<span class="badge badge-sky">Generated</span>'
-        : '<span class="badge badge-amber">Draft</span>';
+        ? { label: 'Generated', cls: 'cs-badge-amber' }
+        : { label: 'Draft', cls: 'cs-badge-gray' };
+
+      // Org context name
+      const orgName = s.orgContext?.nameEn || s.orgContext?.name || '';
+
+      // Framework names from requirements
+      const fwSet = new Set();
+      (s.requirements || []).forEach(r => { if (r.frameworkName) fwSet.add(r.frameworkName); });
+      const fwNames = [...fwSet];
+
+      // Action config
+      let actionLabel, actionIcon;
+      if (s.status === 'draft') { actionLabel = 'Resume'; actionIcon = '<path d="M5 3L12 8L5 13V3Z" fill="currentColor"/>'; }
+      else if (s.status === 'generated') { actionLabel = 'Review'; actionIcon = '<path d="M2 8C2 8 5 3 8 3C11 3 14 8 14 8C14 8 11 13 8 13C5 13 2 8 2 8Z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/>'; }
+      else { actionLabel = 'View Results'; actionIcon = '<path d="M2 8C2 8 5 3 8 3C11 3 14 8 14 8C14 8 11 13 8 13C5 13 2 8 2 8Z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/>'; }
+
       return `
-        <div class="cs-session-row">
+        <div class="cs-session-row" onclick="csOpenSession('${esc(s.id)}')">
           <div class="cs-session-main">
             <div class="cs-session-name-row">
               <span class="cs-session-name">${esc(s.name || 'Unnamed Session')}</span>
-              ${statusBadge}
+              <span class="cs-badge ${statusCfg.cls}">${statusCfg.label}</span>
             </div>
             <div class="cs-session-meta">
-              <span>${fmtDate(s.created_at || s.createdAt)}</span>
-              ${s.framework ? '<span>• ' + esc(s.framework) + '</span>' : ''}
+              <span class="cs-meta-date">
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="2" y="3" width="10" height="9" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M2 6H12M5 2V4M9 2V4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                ${fmtDate(s.created_at || s.createdAt)}
+              </span>
+              ${orgName ? `<span>${esc(orgName)}</span>` : ''}
+              ${fwNames.length ? `<span class="cs-meta-sep">|</span><span>${esc(fwNames.join(', '))}</span>` : ''}
             </div>
           </div>
-          <div class="cs-session-stats-row">
-            <div class="cs-session-stat-item"><div class="val">${reqCount}</div><div class="lbl">Reqs</div></div>
-            <div class="cs-session-stat-item"><div class="val emerald">${ctrlCount}</div><div class="lbl">Controls</div></div>
+          <div class="cs-session-numbers">
+            <div class="cs-num-col">
+              <div class="cs-num-val">${reqCount}</div>
+              <div class="cs-num-label">Reqs</div>
+            </div>
+            <div class="cs-num-col">
+              <div class="cs-num-val">${ctrlCount}</div>
+              <div class="cs-num-label">Generated</div>
+            </div>
+            <div class="cs-num-col">
+              <div class="cs-num-val cs-num-emerald">${exportedCtrl}</div>
+              <div class="cs-num-label">Exported</div>
+            </div>
           </div>
-          <div class="cs-session-action">
-            <button class="btn-admin-outline btn-admin-sm" onclick="csOpenSession('${esc(s.id)}')">Open →</button>
-            <button class="btn-admin-outline btn-admin-sm" style="color:#dc2626;border-color:#fecaca" onclick="event.stopPropagation();csDeleteSessionConfirm('${esc(s.id)}','${esc(s.name || 'Unnamed').replace(/'/g, "\\'")}')">
+          <div class="cs-session-actions">
+            <button class="cs-action-btn" onclick="event.stopPropagation();csOpenSession('${esc(s.id)}')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">${actionIcon}</svg>
+              ${actionLabel}
+            </button>
+            <button class="cs-delete-btn" onclick="event.stopPropagation();csDeleteSessionConfirm('${esc(s.id)}','${esc((s.name || 'Unnamed').replace(/'/g, "\\'"))}')">
               <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
           </div>
+          <svg class="cs-row-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>`;
     }).join('');
     h += '</div>';
-    h += `<div style="margin-top:16px;text-align:center">
-            <button class="btn-admin-primary" onclick="csNewSession()">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-              New Session
-            </button>
-          </div>`;
   }
+  h += '</div>';
 
   content.innerHTML = h;
 }
@@ -2324,7 +2373,7 @@ async function csStartGenerate() {
       }
     };
 
-    addLog(`Sending ${reqs.length} requirements to Gemini API...`);
+    addLog(`Sending ${reqs.length} requirements to AI engine...`);
 
     const res = await fetch('/api/controls/generate', {
       method: 'POST',

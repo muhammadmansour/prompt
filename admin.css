@@ -1360,19 +1360,21 @@
 .cs-step-line.future { background: #e5e7eb; }
 
 /* Session List */
-.cs-sessions-stats {
+/* ── Controls Studio: Stats Grid ── */
+.cs-stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
   margin-bottom: 20px;
 }
-.cs-sessions-stat {
+@media (max-width: 768px) { .cs-stats-grid { grid-template-columns: repeat(2, 1fr); } }
+.cs-stat-card {
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   padding: 16px;
 }
-.cs-sessions-stat-icon {
+.cs-stat-icon {
   width: 32px;
   height: 32px;
   border-radius: 8px;
@@ -1381,17 +1383,58 @@
   justify-content: center;
   margin-bottom: 8px;
 }
-.cs-sessions-stat-val {
-  font-size: 22px;
+.cs-stat-icon-primary { background: rgba(0,119,204,0.1); color: #0077cc; }
+.cs-stat-icon-emerald { background: #ecfdf5; color: #059669; }
+.cs-stat-icon-sky { background: #f0f9ff; color: #0284c7; }
+.cs-stat-icon-amber { background: #fffbeb; color: #d97706; }
+.cs-stat-value {
+  font-size: 24px;
   font-weight: 700;
   color: #111827;
+  line-height: 1;
 }
-.cs-sessions-stat-label {
+.cs-stat-label {
   font-size: 10px;
   color: #6b7280;
   margin-top: 2px;
 }
 
+/* ── Controls Studio: Session List Card ── */
+.cs-list-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.cs-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.cs-list-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  margin: 0;
+}
+.cs-list-subtitle {
+  font-size: 10px;
+  color: #9ca3af;
+  margin: 2px 0 0;
+}
+.cs-empty-state {
+  padding: 48px 24px;
+  text-align: center;
+}
+.cs-empty-state svg { margin: 0 auto 12px; }
+.cs-empty-state h3 { font-size: 14px; font-weight: 600; color: #374151; margin: 0 0 6px; }
+.cs-empty-state p { font-size: 12px; color: #9ca3af; margin: 0; max-width: 360px; margin-inline: auto; }
+
+.cs-list-rows { }
+
+/* ── Controls Studio: Session Row ── */
 .cs-session-row {
   display: flex;
   align-items: center;
@@ -1399,13 +1442,14 @@
   padding: 14px 20px;
   border-bottom: 1px solid #f3f4f6;
   transition: background 0.15s;
+  cursor: pointer;
 }
+.cs-session-row:last-child { border-bottom: none; }
 .cs-session-row:hover {
   background: rgba(0,0,0,0.015);
 }
-.cs-session-row:hover .cs-session-action {
-  opacity: 1;
-}
+.cs-session-row:hover .cs-session-actions { opacity: 1; }
+
 .cs-session-main {
   flex: 1;
   min-width: 0;
@@ -1415,45 +1459,110 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 .cs-session-name {
   font-size: 13px;
   font-weight: 500;
   color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+/* Badges */
+.cs-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.cs-badge-emerald { background: #ecfdf5; color: #059669; }
+.cs-badge-amber { background: #fffbeb; color: #d97706; }
+.cs-badge-gray { background: #f3f4f6; color: #6b7280; }
+
 .cs-session-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   font-size: 10px;
   color: #9ca3af;
 }
-.cs-session-stats-row {
+.cs-meta-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.cs-meta-date svg { color: #d1d5db; }
+.cs-meta-sep { color: #e5e7eb; }
+
+/* Numbers columns */
+.cs-session-numbers {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   flex-shrink: 0;
 }
-.cs-session-stat-item {
-  text-align: center;
-}
-.cs-session-stat-item .val {
-  font-size: 11px;
+.cs-num-col { text-align: center; min-width: 42px; }
+.cs-num-val {
+  font-size: 12px;
   font-weight: 600;
   color: #111827;
 }
-.cs-session-stat-item .val.emerald {
-  color: #059669;
-}
-.cs-session-stat-item .lbl {
+.cs-num-emerald { color: #059669; }
+.cs-num-label {
   font-size: 9px;
   color: #9ca3af;
+  margin-top: 1px;
 }
-.cs-session-action {
+
+/* Action buttons (visible on hover) */
+.cs-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   opacity: 0;
   transition: opacity 0.15s;
+  flex-shrink: 0;
 }
+.cs-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #0077cc;
+  border: 1px solid rgba(0,119,204,0.2);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.cs-action-btn:hover { background: rgba(0,119,204,0.05); }
+.cs-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid #fecaca;
+  background: none;
+  color: #dc2626;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.cs-delete-btn:hover { background: #fef2f2; }
+
+.cs-row-chevron {
+  color: #d1d5db;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.cs-session-row:hover .cs-row-chevron { color: #0077cc; }
 
 /* Wizard Step Card */
 .cs-wizard-card {
@@ -2664,7 +2773,7 @@
   .admin-main {
     margin-left: 60px;
   }
-  .cs-sessions-stats {
+  .cs-stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }
   .fc-stats-grid,
