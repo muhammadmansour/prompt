@@ -2442,6 +2442,10 @@ window.csStartGenerate = csStartGenerate;
 function csRenderStepReview(el) {
   const controls = csSessionData.controls || [];
   const selectedCount = controls.filter(c => c.selected !== false).length;
+  const exportedIds = csSessionData.exportedControlIds || [];
+  const hasExported = exportedIds.length > 0;
+  const alreadyExportedCount = hasExported ? controls.filter(c => exportedIds.includes(c.id)).length : 0;
+  const newCount = hasExported ? controls.length - alreadyExportedCount : controls.length;
 
   // Category / CSF / Priority configs (matching React Figma)
   const catLabel = { policy: 'Policy', process: 'Process', technical: 'Technical' };
@@ -2451,51 +2455,89 @@ function csRenderStepReview(el) {
   const prioLabel = { high: 'High', medium: 'Medium', low: 'Low', critical: 'Critical' };
   const prioColor = { high: 'cs-tag-red', medium: 'cs-tag-amber', low: 'cs-tag-gray', critical: 'cs-tag-red' };
 
+  // Read-only mode for exported sessions
+  const readOnly = csSessionData.status === 'exported';
+
   el.innerHTML = `
     <div class="cs-review-card">
       <div class="cs-review-header">
         <div class="cs-review-header-row">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 5L7 9L3 13" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 13H15" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>
-          <span class="cs-review-header-title">Step 5: Review & Edit</span>
+          ${readOnly
+            ? '<svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 9C2 9 5 4 9 4C13 4 16 9 16 9C16 9 13 14 9 14C5 14 2 9 2 9Z" stroke="white" stroke-width="1.5"/><circle cx="9" cy="9" r="2.5" stroke="white" stroke-width="1.5"/></svg>'
+            : '<svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M5 9L8 12L13 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'}
+          <span class="cs-review-header-title">${readOnly ? 'Export Results' : 'Step 5: Review & Edit'}</span>
         </div>
-        <p class="cs-review-header-desc">Review AI-generated control suggestions. Edit, add, or remove controls before exporting.</p>
+        <p class="cs-review-header-desc">${readOnly
+          ? 'Viewing previously exported controls. You can re-export selected controls or start a new session.'
+          : 'Review AI-generated control suggestions. Edit, add, or remove controls before exporting.'}</p>
         <div class="cs-review-header-stats">
           <span class="cs-review-big" id="cs-review-selected">${selectedCount}</span>
           <span class="cs-review-of">of ${controls.length} selected</span>
+          ${hasExported ? `
+            <span class="cs-review-divider"></span>
+            <span class="cs-review-exported-badge">${alreadyExportedCount} already exported</span>
+            <span class="cs-review-of">|</span>
+            <span class="cs-review-new-badge">${newCount} new</span>
+          ` : ''}
         </div>
       </div>
       <div class="cs-review-body">
         ${controls.length ? `
           <div class="cs-review-toolbar">
             <div class="cs-review-toolbar-left">
-              <button class="cs-toolbar-btn" onclick="csSelectAllControls(true)">Select All</button>
-              <button class="cs-toolbar-btn cs-toolbar-btn-ghost" onclick="csSelectAllControls(false)">Deselect All</button>
+              ${!readOnly ? `
+                <button class="cs-toolbar-btn" onclick="csSelectAllControls(true)">Select All</button>
+                <button class="cs-toolbar-btn cs-toolbar-btn-ghost" onclick="csSelectAllControls(false)">Deselect All</button>
+              ` : ''}
+              ${hasExported ? `
+                <div class="cs-filter-tabs">
+                  <svg class="cs-filter-icon" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 2H11L7 6.5V9L5 10V6.5L1 2Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <button class="cs-filter-tab active" data-filter="all" onclick="csFilterControls('all',this)">All (${controls.length})</button>
+                  <button class="cs-filter-tab" data-filter="new" onclick="csFilterControls('new',this)">New (${newCount})</button>
+                  <button class="cs-filter-tab" data-filter="existing" onclick="csFilterControls('existing',this)">Existing (${alreadyExportedCount})</button>
+                </div>
+              ` : ''}
             </div>
+            ${!readOnly ? `
+              <button class="cs-toolbar-btn cs-toolbar-add" onclick="csAddManualControl()">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2V10M2 6H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                Add Manual Control
+              </button>
+            ` : ''}
           </div>
-          <div class="cs-ctrl-list">
+          <div class="cs-ctrl-list" id="cs-ctrl-list">
             ${controls.map((c, i) => {
               const isSelected = c.selected !== false;
+              const isExported = exportedIds.includes(c.id);
               const cat = c.category || c.control_type || '';
               const csf = c.csfFunction || '';
               const prio = c.priority || c.implementation_priority || '';
-              return `<div class="cs-ctrl-item ${isSelected ? 'cs-ctrl-selected' : 'cs-ctrl-deselected'}" data-ctrl-id="${esc(c.id)}">
+              return `<div class="cs-ctrl-item ${isSelected ? 'cs-ctrl-selected' : 'cs-ctrl-deselected'} ${isExported ? 'cs-ctrl-exported' : ''}" data-ctrl-id="${esc(c.id)}" data-exported="${isExported}">
                 <div class="cs-ctrl-row-main">
-                  <div class="cs-ctrl-check" onclick="csToggleControl('${esc(c.id)}')">
-                    <div class="cs-ctrl-checkbox ${isSelected ? 'checked' : ''}">
-                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  ${!readOnly ? `
+                    <div class="cs-ctrl-check" onclick="csToggleControl('${esc(c.id)}')">
+                      <div class="cs-ctrl-checkbox ${isSelected ? 'checked' : ''}">
+                        <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      </div>
                     </div>
-                  </div>
+                  ` : ''}
                   <div class="cs-ctrl-content" onclick="csExpandControl('${esc(c.id)}')">
                     <div class="cs-ctrl-name-line">
                       <span class="cs-ctrl-name" dir="rtl">${esc(c.name || c.name_ar || 'Control ' + (i+1))}</span>
+                      ${isExported ? `<span class="cs-exported-pill"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.2"/><path d="M4 6L5.5 7.5L8 4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Already exported</span>` : ''}
                     </div>
-                    <div class="cs-ctrl-desc-line">${esc(c.description || '')}</div>
+                    <div class="cs-ctrl-desc-line" dir="rtl">${esc(c.description || '')}</div>
                   </div>
                   <div class="cs-ctrl-tags">
                     ${cat ? `<span class="cs-tag ${catColor[cat] || 'cs-tag-gray'}">${esc(catLabel[cat] || cat)}</span>` : ''}
                     ${csf ? `<span class="cs-tag ${csfColor[csf] || 'cs-tag-gray'}">${esc(csfLabel[csf] || csf)}</span>` : ''}
                     ${prio ? `<span class="cs-tag ${prioColor[prio] || 'cs-tag-gray'}">${esc(prioLabel[prio] || prio)}</span>` : ''}
                   </div>
+                  ${!readOnly ? `
+                    <button class="cs-ctrl-edit-btn" onclick="event.stopPropagation();csExpandControl('${esc(c.id)}')" title="Edit">
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8.5 1.5L10.5 3.5L4 10H2V8L8.5 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                  ` : ''}
                   <svg class="cs-ctrl-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                 </div>
                 <div class="cs-ctrl-expand" id="cs-ctrl-expand-${esc(c.id)}">
@@ -2504,7 +2546,6 @@ function csRenderStepReview(el) {
                   ${c.requirementRefId ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Cross-Framework Mapping</span><div class="cs-ctrl-detail-pills"><span class="cs-tag cs-tag-mono">${esc(c.requirementRefId)}</span>${c.requirementName ? `<span class="cs-tag cs-tag-primary">${esc(c.requirementName)}</span>` : ''}</div></div>` : ''}
                   ${c.framework ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Framework</span><span class="cs-tag cs-tag-primary">${esc(c.framework)}</span></div>` : ''}
                   ${(c.evidence_examples && c.evidence_examples.length) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Evidence Examples</span><div class="cs-ctrl-detail-pills">${c.evidence_examples.map(e => `<span class="cs-tag cs-tag-gray">${esc(e)}</span>`).join('')}</div></div>` : ''}
-                  ${c.source_question ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Source Question</span><p>"${esc(c.source_question)}"</p></div>` : ''}
                 </div>
               </div>`;
             }).join('')}
@@ -2512,19 +2553,25 @@ function csRenderStepReview(el) {
         ` : `
           <div class="cs-review-empty">No controls generated yet. Go back and generate controls.</div>
         `}
-
       </div>
       <div class="cs-review-footer">
-        <button class="cs-footer-back" onclick="csCurrentStep=3;csSessionData.step=3;csRenderWizard()">
+        <button class="cs-footer-back" onclick="${readOnly ? "csCachedSessions=null;csShowSessions()" : "csCurrentStep=3;csSessionData.step=3;csRenderWizard()"}">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 3L5 7L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Back
+          ${readOnly ? 'Back to Sessions' : 'Back'}
         </button>
         <div class="cs-footer-right">
-          <span class="cs-footer-count" id="cs-review-footer-count">${selectedCount} controls selected</span>
-          <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=5;csSessionData.step=5;csRenderWizard()">
-            Proceed to Export
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
+          ${!readOnly ? `
+            <span class="cs-footer-count" id="cs-review-footer-count">${selectedCount} controls selected</span>
+            <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=5;csSessionData.step=5;csRenderWizard()">
+              Proceed to Export
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+          ` : `
+            <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=5;csSessionData.step=5;csRenderWizard()">
+              Re-Export Selected
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+          `}
         </div>
       </div>
     </div>`;
@@ -2538,6 +2585,40 @@ function csExpandControl(ctrlId) {
   item.classList.toggle('expanded');
 }
 window.csExpandControl = csExpandControl;
+
+function csFilterControls(filter, btn) {
+  // Update active tab
+  document.querySelectorAll('.cs-filter-tab').forEach(t => t.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const exportedIds = csSessionData.exportedControlIds || [];
+  document.querySelectorAll('.cs-ctrl-item[data-ctrl-id]').forEach(item => {
+    const isExported = item.getAttribute('data-exported') === 'true';
+    if (filter === 'all') item.style.display = '';
+    else if (filter === 'new') item.style.display = isExported ? 'none' : '';
+    else if (filter === 'existing') item.style.display = isExported ? '' : 'none';
+  });
+}
+window.csFilterControls = csFilterControls;
+
+function csAddManualControl() {
+  const controls = csSessionData.controls = csSessionData.controls || [];
+  const newCtrl = {
+    id: 'ctrl-manual-' + Date.now(),
+    name: 'New Manual Control',
+    description: '',
+    category: 'process',
+    csfFunction: 'govern',
+    priority: 'medium',
+    selected: true,
+    framework: '',
+    requirementRefId: '',
+  };
+  controls.push(newCtrl);
+  csSaveStep();
+  csRenderWizard();
+  toast('info', 'Added', 'Manual control added. Expand it to edit details.');
+}
+window.csAddManualControl = csAddManualControl;
 
 function csToggleControl(ctrlId) {
   const ctrl = (csSessionData.controls || []).find(c => c.id === ctrlId);
