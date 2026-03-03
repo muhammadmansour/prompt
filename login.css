@@ -7,7 +7,7 @@
 .login-body {
   display: flex;
   min-height: 100vh;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Cairo', -apple-system, BlinkMacSystemFont, sans-serif;
   background: #f8fafc;
 }
 

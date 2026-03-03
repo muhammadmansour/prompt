@@ -46,7 +46,7 @@ let csCollectionsData = [];    // fetched collections with files for controls st
 let csPendingPoll = null;
 
 // ─── DOM refs ─────────────────────────────────────────────────
-const headerTitle = document.getElementById('admin-header-title');
+const headerTitle = document.getElementById('admin-header-title'); // may be null in new layout
 const toastContainer = document.getElementById('toast-container');
 
 // ─── Navigation ───────────────────────────────────────────────
@@ -69,11 +69,11 @@ function navigateTo(page) {
     'audit-studio': 'Audit Studio',
     'controls-studio': 'Applied Controls Studio',
     'merge-optimizer': 'Control Merge Optimizer',
-    'org-contexts': 'Organization Profiles',
+    'org-contexts': 'Organization Contexts',
     'prompts': 'Prompts',
     'file-collections': 'File Collections',
   };
-  headerTitle.textContent = names[page] || page;
+  if (headerTitle) headerTitle.textContent = names[page] || page;
 
   // Load data for the page
   if (page === 'dashboard') loadDashboard();
@@ -598,12 +598,17 @@ async function loadOrgContexts() {
     const d = await fetchJSON(API.orgContexts);
     orgContexts = d.contexts || [];
   } catch (e) { console.error('Org contexts fetch error:', e); orgContexts = []; }
+  // Ensure frameworks are loaded for mandate checkboxes
+  if (!frameworks || !frameworks.length) await fetchFrameworks();
   renderOrgStats();
   renderOrgContextsList();
 }
 
 function renderOrgStats() {
   const el = document.getElementById('org-stats');
+  if (!el) return;
+  const totalDocs = orgContexts.reduce((a, c) => a + (c.documents || []).length, 0);
+  const fullCoverage = orgContexts.filter(c => (c.obligatoryFrameworks || []).length >= 2).length;
   el.innerHTML = `
     <div class="stat-card">
       <div class="stat-card-icon stat-bg-primary"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5V15C3 15.6 3.4 16 4 16H16C16.6 16 17 15.6 17 15V8C17 7.4 16.6 7 16 7H10.5L9 5H4C3.4 5 3 5.4 3 6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
@@ -611,14 +616,14 @@ function renderOrgStats() {
       <div class="stat-card-label">Total Contexts</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-icon stat-bg-emerald"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 10L9 12L13 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-      <div class="stat-card-value">${orgContexts.filter(c => c.isActive).length}</div>
-      <div class="stat-card-label">Active Contexts</div>
+      <div class="stat-card-icon stat-bg-emerald"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4H12L16 8V16C16 16.6 15.6 17 15 17H4C3.4 17 3 16.6 3 16V5C3 4.4 3.4 4 4 4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <div class="stat-card-value">${totalDocs}</div>
+      <div class="stat-card-label">Total Documents</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-icon stat-bg-amber"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4H12L16 8V16C16 16.6 15.6 17 15 17H4C3.4 17 3 16.6 3 16V5C3 4.4 3.4 4 4 4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-      <div class="stat-card-value">${orgContexts.reduce((a, c) => a + (c.documents || []).length, 0)}</div>
-      <div class="stat-card-label">Documents</div>
+      <div class="stat-card-icon stat-bg-amber"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 10L9 12L13 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="stat-card-value">${fullCoverage}</div>
+      <div class="stat-card-label">Full Regulatory Coverage</div>
     </div>`;
 }
 
@@ -636,8 +641,8 @@ function renderOrgContextsList(query) {
     el.innerHTML = `
       <div class="admin-card empty-state-box">
         <div class="empty-icon"><svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M4 8V24C4 25.1 4.9 26 6 26H26C27.1 26 28 25.1 28 24V12C28 10.9 27.1 10 26 10H17L14.5 7H6C4.9 7 4 7.9 4 9Z" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round"/></svg></div>
-        <h3>No Organization Profiles</h3>
-        <p>Organization Profiles are the Digital Twin that AI uses to generate tailored controls. Click "New Profile" to create one — build once, use everywhere.</p>
+        <h3>No Organization Contexts</h3>
+        <p>Organization Contexts are client and entity profiles for AI-contextualized control suggestions. Click "+ New Context" to create one.</p>
       </div>`;
     return;
   }
@@ -647,23 +652,52 @@ function renderOrgContextsList(query) {
     return;
   }
 
-  const sectorLabels = { banking: 'Banking & Financial Services', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', defense: 'Defense & Military', manufacturing: 'Manufacturing', transportation: 'Transportation & Logistics', custom: 'Custom', other: 'Other' };
+  const sectorLabels = { banking: 'Banking & Financial Services', financial: 'Financial', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', defense: 'Defense & Military', manufacturing: 'Manufacturing', transportation: 'Transportation & Logistics', custom: 'Custom', other: 'Other' };
+  const sectorBadgeLabels = { banking: 'Financial', financial: 'Financial', government: 'Government', healthcare: 'Healthcare', energy: 'Energy', telecom: 'Telecom', education: 'Education', retail: 'Retail', insurance: 'Insurance', technology: 'Technology', defense: 'Defense', manufacturing: 'Manufacturing', transportation: 'Transport', custom: 'Custom', other: 'Other' };
   const sizeLabels = { small: 'Small', medium: 'Medium', large: 'Large', enterprise: 'Enterprise' };
   const maturityLabels = { 1: 'Initial', 2: 'Developing', 3: 'Defined', 4: 'Managed', 5: 'Optimizing' };
 
+  // Badge colors: [bg, text] — light transparent backgrounds
+  const maturityBadge = { 1: ['#fef2f2','#dc2626'], 2: ['#fff7ed','#ea580c'], 3: ['#eff6ff','#2563eb'], 4: ['#ecfdf5','#059669'], 5: ['#ecfdf5','#047857'] };
+  const sectorBadge = { banking: ['#eff6ff','#1d4ed8'], financial: ['#eff6ff','#1d4ed8'], government: ['#eff6ff','#2563eb'], healthcare: ['#f0fdfa','#0d9488'], energy: ['#fffbeb','#b45309'], telecom: ['#f5f3ff','#7c3aed'], education: ['#ecfdf5','#059669'], retail: ['#fdf2f8','#db2777'], insurance: ['#eef2ff','#4f46e5'], technology: ['#f0f9ff','#0369a1'], defense: ['#f8fafc','#475569'], manufacturing: ['#fafaf9','#57534e'], transportation: ['#ecfeff','#0e7490'], custom: ['#f9fafb','#4b5563'], other: ['#f9fafb','#4b5563'] };
+  const sectorAvatarColor = { banking: '#0077cc', financial: '#0077cc', government: '#2563eb', healthcare: '#0d9488', energy: '#d97706', telecom: '#8b5cf6', education: '#10b981', retail: '#ec4899', insurance: '#6366f1', technology: '#0284c7', defense: '#64748b', manufacturing: '#78716c', transportation: '#0891b2', custom: '#6b7280', other: '#6b7280' };
+
   el.innerHTML = list.map(ctx => {
     const origIdx = orgContexts.indexOf(ctx);
-    const fwTags = (ctx.obligatoryFrameworks || []).map(f => `<span class="badge badge-primary badge-round">${esc(f)}</span>`).join('');
-    const mandTags = (ctx.regulatoryMandates || []).map(m => `<span class="badge badge-amber badge-round">${esc(m)}</span>`).join('');
-    const sectorDisplay = ctx.sectorCustom || sectorLabels[ctx.sector] || ctx.sector || '';
+    const sectorDisplay = ctx.sectorCustom || sectorBadgeLabels[ctx.sector] || ctx.sector || '';
     const matLvl = ctx.complianceMaturity || 1;
-    const matPct = (matLvl / 5) * 100;
+    const [matBg, matFg] = maturityBadge[matLvl] || ['#f9fafb','#4b5563'];
+    const [secBg, secFg] = sectorBadge[ctx.sector] || ['#f0fdfa','#0d9488'];
+    const avatarColor = sectorAvatarColor[ctx.sector] || '#0d9488';
+
+    // Framework pills: show max 2, then +N
+    const fws = ctx.obligatoryFrameworks || [];
+    const fwVisible = fws.slice(0, 2);
+    const fwExtra = fws.length - 2;
+    const fwHtml = fwVisible.map(f => `<span class="org-fw-pill">${esc(f.length > 18 ? f.substring(0,16) + '...' : f)}</span>`).join('') + (fwExtra > 0 ? `<span class="org-fw-pill org-fw-more">+${fwExtra}</span>` : '');
+
+    // Doc count
+    const docCount = (ctx.documents || []).length;
+
+    // Build detail rows
+    const govLabel = { centralized: 'Centralized', decentralized: 'Decentralized', federated: 'Federated', hybrid: 'Hybrid' };
+    const detailPairs = [
+      ctx.governanceStructure ? ['Governance', govLabel[ctx.governanceStructure] || ctx.governanceStructure] : null,
+      ctx.dataClassification ? ['Data Classification', ctx.dataClassification] : null,
+      ctx.geographicScope ? ['Geographic Scope', ctx.geographicScope] : null,
+      ctx.itInfrastructure ? ['IT Infrastructure', ctx.itInfrastructure] : null,
+    ].filter(Boolean);
+    const allFwHtml = fws.map(f => `<span class="org-fw-pill">${esc(f)}</span>`).join('');
+    const mandates = ctx.regulatoryMandates || [];
+    const mandHtml = mandates.map(m => `<span class="org-fw-pill" style="color:#b45309;background:#fffbeb;border-color:#fde68a">${esc(m)}</span>`).join('');
+    const objectives = ctx.strategicObjectives || [];
+
     return `
-      <div class="org-ctx-card">
-        <div class="org-ctx-header">
+      <div class="org-ctx-card" id="org-card-${origIdx}">
+        <div class="org-ctx-header" onclick="toggleOrgContext(${origIdx})">
           <div class="org-ctx-header-left">
-            <div class="org-ctx-icon" style="background:rgba(0,119,204,0.1);color:var(--admin-primary)">
-              <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 5V15C3 15.6 3.4 16 4 16H16C16.6 16 17 15.6 17 15V8C17 7.4 16.6 7 16 7H10.5L9 5H4C3.4 5 3 5.4 3 6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <div class="org-ctx-avatar" style="background:${avatarColor}">
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 16V6C4 5.4 4.4 5 5 5H9L10.5 3H15C15.6 3 16 3.4 16 4V16C16 16.6 15.6 17 15 17H5C4.4 17 4 16.6 4 16Z" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M7 10H13M7 13H10" stroke="white" stroke-width="1.3" stroke-linecap="round"/></svg>
             </div>
             <div class="org-ctx-names">
               <div class="org-ctx-name-row">
@@ -671,42 +705,39 @@ function renderOrgContextsList(query) {
                 ${ctx.nameAr ? `<span class="org-ctx-name-ar">${esc(ctx.nameAr)}</span>` : ''}
               </div>
               <div class="org-ctx-tags">
-                ${sectorDisplay ? `<span class="badge badge-gray badge-round">${esc(sectorDisplay)}</span>` : ''}
-                ${ctx.size ? `<span class="badge badge-gray badge-round">${esc(sizeLabels[ctx.size] || ctx.size)}</span>` : ''}
-                <span class="badge badge-sky badge-round" title="Compliance Maturity">Maturity ${matLvl}/5</span>
-                ${fwTags}
+                ${sectorDisplay ? `<span class="org-ctx-tag" style="background:${secBg};color:${secFg}">${esc(sectorDisplay)}</span>` : ''}
+                ${ctx.size ? `<span class="org-ctx-tag org-ctx-tag-gray">${esc(sizeLabels[ctx.size] || ctx.size)}</span>` : ''}
+                <span class="org-ctx-tag" style="background:${matBg};color:${matFg}">${maturityLabels[matLvl] || matLvl}</span>
               </div>
             </div>
           </div>
           <div class="org-ctx-right">
-            <span class="badge badge-emerald">Active</span>
-            <button class="btn-admin-ghost btn-admin-sm" onclick="editOrgContext(${origIdx})" title="Edit">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div class="org-ctx-fws">${fwHtml}</div>
+            ${docCount > 0 ? `<span class="org-ctx-docs">${docCount} docs</span>` : ''}
+            <button class="org-ctx-action-btn" onclick="event.stopPropagation();editOrgContext(${origIdx})" title="Edit">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
-            <button class="btn-admin-ghost btn-admin-sm" onclick="deleteOrgContext(${origIdx})" title="Delete">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <button class="org-ctx-action-btn" onclick="event.stopPropagation();deleteOrgContext(${origIdx})" title="Delete">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
+            <svg class="org-ctx-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           </div>
         </div>
-        <div class="org-ctx-details">
-          <div class="org-ctx-maturity">
-            <div class="org-ctx-maturity-bar">
-              <div class="org-ctx-maturity-fill" style="width:${matPct}%"></div>
-            </div>
-            <span class="org-ctx-maturity-label">${maturityLabels[matLvl] || matLvl}</span>
-          </div>
-          <div class="org-ctx-meta-row">
-            ${ctx.governanceStructure ? `<span class="org-ctx-meta-item"><strong>Governance:</strong> ${esc(ctx.governanceStructure)}</span>` : ''}
-            ${ctx.dataClassification ? `<span class="org-ctx-meta-item"><strong>Data:</strong> ${esc(ctx.dataClassification)}</span>` : ''}
-            ${ctx.geographicScope ? `<span class="org-ctx-meta-item"><strong>Scope:</strong> ${esc(ctx.geographicScope)}</span>` : ''}
-            ${ctx.itInfrastructure ? `<span class="org-ctx-meta-item"><strong>Infra:</strong> ${esc(ctx.itInfrastructure)}</span>` : ''}
-          </div>
-          ${mandTags ? `<div class="org-ctx-mandates">${mandTags}</div>` : ''}
+        <div class="org-ctx-expand">
+          ${detailPairs.length ? `<div class="org-ctx-detail-grid">${detailPairs.map(([k,v]) => `<div class="org-ctx-detail-item"><span class="org-ctx-detail-label">${k}</span><span class="org-ctx-detail-value">${esc(v)}</span></div>`).join('')}</div>` : ''}
+          ${fws.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Obligatory Frameworks</span><div class="org-ctx-detail-pills">${allFwHtml}</div></div>` : ''}
+          ${mandates.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Regulatory Mandates</span><div class="org-ctx-detail-pills">${mandHtml}</div></div>` : ''}
+          ${objectives.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Strategic Objectives</span><ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(o)}</li>`).join('')}</ul></div>` : ''}
+          ${ctx.notes ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Notes</span><p class="org-ctx-notes-text">${esc(ctx.notes)}</p></div>` : ''}
         </div>
       </div>`;
   }).join('');
 }
-window.toggleOrgContext = function(i) {};
+window.toggleOrgContext = function(idx) {
+  const card = document.getElementById('org-card-' + idx);
+  if (!card) return;
+  card.classList.toggle('expanded');
+};
 
 // Org Context Modal
 const orgModal = document.getElementById('org-modal-overlay');
@@ -716,7 +747,28 @@ const orgModalSave = document.getElementById('org-modal-save');
 const orgModalTitle = document.getElementById('org-modal-title');
 let editingOrgIdx = null;
 
-function openOrgModal() { orgModal.classList.add('active'); document.body.style.overflow = 'hidden'; }
+function populateMandatesFromFrameworks() {
+  const container = document.getElementById('org-mandates-options');
+  if (!container) return;
+  // Build list from Muraji frameworks
+  const fwNames = [];
+  if (frameworks && frameworks.length) {
+    frameworks.forEach(lib => {
+      const fw = lib.content?.framework;
+      const name = fw?.name || lib.name || '';
+      if (name) fwNames.push(name);
+    });
+  }
+  if (!fwNames.length) {
+    container.innerHTML = '<span class="admin-form-hint" style="color:#9ca3af">No frameworks loaded. Please check your connection.</span>';
+    return;
+  }
+  container.innerHTML = fwNames.map(n =>
+    `<label class="mandate-chip-option"><input type="checkbox" value="${esc(n)}"> ${esc(n)}</label>`
+  ).join('');
+}
+
+function openOrgModal() { populateMandatesFromFrameworks(); orgModal.classList.add('active'); document.body.style.overflow = 'hidden'; }
 function closeOrgModal() { orgModal.classList.remove('active'); document.body.style.overflow = ''; editingOrgIdx = null; clearOrgForm(); }
 let orgObjectives = []; // temp state for objectives list
 
@@ -734,7 +786,6 @@ function clearOrgForm() {
   document.getElementById('org-data-classification').value = '';
   document.getElementById('org-geographic').value = '';
   document.getElementById('org-it-infra').value = '';
-  document.getElementById('org-frameworks').value = '';
   orgObjectives = [];
   renderObjectivesList();
   document.getElementById('org-notes').value = '';
@@ -779,8 +830,8 @@ document.getElementById('org-objective-input')?.addEventListener('keydown', e =>
 
 document.getElementById('btn-new-context').addEventListener('click', () => {
   editingOrgIdx = null;
-  orgModalTitle.textContent = 'New Organization Profile';
-  orgModalSave.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Create Profile';
+  orgModalTitle.textContent = 'New Organization Context';
+  orgModalSave.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Create Context';
   clearOrgForm();
   openOrgModal();
   document.getElementById('org-name-en').focus();
@@ -804,7 +855,6 @@ orgModalSave.addEventListener('click', async () => {
   const dataCls = document.getElementById('org-data-classification').value;
   const geo = document.getElementById('org-geographic').value;
   const itInfra = document.getElementById('org-it-infra').value;
-  const frameworks = document.getElementById('org-frameworks').value.trim();
   const notes = document.getElementById('org-notes').value.trim();
 
   if (!nameEn) { toast('error', 'Validation', 'Name (English) is required.'); document.getElementById('org-name-en').focus(); return; }
@@ -824,7 +874,7 @@ orgModalSave.addEventListener('click', async () => {
     geographicScope: geo,
     itInfrastructure: itInfra,
     strategicObjectives: orgObjectives,
-    obligatoryFrameworks: frameworks ? frameworks.split(',').map(s => s.trim()).filter(Boolean) : [],
+    obligatoryFrameworks: mandates,
     notes,
     isActive: true,
   };
@@ -840,7 +890,7 @@ orgModalSave.addEventListener('click', async () => {
     }
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'HTTP ' + r.status); }
 
-    toast('success', editingOrgIdx !== null ? 'Updated' : 'Created', 'Profile "' + nameEn + '" saved.');
+    toast('success', editingOrgIdx !== null ? 'Updated' : 'Created', 'Context "' + nameEn + '" saved.');
     closeOrgModal();
     await loadOrgContexts();
   } catch (e) {
@@ -856,7 +906,7 @@ function editOrgContext(idx) {
   const ctx = orgContexts[idx];
   if (!ctx) return;
   editingOrgIdx = idx;
-  orgModalTitle.textContent = 'Edit Organization Profile';
+  orgModalTitle.textContent = 'Edit Organization Context';
   orgModalSave.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Save Changes';
   document.getElementById('org-name-en').value = ctx.nameEn || ctx.name || '';
   document.getElementById('org-name-ar').value = ctx.nameAr || '';
@@ -866,20 +916,19 @@ function editOrgContext(idx) {
   document.getElementById('org-size').value = ctx.size || '';
   document.getElementById('org-maturity').value = ctx.complianceMaturity || 1;
   updateMaturityLabels(ctx.complianceMaturity || 1);
-  // Set mandates checkboxes
-  const mandates = ctx.regulatoryMandates || [];
-  document.querySelectorAll('#org-mandates-options input[type="checkbox"]').forEach(c => {
-    c.checked = mandates.includes(c.value);
-  });
   document.getElementById('org-governance').value = ctx.governanceStructure || '';
   document.getElementById('org-data-classification').value = ctx.dataClassification || '';
   document.getElementById('org-geographic').value = ctx.geographicScope || '';
   document.getElementById('org-it-infra').value = ctx.itInfrastructure || '';
-  document.getElementById('org-frameworks').value = (ctx.obligatoryFrameworks || []).join(', ');
   orgObjectives = [...(ctx.strategicObjectives || [])];
   renderObjectivesList();
   document.getElementById('org-notes').value = ctx.notes || '';
-  openOrgModal();
+  openOrgModal(); // populates mandate checkboxes from frameworks first
+  // Now set mandates checkboxes after they've been populated
+  const mandates = ctx.regulatoryMandates || [];
+  document.querySelectorAll('#org-mandates-options input[type="checkbox"]').forEach(c => {
+    c.checked = mandates.includes(c.value);
+  });
   document.getElementById('org-name-en').focus();
 }
 window.editOrgContext = editOrgContext;
@@ -2013,7 +2062,7 @@ function csRenderStepOrgContext(el) {
       <div class="cs-wizard-header sky">
         <div class="cs-wizard-header-title">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2L14 5V9C14 12 11.5 14.5 9 15C6.5 14.5 4 12 4 9V5L9 2Z" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Step 3: Organization Profile <span style="background:rgba(255,255,255,0.2);padding:1px 6px;border-radius:4px;font-size:10px;font-weight:500;margin-left:4px">Required</span>
+          Step 3: Organization Context <span style="background:rgba(255,255,255,0.2);padding:1px 6px;border-radius:4px;font-size:10px;font-weight:500;margin-left:4px">Required</span>
         </div>
         <div class="cs-wizard-header-desc">Select the organization profile to tailor AI-generated controls. Different profiles produce different controls for the same requirement.</div>
         <div class="cs-wizard-header-stat">
@@ -2026,12 +2075,12 @@ function csRenderStepOrgContext(el) {
           <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading profiles...</span></div>
         </div>
         <p style="font-size:11px;color:#9ca3af;margin-top:10px;text-align:center">
-          Don't see your org? <button class="inline-link" onclick="navigateTo('org-contexts')">Create a new Organization Profile</button>.
+          Don't see your org? <button class="inline-link" onclick="navigateTo('org-contexts')">Create a new Organization Context</button>.
         </p>
       </div>
       <div class="cs-wizard-footer">
         <button class="btn-admin-ghost" onclick="csSaveStep();csCurrentStep=1;csSessionData.step=1;csRenderWizard()">← Back</button>
-        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=3;csSessionData.step=3;csRenderWizard()" ${!selected ? 'disabled title="Select an Organization Profile first"' : ''}>
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=3;csSessionData.step=3;csRenderWizard()" ${!selected ? 'disabled title="Select an Organization Context first"' : ''}>
           Next &nbsp;→
         </button>
       </div>
@@ -2049,7 +2098,7 @@ function csRenderStepOrgContext(el) {
     if (!listEl) return;
 
     if (!contexts.length) {
-      listEl.innerHTML = '<div class="studio-empty-msg" style="color:#dc2626">No Organization Profiles found. You must <button class="inline-link" onclick="navigateTo(\'org-contexts\')">create a profile</button> before generating controls.</div>';
+      listEl.innerHTML = '<div class="studio-empty-msg" style="color:#dc2626">No Organization Contexts found. You must <button class="inline-link" onclick="navigateTo(\'org-contexts\')">create a context</button> before generating controls.</div>';
       return;
     }
 
@@ -2117,7 +2166,7 @@ function csSelectOrg(ctxId, rowEl) {
   const nextBtn = document.querySelector('.cs-wizard-footer .btn-admin-primary');
   if (nextBtn && nextBtn.textContent.includes('Next')) {
     nextBtn.disabled = !csSessionData.orgContext;
-    nextBtn.title = csSessionData.orgContext ? '' : 'Select an Organization Profile first';
+    nextBtn.title = csSessionData.orgContext ? '' : 'Select an Organization Context first';
   }
 }
 window.csSelectOrg = csSelectOrg;
@@ -2146,16 +2195,16 @@ function csRenderStepGenerate(el) {
             <div class="cs-gen-blocked-icon">
               <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M16 4L28 28H4L16 4Z" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 13V19M16 23V23.01" stroke="#ef4444" stroke-width="2" stroke-linecap="round"/></svg>
             </div>
-            <h3 style="font-size:14px;font-weight:600;color:#dc2626;margin:0 0 4px">Organization Profile Required</h3>
+            <h3 style="font-size:14px;font-weight:600;color:#dc2626;margin:0 0 4px">Organization Context Required</h3>
             <p style="font-size:12px;color:#6b7280;max-width:400px;margin:0 auto 16px">
-              An Organization Profile is required to generate contextual controls.
+              An Organization Context is required to generate contextual controls.
               A "Government, Enterprise, Maturity 2" org gets different controls than "Healthcare, Medium, Maturity 4" for the same requirement.
             </p>
             <button class="btn-admin-primary" onclick="csCurrentStep=2;csSessionData.step=2;csRenderWizard()">
               ← Go back to select a profile
             </button>
             <p style="font-size:11px;color:#9ca3af;margin-top:12px">
-              No profiles yet? <button class="inline-link" onclick="navigateTo('org-contexts')">Create one in Org Profiles</button>.
+              No contexts yet? <button class="inline-link" onclick="navigateTo('org-contexts')">Create one in Org Contexts</button>.
             </p>
           </div>
         ` : `
@@ -2179,7 +2228,7 @@ function csRenderStepGenerate(el) {
           <div class="cs-gen-box">
             <div class="cs-gen-box-header">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L12 4V7C12 10 9.5 12.5 7 13C4.5 12.5 2 10 2 7V4L7 1Z" stroke="#6b7280" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Organization Profile
+              Organization Context
             </div>
             <div class="cs-gen-box-val">${esc(orgCtx.nameEn || orgCtx.name || '')}</div>
             <div class="cs-gen-box-sub">${esc(orgCtx.sectorCustom || orgCtx.sector || '')}, ${esc(orgCtx.size || '')}, Maturity ${orgCtx.complianceMaturity || 1}/5</div>
@@ -2211,7 +2260,7 @@ async function csStartGenerate() {
   const reqs = csSessionData.requirements || [];
   if (!reqs.length) { toast('error', 'No Requirements', 'Select at least one requirement before generating.'); return; }
   if (!csSessionData.orgContext || !csSessionData.orgContext.nameEn) {
-    toast('error', 'Profile Required', 'An Organization Profile is required to generate controls. Go back and select one.');
+    toast('error', 'Context Required', 'An Organization Context is required to generate controls. Go back and select one.');
     return;
   }
 
@@ -2492,7 +2541,7 @@ async function csConvertQuestion() {
   if (!input || !reqSelect) return;
   const question = input.value.trim();
   if (!question) { toast('error', 'Missing', 'Please enter a compliance question.'); input.focus(); return; }
-  if (!csSessionData.orgContext) { toast('error', 'Profile Required', 'Organization Profile required.'); return; }
+  if (!csSessionData.orgContext) { toast('error', 'Context Required', 'Organization Context required.'); return; }
 
   const reqIdx = parseInt(reqSelect.value);
   const req = (csSessionData.requirements || [])[reqIdx] || null;

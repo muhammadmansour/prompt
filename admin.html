@@ -6,7 +6,7 @@
   <title>WathbaGRC — AI Admin Panel</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="admin.css">
 </head>
@@ -65,7 +65,7 @@
           </button>
           <button class="sidebar-item" data-page="org-contexts">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 13V4C2 3.4 2.4 3 3 3H13C13.6 3 14 3.4 14 4V13M5 7H11M5 10H9M8 3V1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Org Profiles
+            Org Contexts
           </button>
         </div>
 
@@ -98,11 +98,17 @@
     <div class="admin-main">
       <header class="admin-header">
         <div class="admin-header-left">
-          <span class="admin-header-title" id="admin-header-title">Dashboard</span>
+          <div class="admin-header-brand">
+            <div class="admin-header-brand-logo">W</div>
+            <span class="admin-header-brand-name">WathbahGRC Admin</span>
+          </div>
+          <div class="admin-header-search">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <input type="text" placeholder="Search admin..." id="admin-global-search">
+          </div>
         </div>
         <div class="admin-header-right">
-          <span class="admin-header-env">Production</span>
-          <div class="admin-header-avatar">A</div>
+          <span class="admin-header-powered">Powered by <strong>WATHBAH</strong></span>
         </div>
       </header>
 
@@ -353,7 +359,7 @@
         <!-- =================== CONTROLS STUDIO =================== -->
         <section class="admin-page" id="page-controls-studio">
           <div class="page-container">
-            <div class="page-header">
+            <div class="page-header page-header-row">
               <div>
                 <div class="page-title-row">
                   <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="var(--color-primary)" stroke-width="1.5"/><path d="M7 10L9 12L13 8" stroke="var(--color-primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -400,14 +406,14 @@
         <!-- =================== ORG CONTEXTS =================== -->
         <section class="admin-page" id="page-org-contexts">
           <div class="page-container">
-            <div class="page-header">
+            <div class="page-header page-header-row">
               <div>
-                <h1 class="page-title">Organization Profiles</h1>
-                <p class="page-subtitle">Digital Twin profiles — built once, consumed by all AI features (Controls Studio, Audit, Analysis)</p>
+                <h1 class="page-title">Organization Contexts</h1>
+                <p class="page-subtitle">Manage client and entity profiles for AI-contextualized control suggestions</p>
               </div>
               <button class="btn-admin-primary" id="btn-new-context">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                New Profile
+                + New Context
               </button>
             </div>
             <div class="org-stats-grid" id="org-stats"><!-- Populated by JS --></div>
@@ -422,7 +428,7 @@
         <!-- =================== PROMPTS =================== -->
         <section class="admin-page" id="page-prompts">
           <div class="page-container">
-            <div class="page-header">
+            <div class="page-header page-header-row">
               <div>
                 <h1 class="page-title">Prompts</h1>
                 <p class="page-subtitle">Manage and edit prompt templates — local and API-synced</p>
@@ -466,11 +472,11 @@
     </div>
   </div>
 
-  <!-- Org Profile Modal -->
+  <!-- Org Context Modal -->
   <div class="admin-modal-overlay" id="org-modal-overlay">
     <div class="admin-modal admin-modal-lg">
       <div class="admin-modal-header">
-        <h3 class="admin-modal-title" id="org-modal-title">New Organization Profile</h3>
+        <h3 class="admin-modal-title" id="org-modal-title">New Organization Context</h3>
         <button class="admin-modal-close" id="org-modal-close">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
@@ -558,20 +564,8 @@
           </div>
           <div class="admin-form-row">
             <label class="admin-form-label">Active Regulatory Mandates</label>
-            <div class="mandate-chips" id="org-mandates-chips"></div>
             <div class="mandate-options" id="org-mandates-options">
-              <label class="mandate-chip-option"><input type="checkbox" value="NCA ECC"> NCA ECC</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="NCA CSCC"> NCA CSCC</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="NCA DCC"> NCA DCC</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="PDPL"> PDPL (Saudi Privacy)</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="SAMA CSF"> SAMA CSF</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="ISO 27001"> ISO 27001</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="ISO 22301"> ISO 22301</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="PCI DSS"> PCI DSS</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="GDPR"> GDPR</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="SOC 2"> SOC 2</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="NIST CSF"> NIST CSF</label>
-              <label class="mandate-chip-option"><input type="checkbox" value="HIPAA"> HIPAA</label>
+              <span class="admin-form-hint" style="color:#9ca3af">Loading frameworks from Muraji…</span>
             </div>
             <span class="admin-form-hint">Select all applicable regulatory mandates</span>
           </div>
@@ -635,11 +629,6 @@
             Strategic Context
           </div>
           <div class="admin-form-row">
-            <label class="admin-form-label">Obligatory Frameworks</label>
-            <input type="text" class="admin-form-input" id="org-frameworks" placeholder="e.g. NCA ECC, ISO 27001 (comma-separated)">
-            <span class="admin-form-hint">Comma-separated list of framework abbreviations</span>
-          </div>
-          <div class="admin-form-row">
             <label class="admin-form-label">Strategic Objectives</label>
             <div class="objectives-list" id="org-objectives-list"></div>
             <div class="objectives-input-row">
@@ -661,7 +650,7 @@
         <button class="btn-admin-ghost" id="org-modal-cancel">Cancel</button>
         <button class="btn-admin-primary" id="org-modal-save">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Create Profile
+          Create Context
         </button>
       </div>
     </div>
