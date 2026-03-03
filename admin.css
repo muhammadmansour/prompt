@@ -1990,11 +1990,12 @@
 
 /* Control list */
 .cs-ctrl-list {
-  max-height: 420px;
+  max-height: 65vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding: 2px;
 }
 .cs-ctrl-item {
   border: 1px solid #e5e7eb;
@@ -2014,13 +2015,14 @@
 
 .cs-ctrl-row-main {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 12px 14px;
 }
 .cs-ctrl-check {
   flex-shrink: 0;
   cursor: pointer;
+  margin-top: 2px;
 }
 .cs-ctrl-checkbox {
   width: 18px;
@@ -2054,17 +2056,15 @@
   font-size: 12px;
   font-weight: 500;
   color: #111827;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .cs-ctrl-desc-line {
   font-size: 10px;
   color: #6b7280;
   margin-top: 2px;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Tags (category/csf/priority) */
@@ -2073,6 +2073,8 @@
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  margin-top: 2px;
 }
 .cs-tag {
   font-size: 10px;
@@ -2097,6 +2099,7 @@
   flex-shrink: 0;
   cursor: pointer;
   transition: transform 0.2s, color 0.15s;
+  margin-top: 2px;
 }
 .cs-ctrl-item:hover .cs-ctrl-chevron { color: #6b7280; }
 
@@ -2104,11 +2107,12 @@
 .cs-ctrl-expand {
   max-height: 0;
   overflow: hidden;
-  transition: max-height 0.3s ease, padding 0.3s ease;
+  transition: max-height 0.35s ease-out;
+  border-top: 1px solid transparent;
 }
 .cs-ctrl-item.expanded .cs-ctrl-expand {
-  max-height: 500px;
-  padding: 0 14px 14px;
+  max-height: 800px;
+  padding: 12px 14px 14px;
   border-top: 1px solid #f3f4f6;
 }
 .cs-ctrl-detail {
