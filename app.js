@@ -1,3 +1,8 @@
+// Auth guard
+if (!document.cookie.split(';').some(c => c.trim().startsWith('wathba_token='))) {
+  window.location.replace('/login.html');
+}
+
 const API_URL = 'https://muraji-api.wathbahs.com/api/libraries';
 const ANALYZE_API_URL = '/api/analyze';
 

@@ -2,6 +2,11 @@
 // Chat Page — Audit Session
 // ==========================================
 
+// Auth guard
+if (!document.cookie.split(';').some(c => c.trim().startsWith('wathba_token='))) {
+  window.location.replace('/login.html');
+}
+
 const CHAT_API_URL = '/api/chat';
 const SESSION_API_URL = '/api/chat/sessions';
 const chatMessages = document.getElementById('chat-messages');

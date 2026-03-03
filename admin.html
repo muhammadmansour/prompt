@@ -65,7 +65,7 @@
           </button>
           <button class="sidebar-item" data-page="org-contexts">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 13V4C2 3.4 2.4 3 3 3H13C13.6 3 14 3.4 14 4V13M5 7H11M5 10H9M8 3V1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Org Contexts
+            Org Profiles
           </button>
         </div>
 
@@ -87,10 +87,10 @@
       </nav>
 
       <div class="sidebar-footer">
-        <a href="index.html" class="sidebar-back-btn">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 7H4M4 7L7 4M4 7L7 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Back to Auditor
-        </a>
+        <button class="sidebar-logout-btn" onclick="adminLogout()" title="Sign out">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 12H3C2.4 12 2 11.6 2 11V3C2 2.4 2.4 2 3 2H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 10L12 7L9 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 7H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          Sign Out
+        </button>
       </div>
     </aside>
 
@@ -182,6 +182,11 @@
                     <button class="admin-link-btn" onclick="navigateTo('controls-studio')">Open Studio →</button>
                   </div>
                   <div id="dash-studio-sessions"><!-- Populated by JS --></div>
+                </div>
+
+                <div class="admin-card">
+                  <h2 class="admin-card-title-sm">Frameworks</h2>
+                  <div id="dash-frameworks"><!-- Populated by JS --></div>
                 </div>
               </div>
             </div>
@@ -397,12 +402,12 @@
           <div class="page-container">
             <div class="page-header">
               <div>
-                <h1 class="page-title">Organization Contexts</h1>
-                <p class="page-subtitle">Manage client and entity profiles for AI-contextualized control suggestions</p>
+                <h1 class="page-title">Organization Profiles</h1>
+                <p class="page-subtitle">Digital Twin profiles — built once, consumed by all AI features (Controls Studio, Audit, Analysis)</p>
               </div>
               <button class="btn-admin-primary" id="btn-new-context">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                New Context
+                New Profile
               </button>
             </div>
             <div class="org-stats-grid" id="org-stats"><!-- Populated by JS --></div>
@@ -420,10 +425,26 @@
             <div class="page-header">
               <div>
                 <h1 class="page-title">Prompts</h1>
-                <p class="page-subtitle">Manage and edit your prompt templates</p>
+                <p class="page-subtitle">Manage and edit prompt templates — local and API-synced</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn-admin-ghost btn-admin-sm" id="btn-prompts-clear-cache" title="Clear API cache">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M4 4V3C4 2.4 4.4 2 5 2H9C9.6 2 10 2.4 10 3V4M5 6.5V10.5M7 6.5V10.5M9 6.5V10.5M3 4L4 12H10L11 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Clear Cache
+                </button>
+                <button class="btn-admin-primary" id="btn-new-prompt">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  New Prompt
+                </button>
               </div>
             </div>
-            <p class="redirect-note">Prompts management is available on the dedicated <a href="prompts.html">Prompts page</a>.</p>
+            <div class="admin-search-bar" style="margin-bottom:16px">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <input type="text" placeholder="Search prompts..." id="admin-prompts-search">
+            </div>
+            <div id="admin-prompts-list">
+              <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading prompts...</span></div>
+            </div>
           </div>
         </section>
 
@@ -445,65 +466,235 @@
     </div>
   </div>
 
-  <!-- Org Context Modal -->
+  <!-- Org Profile Modal -->
   <div class="admin-modal-overlay" id="org-modal-overlay">
-    <div class="admin-modal">
+    <div class="admin-modal admin-modal-lg">
       <div class="admin-modal-header">
-        <h3 class="admin-modal-title" id="org-modal-title">New Organization Context</h3>
+        <h3 class="admin-modal-title" id="org-modal-title">New Organization Profile</h3>
         <button class="admin-modal-close" id="org-modal-close">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
       </div>
-      <div class="admin-modal-body">
-        <div class="admin-form-row">
-          <label class="admin-form-label">Name (English) <span class="required">*</span></label>
-          <input type="text" class="admin-form-input" id="org-name-en" placeholder="e.g. Saudi Central Bank">
+      <div class="admin-modal-body" style="max-height:70vh;overflow-y:auto">
+        <!-- Section: Identity -->
+        <div class="org-form-section">
+          <div class="org-form-section-title">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1V13M1 7H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Identity
+          </div>
+          <div class="admin-form-grid">
+            <div class="admin-form-row">
+              <label class="admin-form-label">Name (English) <span class="required">*</span></label>
+              <input type="text" class="admin-form-input" id="org-name-en" placeholder="e.g. Saudi Central Bank">
+            </div>
+            <div class="admin-form-row">
+              <label class="admin-form-label">Name (Arabic)</label>
+              <input type="text" class="admin-form-input font-arabic text-right" id="org-name-ar" placeholder="مثال: البنك المركزي السعودي">
+            </div>
+          </div>
         </div>
-        <div class="admin-form-row">
-          <label class="admin-form-label">Name (Arabic)</label>
-          <input type="text" class="admin-form-input font-arabic text-right" id="org-name-ar" placeholder="مثال: البنك المركزي السعودي">
+
+        <!-- Section: Industry & Size -->
+        <div class="org-form-section">
+          <div class="org-form-section-title">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 11V5C2 4.4 2.4 4 3 4H11C11.6 4 12 4.4 12 5V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 4V2.5C5 2.2 5.2 2 5.5 2H8.5C8.8 2 9 2.2 9 2.5V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Industry & Size
+          </div>
+          <div class="admin-form-grid">
+            <div class="admin-form-row">
+              <label class="admin-form-label">Industry Vertical <span class="required">*</span></label>
+              <select class="admin-form-select" id="org-sector">
+                <option value="">Select industry…</option>
+                <option value="banking">Banking & Financial Services</option>
+                <option value="government">Government</option>
+                <option value="healthcare">Healthcare</option>
+                <option value="energy">Energy & Utilities</option>
+                <option value="telecom">Telecommunications</option>
+                <option value="education">Education</option>
+                <option value="retail">Retail & E-Commerce</option>
+                <option value="insurance">Insurance</option>
+                <option value="technology">Technology</option>
+                <option value="defense">Defense & Military</option>
+                <option value="manufacturing">Manufacturing</option>
+                <option value="transportation">Transportation & Logistics</option>
+                <option value="custom">Custom (specify below)</option>
+              </select>
+            </div>
+            <div class="admin-form-row" id="org-sector-custom-row" style="display:none">
+              <label class="admin-form-label">Custom Industry</label>
+              <input type="text" class="admin-form-input" id="org-sector-custom" placeholder="e.g. Aerospace, Agriculture...">
+            </div>
+            <div class="admin-form-row">
+              <label class="admin-form-label">Entity Size <span class="required">*</span></label>
+              <select class="admin-form-select" id="org-size">
+                <option value="">Select size…</option>
+                <option value="small">Small (1–50 employees)</option>
+                <option value="medium">Medium (51–500 employees)</option>
+                <option value="large">Large (501–5,000 employees)</option>
+                <option value="enterprise">Enterprise (5,000+ employees)</option>
+              </select>
+            </div>
+          </div>
         </div>
-        <div class="admin-form-row">
-          <label class="admin-form-label">Sector / Industry <span class="required">*</span></label>
-          <select class="admin-form-select" id="org-sector">
-            <option value="">Select sector…</option>
-            <option value="banking">Banking & Financial Services</option>
-            <option value="government">Government</option>
-            <option value="healthcare">Healthcare</option>
-            <option value="energy">Energy & Utilities</option>
-            <option value="telecom">Telecommunications</option>
-            <option value="education">Education</option>
-            <option value="retail">Retail & E-Commerce</option>
-            <option value="insurance">Insurance</option>
-            <option value="technology">Technology</option>
-            <option value="other">Other</option>
-          </select>
+
+        <!-- Section: Compliance & Governance -->
+        <div class="org-form-section">
+          <div class="org-form-section-title">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L12 4V7C12 10 9.5 12.5 7 13C4.5 12.5 2 10 2 7V4L7 1Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Compliance & Governance
+          </div>
+          <div class="admin-form-row">
+            <label class="admin-form-label">Compliance Maturity Level <span class="required">*</span></label>
+            <div class="maturity-slider-wrap">
+              <input type="range" min="1" max="5" value="1" class="maturity-slider" id="org-maturity">
+              <div class="maturity-labels">
+                <span data-val="1" class="active">1 – Initial</span>
+                <span data-val="2">2 – Developing</span>
+                <span data-val="3">3 – Defined</span>
+                <span data-val="4">4 – Managed</span>
+                <span data-val="5">5 – Optimizing</span>
+              </div>
+            </div>
+          </div>
+          <div class="admin-form-row">
+            <label class="admin-form-label">Active Regulatory Mandates</label>
+            <div class="mandate-chips" id="org-mandates-chips"></div>
+            <div class="mandate-options" id="org-mandates-options">
+              <label class="mandate-chip-option"><input type="checkbox" value="NCA ECC"> NCA ECC</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="NCA CSCC"> NCA CSCC</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="NCA DCC"> NCA DCC</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="PDPL"> PDPL (Saudi Privacy)</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="SAMA CSF"> SAMA CSF</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="ISO 27001"> ISO 27001</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="ISO 22301"> ISO 22301</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="PCI DSS"> PCI DSS</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="GDPR"> GDPR</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="SOC 2"> SOC 2</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="NIST CSF"> NIST CSF</label>
+              <label class="mandate-chip-option"><input type="checkbox" value="HIPAA"> HIPAA</label>
+            </div>
+            <span class="admin-form-hint">Select all applicable regulatory mandates</span>
+          </div>
+          <div class="admin-form-row">
+            <label class="admin-form-label">Governance Structure</label>
+            <select class="admin-form-select" id="org-governance">
+              <option value="">Select governance structure…</option>
+              <option value="centralized">Centralized (single IT/Security team)</option>
+              <option value="decentralized">Decentralized (per-BU security)</option>
+              <option value="federated">Federated (central policy, distributed execution)</option>
+              <option value="hybrid">Hybrid</option>
+            </select>
+          </div>
         </div>
-        <div class="admin-form-row">
-          <label class="admin-form-label">Entity Size</label>
-          <select class="admin-form-select" id="org-size">
-            <option value="">Select size…</option>
-            <option value="small">Small (1–50 employees)</option>
-            <option value="medium">Medium (51–500 employees)</option>
-            <option value="large">Large (501–5000 employees)</option>
-            <option value="enterprise">Enterprise (5000+ employees)</option>
-          </select>
+
+        <!-- Section: Data & Infrastructure -->
+        <div class="org-form-section">
+          <div class="org-form-section-title">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H12V10C12 10.6 11.6 11 11 11H3C2.4 11 2 10.6 2 10V4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 4L7 1L12 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Data & Infrastructure
+          </div>
+          <div class="admin-form-grid">
+            <div class="admin-form-row">
+              <label class="admin-form-label">Data Classification Level</label>
+              <select class="admin-form-select" id="org-data-classification">
+                <option value="">Select level…</option>
+                <option value="public">Public</option>
+                <option value="internal">Internal</option>
+                <option value="confidential">Confidential</option>
+                <option value="restricted">Restricted / Top Secret</option>
+              </select>
+            </div>
+            <div class="admin-form-row">
+              <label class="admin-form-label">Geographic Scope</label>
+              <select class="admin-form-select" id="org-geographic">
+                <option value="">Select scope…</option>
+                <option value="local">Local (single country)</option>
+                <option value="regional">Regional (e.g. GCC, EU)</option>
+                <option value="multinational">Multinational</option>
+                <option value="global">Global</option>
+              </select>
+            </div>
+            <div class="admin-form-row">
+              <label class="admin-form-label">IT Infrastructure Type</label>
+              <select class="admin-form-select" id="org-it-infra">
+                <option value="">Select type…</option>
+                <option value="on-premise">On-Premise</option>
+                <option value="cloud-native">Cloud-Native</option>
+                <option value="hybrid">Hybrid (On-Prem + Cloud)</option>
+                <option value="multi-cloud">Multi-Cloud</option>
+                <option value="legacy">Legacy / Mainframe</option>
+              </select>
+            </div>
+          </div>
         </div>
-        <div class="admin-form-row">
-          <label class="admin-form-label">Obligatory Frameworks</label>
-          <input type="text" class="admin-form-input" id="org-frameworks" placeholder="e.g. NCA ECC, ISO 27001 (comma-separated)">
-          <span class="admin-form-hint">Comma-separated list of framework abbreviations</span>
-        </div>
-        <div class="admin-form-row">
-          <label class="admin-form-label">Notes</label>
-          <textarea class="admin-form-textarea" id="org-notes" rows="3" placeholder="Additional context about this organization…"></textarea>
+
+        <!-- Section: Strategic Context -->
+        <div class="org-form-section">
+          <div class="org-form-section-title">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2L9 5H12L10 8L11 12L7 10L3 12L4 8L2 5H5L7 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Strategic Context
+          </div>
+          <div class="admin-form-row">
+            <label class="admin-form-label">Obligatory Frameworks</label>
+            <input type="text" class="admin-form-input" id="org-frameworks" placeholder="e.g. NCA ECC, ISO 27001 (comma-separated)">
+            <span class="admin-form-hint">Comma-separated list of framework abbreviations</span>
+          </div>
+          <div class="admin-form-row">
+            <label class="admin-form-label">Strategic Objectives</label>
+            <div class="objectives-list" id="org-objectives-list"></div>
+            <div class="objectives-input-row">
+              <input type="text" class="admin-form-input" id="org-objective-input" placeholder="Add a strategic objective…">
+              <button type="button" class="btn-admin-ghost btn-admin-sm" id="org-objective-add">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1V11M1 6H11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                Add
+              </button>
+            </div>
+            <span class="admin-form-hint">Free-text list of organizational strategic objectives for compliance alignment</span>
+          </div>
+          <div class="admin-form-row">
+            <label class="admin-form-label">Additional Notes</label>
+            <textarea class="admin-form-textarea" id="org-notes" rows="3" placeholder="Any additional context about this organization (Digital Twin will consume this profile)…"></textarea>
+          </div>
         </div>
       </div>
       <div class="admin-modal-footer">
         <button class="btn-admin-ghost" id="org-modal-cancel">Cancel</button>
         <button class="btn-admin-primary" id="org-modal-save">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Create Context
+          Create Profile
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prompt Editor Modal -->
+  <div class="admin-modal-overlay" id="prompt-modal-overlay">
+    <div class="admin-modal admin-modal-lg">
+      <div class="admin-modal-header">
+        <h3 class="admin-modal-title" id="prompt-modal-title">New Prompt</h3>
+        <button class="admin-modal-close" id="prompt-modal-close">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="admin-modal-body" style="max-height:70vh;overflow-y:auto">
+        <div class="admin-form-row">
+          <label class="admin-form-label">Name <span class="required">*</span></label>
+          <input type="text" class="admin-form-input" id="prompt-edit-name" placeholder="e.g. Requirement Analyzer">
+        </div>
+        <div class="admin-form-row">
+          <label class="admin-form-label">Prompt Content <span class="required">*</span></label>
+          <textarea class="admin-form-textarea admin-prompt-textarea" id="prompt-edit-content" rows="20" placeholder="Enter the full prompt content..."></textarea>
+        </div>
+      </div>
+      <div class="admin-modal-footer">
+        <button class="btn-admin-ghost" id="prompt-modal-cancel">Cancel</button>
+        <button class="btn-admin-primary" id="prompt-modal-save">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="btn-text">Save</span>
+          <span class="btn-loading hidden">
+            <svg class="spinner" width="14" height="14" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="2" stroke-opacity="0.3"/><path d="M9 2C13 2 16 5 16 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Saving...
+          </span>
         </button>
       </div>
     </div>

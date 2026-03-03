@@ -1,3 +1,8 @@
+// Auth guard
+if (!document.cookie.split(';').some(c => c.trim().startsWith('wathba_token='))) {
+  window.location.replace('/login.html');
+}
+
 const PROMPTS_API = 'https://muraji-api.wathbahs.com/api/prompts';
 const LOCAL_PROMPTS_API = '/api/local-prompts';
 

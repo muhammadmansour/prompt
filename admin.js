@@ -2,6 +2,23 @@
    WathbaGRC Admin Panel JS
    ============================ */
 
+// ─── Auth Guard ──────────────────────────────────────────────
+(function checkAuth() {
+  const hasCookie = document.cookie.split(';').some(c => c.trim().startsWith('wathba_token='));
+  if (!hasCookie) {
+    window.location.replace('/login.html');
+  }
+})();
+
+async function adminLogout() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch (e) { /* ignore */ }
+  document.cookie = 'wathba_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  window.location.replace('/login.html');
+}
+window.adminLogout = adminLogout;
+
 const API = {
   sessions: '/api/chat/sessions',
   collections: '/api/collections',
@@ -9,6 +26,9 @@ const API = {
   prompts: 'https://muraji-api.wathbahs.com/api/prompts',
   libraries: 'https://muraji-api.wathbahs.com/api/libraries',
   orgContexts: '/api/org-contexts',
+  csSessions: '/api/cs-sessions',
+  controlsGenerate: '/api/controls/generate',
+  questionToControl: '/api/controls/from-question',
 };
 
 // ─── State ────────────────────────────────────────────────────
@@ -16,6 +36,8 @@ let sessions = [];
 let collections = [];
 let collectionFiles = {};  // storeId -> files[]
 let orgContexts = [];      // placeholder for org contexts data
+let frameworks = [];       // libraries/frameworks from API
+let csSessions = null;     // Controls Studio sessions (cached)
 let csMode = 'sessions';   // 'sessions' | 'wizard'
 let csCurrentStep = 0;
 let csSessionData = null;
@@ -47,7 +69,7 @@ function navigateTo(page) {
     'audit-studio': 'Audit Studio',
     'controls-studio': 'Applied Controls Studio',
     'merge-optimizer': 'Control Merge Optimizer',
-    'org-contexts': 'Organization Contexts',
+    'org-contexts': 'Organization Profiles',
     'prompts': 'Prompts',
     'file-collections': 'File Collections',
   };
@@ -59,6 +81,7 @@ function navigateTo(page) {
   if (page === 'audit-studio') loadAuditStudio();
   if (page === 'file-collections') loadCollections();
   if (page === 'org-contexts') loadOrgContexts();
+  if (page === 'prompts') loadPrompts();
   if (page === 'controls-studio') loadControlsStudio();
 }
 window.navigateTo = navigateTo;
@@ -151,33 +174,77 @@ async function fetchCollectionFiles(storeId) {
   } catch (e) { console.error('Files fetch error:', e); collectionFiles[storeId] = []; return []; }
 }
 
+async function fetchFrameworks() {
+  try {
+    const d = await fetchJSON(API.libraries);
+    frameworks = Array.isArray(d) ? d : (d.data || d.libraries || []);
+  } catch (e) { console.error('Frameworks fetch error:', e); frameworks = []; }
+}
+
+async function fetchCsSessions() {
+  try {
+    const d = await fetchJSON(API.csSessions);
+    csSessions = d.sessions || [];
+  } catch (e) { console.error('CS sessions fetch error:', e); csSessions = []; }
+}
+
+async function fetchPromptCounts() {
+  let localCount = 0, apiCount = 0;
+  try {
+    const d = await fetchJSON(API.localPrompts);
+    localCount = (d.prompts || []).length;
+  } catch (e) {}
+  try {
+    const d = await fetchJSON(API.prompts);
+    const all = Array.isArray(d) ? d : (d.data || d.prompts || []);
+    apiCount = all.length;
+  } catch (e) {}
+  return localCount + apiCount;
+}
+
 // ─── Dashboard ────────────────────────────────────────────────
 
 async function loadDashboard() {
-  await Promise.all([fetchSessions(), fetchCollections()]);
-  renderDashStats();
-  renderDashSessions();
-  renderDashStudioSessions();
+  console.log('[admin.js] loadDashboard started');
+  try {
+    const promptCountPromise = fetchPromptCounts();
+    await Promise.all([fetchSessions(), fetchCollections(), fetchFrameworks(), fetchCsSessions()]);
+    const promptCount = await promptCountPromise;
+    console.log('[admin.js] Data fetched:', { sessions: sessions.length, collections: collections.length, frameworks: frameworks.length, csSessions: (csSessions||[]).length, promptCount });
+    renderDashStats(promptCount);
+    renderDashSessions();
+    renderDashStudioSessions();
+    renderDashFrameworks();
+    console.log('[admin.js] Dashboard rendered');
+  } catch (e) {
+    console.error('[admin.js] loadDashboard error:', e);
+    // Still try to render what we can
+    try { renderDashStats(0); } catch (e2) { console.error('renderDashStats error:', e2); }
+    try { renderDashSessions(); } catch (e2) { console.error('renderDashSessions error:', e2); }
+    try { renderDashStudioSessions(); } catch (e2) { console.error('renderDashStudioSessions error:', e2); }
+    try { renderDashFrameworks(); } catch (e2) { console.error('renderDashFrameworks error:', e2); }
+  }
 }
 
-function renderDashStats() {
+function renderDashStats(promptCount) {
+  const el = document.getElementById('dash-stats');
+  if (!el) { console.error('dash-stats element not found'); return; }
   const totalSessions = sessions.length;
-  const totalMessages = sessions.reduce((a, s) => a + (s.message_count || 0), 0);
   const totalCollections = collections.length;
-  const recentWeek = sessions.filter(s => {
-    try { return (Date.now() - new Date(s.created_at).getTime()) < 7 * 86400000; } catch { return false; }
-  }).length;
+  const totalFrameworks = frameworks.length;
+  const totalFiles = collections.reduce((a, c) => a + (c.file_counts?.active || c.fileCount || 0), 0);
+  promptCount = promptCount || 0;
 
-  document.getElementById('dash-stats').innerHTML = `
+  el.innerHTML = `
     <div class="stat-card">
-      <div class="stat-card-icon stat-bg-primary"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M10 6V10L12.5 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <div class="stat-card-icon stat-bg-primary"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4H16L18 6V16C18 16.6 17.6 17 17 17H3C2.4 17 2 16.6 2 16V5C2 4.4 2.4 4 3 4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 10H13M7 13H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
       <div class="stat-card-value">${totalSessions}</div>
       <div class="stat-card-label">Audit Sessions</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-icon stat-bg-emerald"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 4H17M3 10H17M3 16H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-      <div class="stat-card-value">${totalMessages}</div>
-      <div class="stat-card-label">Total Messages</div>
+      <div class="stat-card-icon stat-bg-emerald"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 4H17M3 8H12M3 12H15M3 16H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <div class="stat-card-value">${promptCount}</div>
+      <div class="stat-card-label">Prompts</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-icon stat-bg-amber"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 7V15C3 15.6 3.4 16 4 16H16C16.6 16 17 15.6 17 15V9C17 8.4 16.6 8 16 8H10L8.5 6H4C3.4 6 3 6.4 3 7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -185,53 +252,153 @@ function renderDashStats() {
       <div class="stat-card-label">File Collections</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-icon stat-bg-sky"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2V5M10 15V18M5 10H2M18 10H15M5 5L3.5 3.5M16.5 16.5L15 15M5 15L3.5 16.5M16.5 3.5L15 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.5"/></svg></div>
-      <div class="stat-card-value">${recentWeek}</div>
-      <div class="stat-card-label">This Week</div>
+      <div class="stat-card-icon stat-bg-violet"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4H16V16H4V4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 8H16M4 12H16M8 4V16M12 4V16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <div class="stat-card-value">${totalFrameworks}</div>
+      <div class="stat-card-label">Frameworks Loaded</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-icon stat-bg-rose"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M14 2V18M6 6V14C6 16.2 7.8 18 10 18H14M6 6L4 8M6 6L8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="stat-card-value">${(csSessions || []).length}</div>
+      <div class="stat-card-label">Merge Suggestions</div>
     </div>`;
 }
 
 function renderDashSessions() {
   const list = document.getElementById('dash-sessions-list');
   const footer = document.getElementById('dash-sessions-footer');
+  if (!list || !footer) return;
   const recent = sessions.slice(0, 5);
 
   if (!recent.length) {
-    list.innerHTML = '<div style="padding:32px 20px;text-align:center;color:#9ca3af;font-size:13px">No sessions yet. <a href="index.html" style="color:var(--admin-primary)">Start an audit</a>.</div>';
+    list.innerHTML = '<div style="padding:32px 20px;text-align:center;color:#9ca3af;font-size:13px">No sessions yet. Go to <a href="javascript:navigateTo(\'audit-studio\')" style="color:var(--admin-primary)">Audit Studio</a> to start.</div>';
     footer.textContent = '';
     return;
   }
 
   list.innerHTML = recent.map(s => {
-    const ctx = parseContext(s.context);
-    const fw = ctx.frameworkName || 'Unknown';
-    const reqCount = (ctx.selectedRequirements || []).length;
+    // Handle both API format (camelCase) and raw DB format (snake_case)
+    const id = s.sessionId || s.id;
+    const createdAt = s.createdAt || s.created_at;
+    const msgCount = s.messageCount || s.message_count || 0;
+
+    // Get framework name from requirements or context
+    let fw = 'Unknown';
+    let reqCount = 0;
+    let fileCount = 0;
+
+    if (s.requirements && s.requirements.length) {
+      fw = s.requirements[0].frameworkName || 'Unknown';
+      reqCount = s.requirementsCount || s.requirements.length;
+    } else if (s.context) {
+      const ctx = parseContext(s.context);
+      fw = ctx.frameworkName || 'Unknown';
+      reqCount = (ctx.selectedRequirements || ctx.requirements || []).length;
+      fileCount = (ctx.selectedFiles || []).length + (ctx.contextFiles || []).length;
+    }
+
+    fileCount = fileCount || s.filesCount || 0;
+
     return `
-      <div class="dash-session-row" onclick="goToSession('${esc(s.id)}')">
+      <div class="dash-session-row" onclick="goToSession('${esc(id)}')">
         <div class="dash-session-info">
           <div class="dash-session-name">${esc(fw)}</div>
-          <div class="dash-session-date">${fmtDate(s.created_at)}</div>
+          <div class="dash-session-date">${fmtDate(createdAt)}</div>
         </div>
         <div class="dash-session-stats">
-          <div class="dash-session-stat"><div class="dash-session-stat-val">${reqCount}</div><div class="dash-session-stat-label">Reqs</div></div>
-          <div class="dash-session-stat"><div class="dash-session-stat-val">${s.message_count || 0}</div><div class="dash-session-stat-label">Msgs</div></div>
+          <div class="dash-session-stat"><div class="dash-session-stat-val dash-stat-purple">${reqCount}</div><div class="dash-session-stat-label">Req</div></div>
+          <div class="dash-session-stat"><div class="dash-session-stat-val dash-stat-blue">${fileCount}</div><div class="dash-session-stat-label">Files</div></div>
+          <div class="dash-session-stat"><div class="dash-session-stat-val dash-stat-amber">${msgCount}</div><div class="dash-session-stat-label">Msgs</div></div>
         </div>
+        <svg class="dash-session-arrow" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
       </div>`;
   }).join('');
 
-  footer.textContent = `${totalActiveText(sessions.length)} session${sessions.length !== 1 ? 's' : ''} total`;
+  const totalMsgs = sessions.reduce((a, s) => a + (s.messageCount || s.message_count || 0), 0);
+  const totalFiles = sessions.reduce((a, s) => {
+    if (s.filesCount) return a + s.filesCount;
+    const ctx = parseContext(s.context);
+    return a + (ctx.selectedFiles || []).length + (ctx.contextFiles || []).length;
+  }, 0);
+  footer.textContent = `${sessions.length} sessions • ${totalMsgs} total messages • ${totalFiles} reference files`;
 }
-
-function totalActiveText(n) { return n; }
 
 function renderDashStudioSessions() {
   const el = document.getElementById('dash-studio-sessions');
-  // Show a placeholder since controls studio sessions are client-side
-  el.innerHTML = `
-    <div style="padding:20px;text-align:center;font-size:12px;color:#9ca3af">
-      <p>Controls studio sessions will appear here.</p>
+  if (!el) return;
+  const list = (csSessions || []).slice(0, 3);
+
+  if (!list.length) {
+    el.innerHTML = `<div style="padding:20px;text-align:center;font-size:12px;color:#9ca3af">
+      <p>No Controls Studio sessions yet.</p>
       <button class="btn-admin-outline btn-admin-sm" onclick="navigateTo('controls-studio')" style="margin-top:8px">Open Studio</button>
     </div>`;
+    return;
+  }
+
+  el.innerHTML = list.map(s => {
+    const name = s.name || 'Untitled Session';
+    const orgCtx = s.org_context ? (typeof s.org_context === 'string' ? JSON.parse(s.org_context) : s.org_context) : null;
+    const orgName = orgCtx?.name_en || orgCtx?.name_ar || '';
+    const status = s.status || 'draft';
+    const statusColors = {
+      draft: 'color:#9ca3af',
+      generating: 'color:#f59e0b',
+      generated: 'color:#10b981',
+      exported: 'color:#0077cc',
+      merged: 'color:#8b5cf6'
+    };
+    const statusBadges = {
+      merged: '<span class="badge badge-purple" style="font-size:9px;margin-right:4px">⅓ merge</span>',
+    };
+    return `
+      <div class="dash-studio-row" onclick="navigateTo('controls-studio')">
+        <div class="dash-studio-info">
+          <div class="dash-studio-name">${esc(name.length > 28 ? name.substring(0, 28) + '...' : name)}</div>
+          ${orgName ? `<div class="dash-studio-org">${esc(orgName)}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:4px">
+          ${statusBadges[status] || ''}
+          <span class="dash-studio-status" style="${statusColors[status] || ''};font-size:11px;font-weight:500">${status}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderDashFrameworks() {
+  const el = document.getElementById('dash-frameworks');
+  if (!el) return;
+
+  if (!frameworks.length) {
+    el.innerHTML = '<div style="padding:16px;text-align:center;font-size:12px;color:#9ca3af">No frameworks loaded.</div>';
+    return;
+  }
+
+  // Build framework summary: name + requirement count
+  const fwList = frameworks.map(lib => {
+    const fw = lib.content?.framework;
+    if (!fw) return null;
+    const name = fw.name || lib.name || 'Unknown';
+    const nodes = (fw.requirement_nodes || []).filter(n => n.description);
+    return { name, reqCount: nodes.length };
+  }).filter(Boolean);
+
+  const MAX_SHOW = 4;
+  const visible = fwList.slice(0, MAX_SHOW);
+  const remaining = fwList.length - MAX_SHOW;
+
+  let html = '<div class="dash-fw-list">';
+  visible.forEach(fw => {
+    html += `
+      <div class="dash-fw-row">
+        <div class="dash-fw-name">${esc(fw.name.length > 28 ? fw.name.substring(0, 28) + '...' : fw.name)}</div>
+        <span class="dash-fw-count">${fw.reqCount} req</span>
+      </div>`;
+  });
+  if (remaining > 0) {
+    html += `<div class="dash-fw-more">+${remaining} more framework${remaining > 1 ? 's' : ''}</div>`;
+  }
+  html += '</div>';
+  el.innerHTML = html;
 }
 
 // ─── Audit Sessions Page ──────────────────────────────────────
@@ -243,11 +410,13 @@ async function loadSessions() {
 
 function renderSessionsList(query) {
   const el = document.getElementById('sessions-list-full');
+  if (!el) return;
   let list = sessions;
   if (query) {
     list = sessions.filter(s => {
-      const ctx = parseContext(s.context);
-      const text = (ctx.frameworkName || '') + ' ' + (ctx.query || '');
+      const fw = (s.requirements && s.requirements[0]?.frameworkName) || '';
+      const q = s.query || '';
+      const text = fw + ' ' + q;
       return text.toLowerCase().includes(query);
     });
   }
@@ -258,22 +427,25 @@ function renderSessionsList(query) {
   }
 
   el.innerHTML = list.map(s => {
-    const ctx = parseContext(s.context);
-    const fw = ctx.frameworkName || 'Unknown';
-    const reqCount = (ctx.selectedRequirements || []).length;
-    const fileCount = (ctx.selectedFiles || []).length + (ctx.contextFiles || []).length;
+    const id = s.sessionId || s.id;
+    const createdAt = s.createdAt || s.created_at;
+    const msgCount = s.messageCount || s.message_count || 0;
+    const fw = (s.requirements && s.requirements[0]?.frameworkName) || 'Unknown';
+    const reqCount = s.requirementsCount || (s.requirements || []).length;
+    const fileCount = s.filesCount || 0;
+    const queryPreview = (s.query || '').substring(0, 80);
     return `
-      <div class="session-row" onclick="goToSession('${esc(s.id)}')">
+      <div class="session-row" onclick="goToSession('${esc(id)}')">
         <div>
           <div class="session-row-name">${esc(fw)}</div>
-          <div class="session-row-query">${esc((ctx.query || '').substring(0, 80))}</div>
+          <div class="session-row-query">${esc(queryPreview)}</div>
         </div>
         <div class="session-row-stat">${reqCount}</div>
         <div class="session-row-stat">${fileCount}</div>
-        <div class="session-row-stat">${s.message_count || 0}</div>
-        <div class="session-row-date">${fmtDateShort(s.created_at)}</div>
+        <div class="session-row-stat">${msgCount}</div>
+        <div class="session-row-date">${fmtDateShort(createdAt)}</div>
         <div class="col-action">
-          <button class="btn-admin-ghost btn-admin-sm" onclick="event.stopPropagation();deleteSession('${esc(s.id)}')" title="Delete">
+          <button class="btn-admin-ghost btn-admin-sm" onclick="event.stopPropagation();deleteSession('${esc(id)}')" title="Delete">
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
         </div>
@@ -289,9 +461,9 @@ if (sessionsSearch) {
 
 function goToSession(id) {
   // Find session and set context in sessionStorage, then redirect to chat page
-  const s = sessions.find(x => x.id === id);
+  const s = sessions.find(x => (x.sessionId || x.id) === id);
   if (s) {
-    sessionStorage.setItem('chatSessionId', s.id);
+    sessionStorage.setItem('chatSessionId', s.sessionId || s.id);
     window.location.href = 'chat.html';
   }
 }
@@ -303,7 +475,7 @@ async function deleteSession(id) {
     const r = await fetch(API.sessions + '/' + id, { method: 'DELETE' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     toast('success', 'Deleted', 'Session deleted.');
-    sessions = sessions.filter(s => s.id !== id);
+    sessions = sessions.filter(s => (s.sessionId || s.id) !== id);
     renderSessionsList();
   } catch (e) { toast('error', 'Error', e.message); }
 }
@@ -464,8 +636,8 @@ function renderOrgContextsList(query) {
     el.innerHTML = `
       <div class="admin-card empty-state-box">
         <div class="empty-icon"><svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M4 8V24C4 25.1 4.9 26 6 26H26C27.1 26 28 25.1 28 24V12C28 10.9 27.1 10 26 10H17L14.5 7H6C4.9 7 4 7.9 4 9Z" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round"/></svg></div>
-        <h3>No organization contexts</h3>
-        <p>Organization contexts help the AI generate more relevant and industry-specific controls. Click "New Context" to create one.</p>
+        <h3>No Organization Profiles</h3>
+        <p>Organization Profiles are the Digital Twin that AI uses to generate tailored controls. Click "New Profile" to create one — build once, use everywhere.</p>
       </div>`;
     return;
   }
@@ -475,12 +647,17 @@ function renderOrgContextsList(query) {
     return;
   }
 
-  // Map filtered items back to their original index in orgContexts
+  const sectorLabels = { banking: 'Banking & Financial Services', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', defense: 'Defense & Military', manufacturing: 'Manufacturing', transportation: 'Transportation & Logistics', custom: 'Custom', other: 'Other' };
+  const sizeLabels = { small: 'Small', medium: 'Medium', large: 'Large', enterprise: 'Enterprise' };
+  const maturityLabels = { 1: 'Initial', 2: 'Developing', 3: 'Defined', 4: 'Managed', 5: 'Optimizing' };
+
   el.innerHTML = list.map(ctx => {
     const origIdx = orgContexts.indexOf(ctx);
-    const tags = (ctx.obligatoryFrameworks || []).map(f => `<span class="badge badge-primary badge-round">${esc(f)}</span>`).join('');
-    const sectorLabels = { banking: 'Banking & Financial Services', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', other: 'Other' };
-    const sizeLabels = { small: 'Small', medium: 'Medium', large: 'Large', enterprise: 'Enterprise' };
+    const fwTags = (ctx.obligatoryFrameworks || []).map(f => `<span class="badge badge-primary badge-round">${esc(f)}</span>`).join('');
+    const mandTags = (ctx.regulatoryMandates || []).map(m => `<span class="badge badge-amber badge-round">${esc(m)}</span>`).join('');
+    const sectorDisplay = ctx.sectorCustom || sectorLabels[ctx.sector] || ctx.sector || '';
+    const matLvl = ctx.complianceMaturity || 1;
+    const matPct = (matLvl / 5) * 100;
     return `
       <div class="org-ctx-card">
         <div class="org-ctx-header">
@@ -494,9 +671,10 @@ function renderOrgContextsList(query) {
                 ${ctx.nameAr ? `<span class="org-ctx-name-ar">${esc(ctx.nameAr)}</span>` : ''}
               </div>
               <div class="org-ctx-tags">
-                ${ctx.sector ? `<span class="badge badge-gray badge-round">${esc(sectorLabels[ctx.sector] || ctx.sector)}</span>` : ''}
+                ${sectorDisplay ? `<span class="badge badge-gray badge-round">${esc(sectorDisplay)}</span>` : ''}
                 ${ctx.size ? `<span class="badge badge-gray badge-round">${esc(sizeLabels[ctx.size] || ctx.size)}</span>` : ''}
-                ${tags}
+                <span class="badge badge-sky badge-round" title="Compliance Maturity">Maturity ${matLvl}/5</span>
+                ${fwTags}
               </div>
             </div>
           </div>
@@ -509,6 +687,21 @@ function renderOrgContextsList(query) {
               <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
           </div>
+        </div>
+        <div class="org-ctx-details">
+          <div class="org-ctx-maturity">
+            <div class="org-ctx-maturity-bar">
+              <div class="org-ctx-maturity-fill" style="width:${matPct}%"></div>
+            </div>
+            <span class="org-ctx-maturity-label">${maturityLabels[matLvl] || matLvl}</span>
+          </div>
+          <div class="org-ctx-meta-row">
+            ${ctx.governanceStructure ? `<span class="org-ctx-meta-item"><strong>Governance:</strong> ${esc(ctx.governanceStructure)}</span>` : ''}
+            ${ctx.dataClassification ? `<span class="org-ctx-meta-item"><strong>Data:</strong> ${esc(ctx.dataClassification)}</span>` : ''}
+            ${ctx.geographicScope ? `<span class="org-ctx-meta-item"><strong>Scope:</strong> ${esc(ctx.geographicScope)}</span>` : ''}
+            ${ctx.itInfrastructure ? `<span class="org-ctx-meta-item"><strong>Infra:</strong> ${esc(ctx.itInfrastructure)}</span>` : ''}
+          </div>
+          ${mandTags ? `<div class="org-ctx-mandates">${mandTags}</div>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -525,19 +718,69 @@ let editingOrgIdx = null;
 
 function openOrgModal() { orgModal.classList.add('active'); document.body.style.overflow = 'hidden'; }
 function closeOrgModal() { orgModal.classList.remove('active'); document.body.style.overflow = ''; editingOrgIdx = null; clearOrgForm(); }
+let orgObjectives = []; // temp state for objectives list
+
 function clearOrgForm() {
   document.getElementById('org-name-en').value = '';
   document.getElementById('org-name-ar').value = '';
   document.getElementById('org-sector').value = '';
+  document.getElementById('org-sector-custom').value = '';
+  document.getElementById('org-sector-custom-row').style.display = 'none';
   document.getElementById('org-size').value = '';
+  document.getElementById('org-maturity').value = 1;
+  updateMaturityLabels(1);
+  document.querySelectorAll('#org-mandates-options input[type="checkbox"]').forEach(c => c.checked = false);
+  document.getElementById('org-governance').value = '';
+  document.getElementById('org-data-classification').value = '';
+  document.getElementById('org-geographic').value = '';
+  document.getElementById('org-it-infra').value = '';
   document.getElementById('org-frameworks').value = '';
+  orgObjectives = [];
+  renderObjectivesList();
   document.getElementById('org-notes').value = '';
 }
 
+function updateMaturityLabels(val) {
+  document.querySelectorAll('.maturity-labels span').forEach(s => {
+    s.classList.toggle('active', s.dataset.val === String(val));
+  });
+}
+
+function renderObjectivesList() {
+  const el = document.getElementById('org-objectives-list');
+  if (!el) return;
+  if (!orgObjectives.length) { el.innerHTML = ''; return; }
+  el.innerHTML = orgObjectives.map((obj, i) => `
+    <div class="objective-chip">
+      <span>${esc(obj)}</span>
+      <button type="button" onclick="removeObjective(${i})" class="objective-chip-remove">&times;</button>
+    </div>`).join('');
+}
+function removeObjective(i) { orgObjectives.splice(i, 1); renderObjectivesList(); }
+window.removeObjective = removeObjective;
+
+// Maturity slider
+document.getElementById('org-maturity')?.addEventListener('input', e => updateMaturityLabels(e.target.value));
+
+// Sector "custom" toggle
+document.getElementById('org-sector')?.addEventListener('change', e => {
+  document.getElementById('org-sector-custom-row').style.display = e.target.value === 'custom' ? '' : 'none';
+});
+
+// Objectives add
+document.getElementById('org-objective-add')?.addEventListener('click', () => {
+  const inp = document.getElementById('org-objective-input');
+  const val = inp.value.trim();
+  if (val) { orgObjectives.push(val); inp.value = ''; renderObjectivesList(); }
+});
+document.getElementById('org-objective-input')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('org-objective-add')?.click(); }
+});
+
 document.getElementById('btn-new-context').addEventListener('click', () => {
   editingOrgIdx = null;
-  orgModalTitle.textContent = 'New Organization Context';
-  orgModalSave.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Create Context';
+  orgModalTitle.textContent = 'New Organization Profile';
+  orgModalSave.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Create Profile';
   clearOrgForm();
   openOrgModal();
   document.getElementById('org-name-en').focus();
@@ -552,18 +795,35 @@ orgModalSave.addEventListener('click', async () => {
   const nameEn = document.getElementById('org-name-en').value.trim();
   const nameAr = document.getElementById('org-name-ar').value.trim();
   const sector = document.getElementById('org-sector').value;
+  const sectorCustom = document.getElementById('org-sector-custom').value.trim();
   const size = document.getElementById('org-size').value;
+  const maturity = parseInt(document.getElementById('org-maturity').value) || 1;
+  const mandates = [];
+  document.querySelectorAll('#org-mandates-options input[type="checkbox"]:checked').forEach(c => mandates.push(c.value));
+  const governance = document.getElementById('org-governance').value;
+  const dataCls = document.getElementById('org-data-classification').value;
+  const geo = document.getElementById('org-geographic').value;
+  const itInfra = document.getElementById('org-it-infra').value;
   const frameworks = document.getElementById('org-frameworks').value.trim();
   const notes = document.getElementById('org-notes').value.trim();
 
   if (!nameEn) { toast('error', 'Validation', 'Name (English) is required.'); document.getElementById('org-name-en').focus(); return; }
-  if (!sector) { toast('error', 'Validation', 'Sector is required.'); document.getElementById('org-sector').focus(); return; }
+  if (!sector) { toast('error', 'Validation', 'Industry vertical is required.'); document.getElementById('org-sector').focus(); return; }
+  if (!size) { toast('error', 'Validation', 'Entity size is required.'); document.getElementById('org-size').focus(); return; }
 
   const body = {
     nameEn,
     nameAr,
     sector,
+    sectorCustom: sector === 'custom' ? sectorCustom : '',
     size,
+    complianceMaturity: maturity,
+    regulatoryMandates: mandates,
+    governanceStructure: governance,
+    dataClassification: dataCls,
+    geographicScope: geo,
+    itInfrastructure: itInfra,
+    strategicObjectives: orgObjectives,
     obligatoryFrameworks: frameworks ? frameworks.split(',').map(s => s.trim()).filter(Boolean) : [],
     notes,
     isActive: true,
@@ -580,40 +840,55 @@ orgModalSave.addEventListener('click', async () => {
     }
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'HTTP ' + r.status); }
 
-    toast('success', editingOrgIdx !== null ? 'Updated' : 'Created', 'Context "' + nameEn + '" saved.');
+    toast('success', editingOrgIdx !== null ? 'Updated' : 'Created', 'Profile "' + nameEn + '" saved.');
     closeOrgModal();
     await loadOrgContexts();
   } catch (e) {
-    console.error('Save org context error:', e);
+    console.error('Save org profile error:', e);
     toast('error', 'Save Failed', e.message);
   } finally {
     orgModalSave.disabled = false;
   }
 });
 
-// Edit org context
+// Edit org profile
 function editOrgContext(idx) {
   const ctx = orgContexts[idx];
   if (!ctx) return;
   editingOrgIdx = idx;
-  orgModalTitle.textContent = 'Edit Organization Context';
+  orgModalTitle.textContent = 'Edit Organization Profile';
   orgModalSave.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Save Changes';
   document.getElementById('org-name-en').value = ctx.nameEn || ctx.name || '';
   document.getElementById('org-name-ar').value = ctx.nameAr || '';
   document.getElementById('org-sector').value = ctx.sector || '';
+  document.getElementById('org-sector-custom').value = ctx.sectorCustom || '';
+  document.getElementById('org-sector-custom-row').style.display = ctx.sector === 'custom' ? '' : 'none';
   document.getElementById('org-size').value = ctx.size || '';
+  document.getElementById('org-maturity').value = ctx.complianceMaturity || 1;
+  updateMaturityLabels(ctx.complianceMaturity || 1);
+  // Set mandates checkboxes
+  const mandates = ctx.regulatoryMandates || [];
+  document.querySelectorAll('#org-mandates-options input[type="checkbox"]').forEach(c => {
+    c.checked = mandates.includes(c.value);
+  });
+  document.getElementById('org-governance').value = ctx.governanceStructure || '';
+  document.getElementById('org-data-classification').value = ctx.dataClassification || '';
+  document.getElementById('org-geographic').value = ctx.geographicScope || '';
+  document.getElementById('org-it-infra').value = ctx.itInfrastructure || '';
   document.getElementById('org-frameworks').value = (ctx.obligatoryFrameworks || []).join(', ');
+  orgObjectives = [...(ctx.strategicObjectives || [])];
+  renderObjectivesList();
   document.getElementById('org-notes').value = ctx.notes || '';
   openOrgModal();
   document.getElementById('org-name-en').focus();
 }
 window.editOrgContext = editOrgContext;
 
-// Delete org context
+// Delete org profile
 async function deleteOrgContext(idx) {
   const ctx = orgContexts[idx];
   if (!ctx) return;
-  if (!confirm('Delete "' + (ctx.nameEn || ctx.name) + '"?')) return;
+  if (!confirm('Delete profile "' + (ctx.nameEn || ctx.name) + '"? Any Controls Studio sessions using this profile will lose their org context.')) return;
   try {
     const r = await fetch(API.orgContexts + '/' + ctx.id, { method: 'DELETE' });
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'HTTP ' + r.status); }
@@ -635,6 +910,254 @@ if (orgSearch) {
   });
 }
 
+// ─── Prompts Page ────────────────────────────────────────────
+
+const PROMPTS_API_URL = 'https://muraji-api.wathbahs.com/api/prompts';
+const LOCAL_PROMPTS_URL = '/api/local-prompts';
+const PROMPTS_HIDDEN_IDS = ['64d28cc6-e8c2-4de1-8842-e1f9c65e9173'];
+
+let adminLocalPrompts = [];
+let adminApiPrompts = [];
+let promptEditId = null;
+let promptEditSource = null; // 'local' | 'api'
+
+async function loadPrompts() {
+  const listEl = document.getElementById('admin-prompts-list');
+  if (listEl) listEl.innerHTML = '<div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading prompts...</span></div>';
+  await Promise.all([fetchLocalPrompts(), fetchApiPrompts()]);
+  renderPromptsList();
+}
+
+async function fetchLocalPrompts() {
+  try {
+    const r = await fetch(LOCAL_PROMPTS_URL);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    adminLocalPrompts = d.prompts || [];
+  } catch (e) { console.error('Local prompts error:', e); adminLocalPrompts = []; }
+}
+
+async function fetchApiPrompts() {
+  try {
+    const r = await fetch(PROMPTS_API_URL);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    adminApiPrompts = Array.isArray(d) ? d : (d.data || d.prompts || []);
+    adminApiPrompts = adminApiPrompts.filter(p => !PROMPTS_HIDDEN_IDS.includes(p._id || p.id));
+  } catch (e) { console.error('API prompts error:', e); adminApiPrompts = []; }
+}
+
+function renderPromptsList(q) {
+  const listEl = document.getElementById('admin-prompts-list');
+  if (!listEl) return;
+
+  let fLocal = adminLocalPrompts;
+  let fApi = adminApiPrompts;
+  if (q) {
+    fLocal = adminLocalPrompts.filter(p => (p.name || '').toLowerCase().includes(q) || (p.content || '').toLowerCase().includes(q));
+    fApi = adminApiPrompts.filter(p => (p.name || '').toLowerCase().includes(q) || (p.content || '').toLowerCase().includes(q));
+  }
+
+  let html = '';
+
+  if (fLocal.length > 0) {
+    html += '<div class="ap-section-header"><h3 class="ap-section-title">Local Prompts</h3><span class="badge badge-primary badge-round">Used by App</span></div>';
+    html += '<div class="ap-grid">';
+    fLocal.forEach(p => { html += promptCard(p, 'local'); });
+    html += '</div>';
+  }
+
+  if (fApi.length > 0) {
+    html += '<div class="ap-section-header" style="margin-top:20px"><h3 class="ap-section-title">API Prompts</h3><span class="badge badge-gray badge-round">From Muraji API</span></div>';
+    html += '<div class="ap-grid">';
+    fApi.forEach(p => { html += promptCard(p, 'api'); });
+    html += '</div>';
+  }
+
+  if (!html) {
+    html = '<div class="admin-card empty-state-box" style="text-align:center;padding:40px"><h3>No prompts found</h3><p style="color:#6b7280;font-size:12px">Create a new prompt or check your API connection.</p></div>';
+  }
+
+  listEl.innerHTML = html;
+}
+
+function promptCard(p, src) {
+  const id = p._id || p.id;
+  const nm = p.name || 'Untitled';
+  const v = p.version || 1;
+  const ct = p.content || '';
+  const prev = ct.substring(0, 180);
+  const isL = src === 'local';
+  const cAt = p.created_at || p.createdAt;
+  const uAt = p.updated_at || p.updatedAt;
+
+  let note = '';
+  if (id === '8c0a228d-1fa7-47f6-9df6-4354b72f8134') note = 'Used in both applied control and requirement evidence assessments';
+  if (id === 'b596eb43-d411-4fe6-9d80-0ab113673678') note = 'Used in extracting entities from evidence in CISO version';
+
+  return `
+    <div class="ap-card ${isL ? 'ap-card-local' : ''}">
+      <div class="ap-card-top">
+        <div class="ap-card-name-row">
+          <span class="ap-card-name">${esc(nm)}</span>
+          ${isL ? '<span class="badge badge-emerald" style="font-size:9px">LOCAL</span>' : ''}
+          ${!isL ? '<span class="badge badge-gray" style="font-size:9px">v' + v + '</span>' : ''}
+        </div>
+        <div class="ap-card-actions">
+          <button class="btn-admin-ghost btn-admin-sm" onclick="adminEditPrompt('${esc(id)}','${src}')" title="Edit">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          ${!isL ? `<button class="btn-admin-ghost btn-admin-sm" onclick="adminDeletePrompt('${esc(id)}','${esc(nm).replace(/'/g, "\\\\'")}')" title="Delete">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>` : ''}
+        </div>
+      </div>
+      ${prev ? `<div class="ap-card-preview"><pre>${esc(prev)}${ct.length > 180 ? '…' : ''}</pre></div>` : ''}
+      <div class="ap-card-footer">
+        ${uAt ? `<span class="ap-card-date">Updated ${fmtRelDate(uAt)}</span>` : ''}
+        ${cAt ? `<span class="ap-card-date">Created ${fmtRelDate(cAt)}</span>` : ''}
+      </div>
+      ${note ? `<div class="ap-card-note">${esc(note)}</div>` : ''}
+    </div>`;
+}
+
+function fmtRelDate(s) {
+  try {
+    const d = new Date(s), n = new Date(), ms = n - d;
+    const m = Math.floor(ms / 60000), h = Math.floor(ms / 3600000), dy = Math.floor(ms / 86400000);
+    if (m < 1) return 'just now'; if (m < 60) return m + 'm ago'; if (h < 24) return h + 'h ago'; if (dy < 7) return dy + 'd ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch { return s; }
+}
+
+// Prompts search
+const adminPromptsSearch = document.getElementById('admin-prompts-search');
+if (adminPromptsSearch) {
+  adminPromptsSearch.addEventListener('input', e => {
+    const q = e.target.value.toLowerCase().trim();
+    renderPromptsList(q || undefined);
+  });
+}
+
+// Prompt modal
+const promptModal = document.getElementById('prompt-modal-overlay');
+const promptModalTitle = document.getElementById('prompt-modal-title');
+const promptModalClose = document.getElementById('prompt-modal-close');
+const promptModalCancel = document.getElementById('prompt-modal-cancel');
+const promptModalSave = document.getElementById('prompt-modal-save');
+
+function openPromptModal() { promptModal.classList.add('active'); document.body.style.overflow = 'hidden'; }
+function closePromptModal() { promptModal.classList.remove('active'); document.body.style.overflow = ''; promptEditId = null; promptEditSource = null; document.getElementById('prompt-edit-name').value = ''; document.getElementById('prompt-edit-content').value = ''; }
+
+promptModalClose?.addEventListener('click', closePromptModal);
+promptModalCancel?.addEventListener('click', closePromptModal);
+promptModal?.addEventListener('click', e => { if (e.target === promptModal) closePromptModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && promptModal?.classList.contains('active')) closePromptModal(); });
+
+// New prompt
+document.getElementById('btn-new-prompt')?.addEventListener('click', () => {
+  promptEditId = null;
+  promptEditSource = 'api';
+  promptModalTitle.textContent = 'New Prompt';
+  document.getElementById('prompt-edit-name').value = '';
+  document.getElementById('prompt-edit-content').value = '';
+  openPromptModal();
+  document.getElementById('prompt-edit-name').focus();
+});
+
+// Edit prompt
+async function adminEditPrompt(id, src) {
+  promptEditId = id;
+  promptEditSource = src || 'api';
+  promptModalTitle.textContent = 'Edit Prompt';
+
+  const nameEl = document.getElementById('prompt-edit-name');
+  const contentEl = document.getElementById('prompt-edit-content');
+
+  if (src === 'local') {
+    const c = adminLocalPrompts.find(p => p.id === id);
+    nameEl.value = c?.name || '';
+    contentEl.value = c?.content || '';
+    openPromptModal();
+    try {
+      const r = await fetch(LOCAL_PROMPTS_URL + '/' + id);
+      if (r.ok) { const d = await r.json(); const p = d.prompt || d; nameEl.value = p.name || ''; contentEl.value = p.content || ''; }
+    } catch (e) { console.error(e); toast('error', 'Error', e.message); }
+  } else {
+    const c = adminApiPrompts.find(p => (p._id || p.id) === id);
+    nameEl.value = c?.name || '';
+    contentEl.value = c?.content || '';
+    openPromptModal();
+    try {
+      const r = await fetch(PROMPTS_API_URL + '/' + id);
+      if (r.ok) { const d = await r.json(); const p = d.data || d.prompt || d; nameEl.value = p.name || ''; contentEl.value = p.content || ''; }
+    } catch (e) { console.error(e); toast('error', 'Error', e.message); }
+  }
+  nameEl.focus();
+}
+window.adminEditPrompt = adminEditPrompt;
+
+// Save prompt
+promptModalSave?.addEventListener('click', async () => {
+  const nm = document.getElementById('prompt-edit-name').value.trim();
+  const ct = document.getElementById('prompt-edit-content').value.trim();
+  if (!nm) { toast('error', 'Validation', 'Name is required.'); document.getElementById('prompt-edit-name').focus(); return; }
+  if (!ct) { toast('error', 'Validation', 'Content is required.'); document.getElementById('prompt-edit-content').focus(); return; }
+
+  const body = { name: nm, content: ct };
+  const btnT = promptModalSave.querySelector('.btn-text');
+  const btnL = promptModalSave.querySelector('.btn-loading');
+
+  try {
+    promptModalSave.disabled = true;
+    if (btnT) btnT.classList.add('hidden');
+    if (btnL) btnL.classList.remove('hidden');
+
+    let r;
+    if (promptEditSource === 'local' && promptEditId) {
+      r = await fetch(LOCAL_PROMPTS_URL + '/' + promptEditId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else if (promptEditId) {
+      r = await fetch(PROMPTS_API_URL + '/' + promptEditId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      r = await fetch(PROMPTS_API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.message || e.error || 'HTTP ' + r.status); }
+
+    closePromptModal();
+    toast('success', promptEditId ? 'Updated' : 'Created', 'Prompt "' + nm + '" saved.');
+    await loadPrompts();
+  } catch (e) {
+    console.error(e);
+    toast('error', 'Save Failed', e.message);
+  } finally {
+    promptModalSave.disabled = false;
+    if (btnT) btnT.classList.remove('hidden');
+    if (btnL) btnL.classList.add('hidden');
+  }
+});
+
+// Delete prompt
+async function adminDeletePrompt(id, nm) {
+  if (!confirm('Delete "' + nm + '"?')) return;
+  try {
+    const r = await fetch(PROMPTS_API_URL + '/' + id, { method: 'DELETE' });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.message || e.error || 'HTTP ' + r.status); }
+    toast('success', 'Deleted', '"' + nm + '" deleted.');
+    await loadPrompts();
+  } catch (e) { console.error(e); toast('error', 'Delete Failed', e.message); }
+}
+window.adminDeletePrompt = adminDeletePrompt;
+
+// Clear cache
+document.getElementById('btn-prompts-clear-cache')?.addEventListener('click', async () => {
+  try {
+    const r = await fetch(PROMPTS_API_URL + '/cache/clear', { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    toast('success', 'Cache Cleared', 'API prompt cache cleared.');
+    await loadPrompts();
+  } catch (e) { console.error(e); toast('error', 'Failed', e.message); }
+});
+
 // ─── Controls Studio ──────────────────────────────────────────
 
 const CS_STEPS = [
@@ -646,25 +1169,63 @@ const CS_STEPS = [
   { label: 'Export', icon: '6' },
 ];
 
-// Get stored sessions from localStorage
-function csGetSessions() {
-  try { return JSON.parse(localStorage.getItem('cs_sessions') || '[]'); } catch { return []; }
+// CS Sessions — DB-backed via API
+let csCachedSessions = null; // in-memory cache, loaded from API
+
+async function csGetSessions() {
+  if (csCachedSessions !== null) return csCachedSessions;
+  try {
+    const d = await fetchJSON(API.csSessions);
+    csCachedSessions = d.sessions || [];
+  } catch (e) { console.error('csGetSessions:', e); csCachedSessions = []; }
+  return csCachedSessions;
 }
-function csSaveSessions(list) {
-  localStorage.setItem('cs_sessions', JSON.stringify(list));
+
+async function csSaveSession(session) {
+  try {
+    const existing = (await csGetSessions()).find(s => s.id === session.id);
+    const method = existing ? 'PUT' : 'POST';
+    const url = existing ? API.csSessions + '/' + session.id : API.csSessions;
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(session),
+    });
+    const data = await res.json();
+    if (data.success && data.session) {
+      // Update cache
+      if (csCachedSessions) {
+        const idx = csCachedSessions.findIndex(s => s.id === data.session.id);
+        if (idx >= 0) csCachedSessions[idx] = data.session;
+        else csCachedSessions.unshift(data.session);
+      }
+      return data.session;
+    }
+  } catch (e) { console.error('csSaveSession:', e); }
+  return session;
+}
+
+async function csDeleteSession(id) {
+  try {
+    await fetch(API.csSessions + '/' + id, { method: 'DELETE' });
+    if (csCachedSessions) csCachedSessions = csCachedSessions.filter(s => s.id !== id);
+  } catch (e) { console.error('csDeleteSession:', e); }
 }
 
 function loadControlsStudio() {
   if (csMode === 'sessions') csShowSessions();
 }
 
-function csShowSessions() {
+async function csShowSessions() {
   csMode = 'sessions';
   document.getElementById('cs-step-indicator').style.display = 'none';
   document.getElementById('cs-back-to-sessions').style.display = 'none';
 
-  const csSessions = csGetSessions();
   const content = document.getElementById('cs-content');
+  content.innerHTML = '<div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading sessions...</span></div>';
+
+  csCachedSessions = null; // Force refresh from DB
+  const csSessions = await csGetSessions();
 
   // Stats
   const totalSessions = csSessions.length;
@@ -708,7 +1269,7 @@ function csShowSessions() {
       </div>`;
   } else {
     h += '<div class="admin-card">';
-    h += csSessions.map((s, i) => {
+    h += csSessions.map(s => {
       const reqCount = (s.requirements || []).length;
       const ctrlCount = (s.controls || []).length;
       const statusBadge = s.status === 'exported'
@@ -733,7 +1294,10 @@ function csShowSessions() {
             <div class="cs-session-stat-item"><div class="val emerald">${ctrlCount}</div><div class="lbl">Controls</div></div>
           </div>
           <div class="cs-session-action">
-            <button class="btn-admin-outline btn-admin-sm" onclick="csOpenSession(${i})">Open →</button>
+            <button class="btn-admin-outline btn-admin-sm" onclick="csOpenSession('${esc(s.id)}')">Open →</button>
+            <button class="btn-admin-outline btn-admin-sm" style="color:#dc2626;border-color:#fecaca" onclick="event.stopPropagation();csDeleteSessionConfirm('${esc(s.id)}','${esc(s.name || 'Unnamed').replace(/'/g, "\\'")}')">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
           </div>
         </div>`;
     }).join('');
@@ -750,18 +1314,23 @@ function csShowSessions() {
 }
 window.csShowSessions = csShowSessions;
 
-function csNewSession() {
+async function csNewSession() {
+  const sessions = await csGetSessions();
   csSessionData = {
     id: Date.now().toString(),
-    name: 'Session ' + (csGetSessions().length + 1),
+    name: 'Session ' + (sessions.length + 1),
     created_at: new Date().toISOString(),
     step: 0,
     requirements: [],
     collections: [],
+    selectedFiles: [],
+    sessionFiles: [],
     orgContext: null,
     controls: [],
     status: 'draft',
   };
+  // Save to DB immediately
+  await csSaveSession(csSessionData);
   csCurrentStep = 0;
   csMode = 'wizard';
   document.getElementById('cs-back-to-sessions').style.display = '';
@@ -769,17 +1338,31 @@ function csNewSession() {
 }
 window.csNewSession = csNewSession;
 
-function csOpenSession(idx) {
-  const list = csGetSessions();
-  if (list[idx]) {
-    csSessionData = list[idx];
-    csCurrentStep = csSessionData.step || 0;
-    csMode = 'wizard';
-    document.getElementById('cs-back-to-sessions').style.display = '';
-    csRenderWizard();
+async function csOpenSession(id) {
+  try {
+    const d = await fetchJSON(API.csSessions + '/' + id);
+    if (d.success && d.session) {
+      csSessionData = d.session;
+      csCurrentStep = csSessionData.step || 0;
+      csMode = 'wizard';
+      document.getElementById('cs-back-to-sessions').style.display = '';
+      csRenderWizard();
+    }
+  } catch (e) {
+    console.error('csOpenSession:', e);
+    toast('error', 'Error', 'Could not load session.');
   }
 }
 window.csOpenSession = csOpenSession;
+
+async function csDeleteSessionConfirm(id, name) {
+  if (!confirm(`Delete session "${name}"?`)) return;
+  await csDeleteSession(id);
+  toast('success', 'Deleted', 'Session deleted.');
+  csCachedSessions = null; // Force refresh
+  csShowSessions();
+}
+window.csDeleteSessionConfirm = csDeleteSessionConfirm;
 
 function csRenderWizard() {
   // Step indicator
@@ -1062,12 +1645,11 @@ function csAttachFwSearch() {
   }
 }
 
-function csSaveStep() {
-  // Save current session to localStorage
-  const list = csGetSessions();
-  const idx = list.findIndex(s => s.id === csSessionData.id);
-  if (idx >= 0) list[idx] = csSessionData; else list.push(csSessionData);
-  csSaveSessions(list);
+async function csSaveStep() {
+  // Save current session to DB
+  if (csSessionData) {
+    await csSaveSession(csSessionData);
+  }
 }
 window.csSaveStep = csSaveStep;
 
@@ -1430,27 +2012,26 @@ function csRenderStepOrgContext(el) {
     <div class="cs-wizard-card">
       <div class="cs-wizard-header sky">
         <div class="cs-wizard-header-title">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 15V5C2 4.4 2.4 4 3 4H15C15.6 4 16 4.4 16 5V15M5 8H13M5 11H10M9 4V2" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Step 3: Organization Context
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2L14 5V9C14 12 11.5 14.5 9 15C6.5 14.5 4 12 4 9V5L9 2Z" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Step 3: Organization Profile <span style="background:rgba(255,255,255,0.2);padding:1px 6px;border-radius:4px;font-size:10px;font-weight:500;margin-left:4px">Required</span>
         </div>
-        <div class="cs-wizard-header-desc">Select an organizational context to tailor AI suggestions to a specific industry and entity.</div>
+        <div class="cs-wizard-header-desc">Select the organization profile to tailor AI-generated controls. Different profiles produce different controls for the same requirement.</div>
         <div class="cs-wizard-header-stat">
-          <span class="big" id="cs-org-selected">${selected ? '1' : '0'}</span>
-          <span class="label">${selected ? esc(selected.nameEn || selected.name || '') : 'no context selected (generic mode)'}</span>
+          <span class="big" id="cs-org-selected">${selected ? '✓' : '⚠'}</span>
+          <span class="label">${selected ? esc(selected.nameEn || selected.name || '') : 'no profile selected — required for generation'}</span>
         </div>
       </div>
       <div class="cs-wizard-body">
         <div id="cs-org-list" style="display:flex;flex-direction:column;gap:8px">
-          <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading contexts...</span></div>
+          <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading profiles...</span></div>
         </div>
         <p style="font-size:11px;color:#9ca3af;margin-top:10px;text-align:center">
-          Don't see your org? <button class="inline-link" onclick="navigateTo('org-contexts')">Add a new context</button>.
-          Or skip to use generic mode.
+          Don't see your org? <button class="inline-link" onclick="navigateTo('org-contexts')">Create a new Organization Profile</button>.
         </p>
       </div>
       <div class="cs-wizard-footer">
         <button class="btn-admin-ghost" onclick="csSaveStep();csCurrentStep=1;csSessionData.step=1;csRenderWizard()">← Back</button>
-        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=3;csSessionData.step=3;csRenderWizard()">
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=3;csSessionData.step=3;csRenderWizard()" ${!selected ? 'disabled title="Select an Organization Profile first"' : ''}>
           Next &nbsp;→
         </button>
       </div>
@@ -1468,33 +2049,32 @@ function csRenderStepOrgContext(el) {
     if (!listEl) return;
 
     if (!contexts.length) {
-      listEl.innerHTML = '<div class="studio-empty-msg">No organization contexts created yet. The AI will generate industry-agnostic controls.</div>';
+      listEl.innerHTML = '<div class="studio-empty-msg" style="color:#dc2626">No Organization Profiles found. You must <button class="inline-link" onclick="navigateTo(\'org-contexts\')">create a profile</button> before generating controls.</div>';
       return;
     }
 
-    const sectorLabels = { banking: 'Banking & Financial Services', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', other: 'Other' };
+    const sectorLabels = { banking: 'Banking & Financial Services', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', defense: 'Defense & Military', manufacturing: 'Manufacturing', transportation: 'Transportation & Logistics', custom: 'Custom', other: 'Other' };
     const sizeLabels = { small: 'Small', medium: 'Medium', large: 'Large', enterprise: 'Enterprise' };
+    const maturityLabels = { 1: 'Initial', 2: 'Developing', 3: 'Defined', 4: 'Managed', 5: 'Optimizing' };
 
-    // Add a "None (generic)" option
-    let html = `<div class="cs-org-option ${!selected ? 'selected' : ''}" onclick="csSelectOrg(null, this)">
-      <div class="cs-org-radio"><span class="cs-org-radio-dot ${!selected ? 'active' : ''}"></span></div>
-      <div class="cs-org-option-content">
-        <div class="cs-org-option-name">No context (generic mode)</div>
-        <div class="cs-org-option-desc">AI will generate industry-agnostic controls</div>
-      </div>
-    </div>`;
+    let html = '';
 
     contexts.forEach(ctx => {
       const isSelected = selected && String(selected.id) === String(ctx.id);
       const tags = (ctx.obligatoryFrameworks || []).map(f => `<span class="badge badge-primary badge-round" style="font-size:9px">${esc(f)}</span>`).join(' ');
+      const mandTags = (ctx.regulatoryMandates || []).map(m => `<span class="badge badge-amber badge-round" style="font-size:9px">${esc(m)}</span>`).join(' ');
+      const sectorDisplay = ctx.sectorCustom || sectorLabels[ctx.sector] || ctx.sector || '';
+      const mat = ctx.complianceMaturity || 1;
       html += `<div class="cs-org-option ${isSelected ? 'selected' : ''}" onclick="csSelectOrg('${esc(String(ctx.id))}', this)">
         <div class="cs-org-radio"><span class="cs-org-radio-dot ${isSelected ? 'active' : ''}"></span></div>
         <div class="cs-org-option-content">
           <div class="cs-org-option-name">${esc(ctx.nameEn || ctx.name)}${ctx.nameAr ? ` <span style="color:#9ca3af;font-weight:400">${esc(ctx.nameAr)}</span>` : ''}</div>
           <div class="cs-org-option-desc">
-            ${ctx.sector ? esc(sectorLabels[ctx.sector] || ctx.sector) : ''}
+            ${sectorDisplay ? esc(sectorDisplay) : ''}
             ${ctx.size ? ' • ' + esc(sizeLabels[ctx.size] || ctx.size) : ''}
+            • Maturity ${mat}/5 (${maturityLabels[mat] || mat})
             ${tags ? ' ' + tags : ''}
+            ${mandTags ? ' ' + mandTags : ''}
           </div>
         </div>
       </div>`;
@@ -1529,9 +2109,15 @@ function csSelectOrg(ctxId, rowEl) {
   // Update header
   const countEl = document.getElementById('cs-org-selected');
   if (countEl) {
-    countEl.textContent = csSessionData.orgContext ? '1' : '0';
+    countEl.textContent = csSessionData.orgContext ? '✓' : '⚠';
     const labelEl = countEl.nextElementSibling;
-    if (labelEl) labelEl.textContent = csSessionData.orgContext ? (csSessionData.orgContext.nameEn || csSessionData.orgContext.name || '') : 'no context selected (generic mode)';
+    if (labelEl) labelEl.textContent = csSessionData.orgContext ? (csSessionData.orgContext.nameEn || csSessionData.orgContext.name || '') : 'no profile selected — required for generation';
+  }
+  // Enable/disable Next button
+  const nextBtn = document.querySelector('.cs-wizard-footer .btn-admin-primary');
+  if (nextBtn && nextBtn.textContent.includes('Next')) {
+    nextBtn.disabled = !csSessionData.orgContext;
+    nextBtn.title = csSessionData.orgContext ? '' : 'Select an Organization Profile first';
   }
 }
 window.csSelectOrg = csSelectOrg;
@@ -1541,7 +2127,9 @@ function csRenderStepGenerate(el) {
   const reqs = (csSessionData.requirements || []).length;
   const files = (csSessionData.selectedFiles || []).length + (csSessionData.sessionFiles || []).length;
   const cols = (csSessionData.collections || []).length;
-  const ctx = csSessionData.orgContext ? 1 : 0;
+  const orgCtx = csSessionData.orgContext;
+  const hasOrg = orgCtx && orgCtx.nameEn;
+  const maturityLabels = { 1: 'Initial', 2: 'Developing', 3: 'Defined', 4: 'Managed', 5: 'Optimizing' };
 
   el.innerHTML = `
     <div class="cs-wizard-card">
@@ -1550,9 +2138,27 @@ function csRenderStepGenerate(el) {
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2V4M9 14V16M4 9H2M16 9H14M5 5L3.5 3.5M14.5 14.5L13 13M5 13L3.5 14.5M14.5 3.5L13 5" stroke="white" stroke-width="1.5" stroke-linecap="round"/><circle cx="9" cy="9" r="3" stroke="white" stroke-width="1.5"/></svg>
           Generate Controls
         </div>
-        <div class="cs-wizard-header-desc">AI will analyze requirements and suggest applied controls</div>
+        <div class="cs-wizard-header-desc">AI will analyze requirements and suggest applied controls tailored to your organization profile</div>
       </div>
       <div class="cs-wizard-body">
+        ${!hasOrg ? `
+          <div class="cs-gen-blocked">
+            <div class="cs-gen-blocked-icon">
+              <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M16 4L28 28H4L16 4Z" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 13V19M16 23V23.01" stroke="#ef4444" stroke-width="2" stroke-linecap="round"/></svg>
+            </div>
+            <h3 style="font-size:14px;font-weight:600;color:#dc2626;margin:0 0 4px">Organization Profile Required</h3>
+            <p style="font-size:12px;color:#6b7280;max-width:400px;margin:0 auto 16px">
+              An Organization Profile is required to generate contextual controls.
+              A "Government, Enterprise, Maturity 2" org gets different controls than "Healthcare, Medium, Maturity 4" for the same requirement.
+            </p>
+            <button class="btn-admin-primary" onclick="csCurrentStep=2;csSessionData.step=2;csRenderWizard()">
+              ← Go back to select a profile
+            </button>
+            <p style="font-size:11px;color:#9ca3af;margin-top:12px">
+              No profiles yet? <button class="inline-link" onclick="navigateTo('org-contexts')">Create one in Org Profiles</button>.
+            </p>
+          </div>
+        ` : `
         <div class="cs-gen-summary">
           <div class="cs-gen-box">
             <div class="cs-gen-box-header">
@@ -1572,11 +2178,11 @@ function csRenderStepGenerate(el) {
           </div>
           <div class="cs-gen-box">
             <div class="cs-gen-box-header">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H10L12 6V12C12 12.6 11.6 13 11 13H2V4Z" stroke="#6b7280" stroke-width="1.2" stroke-linecap="round"/></svg>
-              Org Context
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L12 4V7C12 10 9.5 12.5 7 13C4.5 12.5 2 10 2 7V4L7 1Z" stroke="#6b7280" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Organization Profile
             </div>
-            <div class="cs-gen-box-val">${ctx ? esc(csSessionData.orgContext.nameEn || csSessionData.orgContext.name || '1') : 'None'}</div>
-            <div class="cs-gen-box-sub">${ctx ? 'industry-specific' : 'generic mode'}</div>
+            <div class="cs-gen-box-val">${esc(orgCtx.nameEn || orgCtx.name || '')}</div>
+            <div class="cs-gen-box-sub">${esc(orgCtx.sectorCustom || orgCtx.sector || '')}, ${esc(orgCtx.size || '')}, Maturity ${orgCtx.complianceMaturity || 1}/5</div>
           </div>
         </div>
         <div class="cs-gen-ready">
@@ -1584,77 +2190,348 @@ function csRenderStepGenerate(el) {
             <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 4V7M14 21V24M7 14H4M24 14H21M8 8L5.5 5.5M22.5 22.5L20 20M8 20L5.5 22.5M22.5 5.5L20 8" stroke="var(--admin-primary)" stroke-width="2" stroke-linecap="round"/><circle cx="14" cy="14" r="4" stroke="var(--admin-primary)" stroke-width="2"/></svg>
           </div>
           <h3 style="font-size:14px;font-weight:600;color:#111827;margin:0 0 4px">Ready to Generate</h3>
-          <p style="font-size:12px;color:#6b7280;max-width:380px;margin:0 auto">AI will analyze each requirement against your reference documents and suggest applied controls.</p>
+          <p style="font-size:12px;color:#6b7280;max-width:380px;margin:0 auto">AI will analyze each requirement against your reference documents and organization profile to suggest tailored applied controls. Existing controls from this session will be considered to avoid duplicates.</p>
         </div>
+        `}
       </div>
       <div class="cs-wizard-footer">
         <button class="btn-admin-ghost" onclick="csCurrentStep=2;csSessionData.step=2;csRenderWizard()">← Back</button>
-        <button class="btn-admin-primary" onclick="csStartGenerate()">
+        ${hasOrg ? `<button class="btn-admin-primary" onclick="csStartGenerate()">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1V3M7 11V13M3 7H1M13 7H11M4 4L2.5 2.5M11.5 11.5L10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="7" r="2.5" stroke="currentColor" stroke-width="1.5"/></svg>
           Generate Controls
-        </button>
+        </button>` : '<div></div>'}
       </div>
     </div>`;
 }
 
-function csStartGenerate() {
-  // Simulate generation (would call AI API in a real implementation)
-  toast('info', 'Generation', 'Control generation is a preview feature. No actual AI call made.');
-  csCurrentStep = 4;
-  csSessionData.step = 4;
-  csSessionData.status = 'generated';
-  csSessionData.controls = csSessionData.controls || [];
-  // Save session
-  const list = csGetSessions();
-  const idx = list.findIndex(s => s.id === csSessionData.id);
-  if (idx >= 0) list[idx] = csSessionData; else list.push(csSessionData);
-  csSaveSessions(list);
-  csRenderWizard();
+let csGenerating = false;
+
+async function csStartGenerate() {
+  if (csGenerating) return;
+  const reqs = csSessionData.requirements || [];
+  if (!reqs.length) { toast('error', 'No Requirements', 'Select at least one requirement before generating.'); return; }
+  if (!csSessionData.orgContext || !csSessionData.orgContext.nameEn) {
+    toast('error', 'Profile Required', 'An Organization Profile is required to generate controls. Go back and select one.');
+    return;
+  }
+
+  csGenerating = true;
+  const content = document.getElementById('cs-content');
+
+  // Show generating progress UI
+  content.innerHTML = `
+    <div class="cs-wizard-card">
+      <div class="cs-wizard-header navy">
+        <div class="cs-wizard-header-title">
+          <svg class="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="white" stroke-width="2" stroke-opacity="0.3"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+          Generating Controls...
+        </div>
+        <div class="cs-wizard-header-desc">AI is analyzing ${reqs.length} requirement${reqs.length !== 1 ? 's' : ''} and generating applied controls. This may take a few minutes.</div>
+      </div>
+      <div class="cs-wizard-body" style="padding:32px">
+        <div class="cs-gen-progress">
+          <div class="cs-gen-progress-bar-wrap">
+            <div class="cs-gen-progress-bar" id="cs-progress-bar" style="width:0%"></div>
+          </div>
+          <div class="cs-gen-progress-text" id="cs-progress-text">Starting... 0 / ${reqs.length}</div>
+          <div class="cs-gen-progress-log" id="cs-progress-log"></div>
+        </div>
+      </div>
+    </div>`;
+
+  try {
+    // Prepare context files from session uploads
+    const ctxFiles = (csSessionData.sessionFiles || []).map(f => ({
+      name: f.name,
+      content: f.content,
+    }));
+
+    // Build body
+    const body = {
+      requirements: reqs.map(r => ({
+        refId: r.refId,
+        name: r.name,
+        description: r.description,
+        frameworkName: r.frameworkName,
+        nodeUrn: r.nodeUrn,
+        depth: r.depth,
+      })),
+      orgContext: csSessionData.orgContext || null,
+      contextFiles: ctxFiles.length ? ctxFiles : undefined,
+    };
+
+    // Show progress updates in the log
+    const logEl = document.getElementById('cs-progress-log');
+    const barEl = document.getElementById('cs-progress-bar');
+    const textEl = document.getElementById('cs-progress-text');
+
+    const addLog = (msg, type = 'info') => {
+      if (logEl) {
+        const d = document.createElement('div');
+        d.className = 'cs-progress-log-item ' + type;
+        d.textContent = msg;
+        logEl.appendChild(d);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    };
+
+    addLog(`Sending ${reqs.length} requirements to Gemini API...`);
+
+    const res = await fetch('/api/controls/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json();
+
+    if (barEl) barEl.style.width = '100%';
+    if (textEl) textEl.textContent = `Done!`;
+
+    if (!data.success) {
+      throw new Error(data.error || 'Generation failed');
+    }
+
+    const controls = data.data?.controls || [];
+    const progress = data.data?.progress || {};
+
+    addLog(`✓ Generated ${controls.length} controls for ${progress.completed || reqs.length} requirements`, 'success');
+    if (progress.failed > 0) addLog(`⚠ ${progress.failed} requirements failed`, 'warn');
+
+    // Tag each control with a unique ID and selected=true
+    csSessionData.controls = controls.map((c, i) => ({ ...c, id: 'ctrl-' + Date.now() + '-' + i, selected: true }));
+    csSessionData.status = 'generated';
+    csSessionData.step = 4;
+    csCurrentStep = 4;
+
+    // Save session
+    csSaveStep();
+
+    toast('success', 'Controls Generated', `${controls.length} controls generated successfully.`);
+
+    // Brief delay to show success state
+    await new Promise(r => setTimeout(r, 1200));
+    csRenderWizard();
+
+  } catch (err) {
+    console.error('Controls generation error:', err);
+    toast('error', 'Generation Failed', err.message);
+    const logEl = document.getElementById('cs-progress-log');
+    if (logEl) {
+      const d = document.createElement('div');
+      d.className = 'cs-progress-log-item error';
+      d.textContent = '✗ ' + err.message;
+      logEl.appendChild(d);
+    }
+    // Show retry button
+    const content = document.getElementById('cs-content');
+    if (content) {
+      const footer = content.querySelector('.cs-wizard-footer');
+      if (!footer) {
+        content.querySelector('.cs-wizard-card')?.insertAdjacentHTML('beforeend', `
+          <div class="cs-wizard-footer">
+            <button class="btn-admin-ghost" onclick="csCurrentStep=3;csSessionData.step=3;csRenderWizard()">← Back</button>
+            <button class="btn-admin-primary" onclick="csStartGenerate()">Retry</button>
+          </div>`);
+      }
+    }
+  } finally {
+    csGenerating = false;
+  }
 }
 window.csStartGenerate = csStartGenerate;
 
 // Step 5: Review
 function csRenderStepReview(el) {
   const controls = csSessionData.controls || [];
+  const selectedCount = controls.filter(c => c.selected !== false).length;
+
+  // Group by framework for display
+  const grouped = {};
+  controls.forEach(c => {
+    const fw = c.framework || 'Unknown Framework';
+    if (!grouped[fw]) grouped[fw] = [];
+    grouped[fw].push(c);
+  });
+
+  const typeColors = { preventive: 'sky', detective: 'amber', corrective: 'emerald', directive: 'primary' };
+  const priorityColors = { critical: 'rose', high: 'amber', medium: 'sky', low: 'gray' };
+
   el.innerHTML = `
     <div class="cs-wizard-card">
       <div class="cs-wizard-header navy">
         <div class="cs-wizard-header-title">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 5H15M3 9H15M3 13H9" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Review Generated Controls
+          Step 5: Review Generated Controls
         </div>
-        <div class="cs-wizard-header-desc">Review, select, and optionally edit AI-suggested controls before exporting</div>
+        <div class="cs-wizard-header-desc">Review, select, and optionally edit AI-suggested controls before exporting.</div>
         <div class="cs-wizard-header-stat">
-          <span class="big">${controls.length}</span>
-          <span class="label">controls generated</span>
+          <span class="big" id="cs-review-selected">${selectedCount}</span>
+          <span class="label">of ${controls.length} controls selected</span>
         </div>
       </div>
-      <div class="cs-wizard-body">
-        ${controls.length ? controls.map((c, i) => `
-          <div class="cs-ctrl-row">
-            <div class="cs-ctrl-header">
-              <input type="checkbox" checked>
-              <div class="cs-ctrl-info">
-                <div class="cs-ctrl-name">${esc(c.name || 'Control ' + (i+1))}</div>
-                <div class="cs-ctrl-desc">${esc(c.description || '')}</div>
-              </div>
-              <div class="cs-ctrl-badges">
-                <span class="badge badge-sky">${esc(c.framework || '')}</span>
-              </div>
+      <div class="cs-wizard-body" style="max-height:500px;overflow-y:auto">
+        ${controls.length ? `
+          <div class="cs-review-actions" style="display:flex;gap:8px;margin-bottom:10px">
+            <button class="btn-studio-filter" onclick="csSelectAllControls(true)">Select All</button>
+            <button class="btn-studio-filter" onclick="csSelectAllControls(false)">Deselect All</button>
+          </div>
+          ${Object.entries(grouped).map(([fw, ctrls]) => `
+            <div class="cs-review-fw-group">
+              <div class="cs-review-fw-label">${esc(fw)}</div>
+              ${ctrls.map((c, i) => {
+                const isSelected = c.selected !== false;
+                const typeColor = typeColors[c.control_type] || 'gray';
+                const prioColor = priorityColors[c.implementation_priority] || 'gray';
+                return `<div class="cs-ctrl-row ${isSelected ? '' : 'deselected'}" data-ctrl-id="${esc(c.id)}">
+                  <div class="cs-ctrl-header" onclick="csToggleControl('${esc(c.id)}')">
+                    <div class="cs-ctrl-checkbox ${isSelected ? 'checked' : ''}">
+                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
+                    <div class="cs-ctrl-info">
+                      <div class="cs-ctrl-name">${esc(c.name || 'Control ' + (i+1))}</div>
+                      ${c.name_ar ? `<div class="cs-ctrl-name-ar">${esc(c.name_ar)}</div>` : ''}
+                      <div class="cs-ctrl-desc">${esc(c.description || '')}</div>
+                      ${c.implementation_guidance ? `<div class="cs-ctrl-guidance"><strong>Guidance:</strong> ${esc(c.implementation_guidance)}</div>` : ''}
+                      ${c.source_question ? `<div class="cs-ctrl-source-q"><strong>Source Question:</strong> "${esc(c.source_question)}"</div>` : ''}
+                      ${c.requirementRefId ? `<div class="cs-ctrl-req-ref">
+                        <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1"/><path d="M4 6L5.5 7.5L8 4.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+                        ${esc(c.requirementRefId)}${c.requirementName ? ' — ' + esc(c.requirementName) : ''}
+                      </div>` : ''}
+                      ${(c.evidence_examples && c.evidence_examples.length) ? `
+                        <div class="cs-ctrl-evidence">
+                          ${c.evidence_examples.map(e => `<span class="cs-ctrl-evidence-tag">${esc(e)}</span>`).join('')}
+                        </div>` : ''}
+                    </div>
+                    <div class="cs-ctrl-badges">
+                      ${c.source === 'question' ? '<span class="badge badge-violet">Q→C</span>' : ''}
+                      ${c.reuse ? '<span class="badge badge-sky">Reused</span>' : ''}
+                      ${c.effort_estimate ? `<span class="badge badge-gray">Effort: ${esc(c.effort_estimate)}</span>` : ''}
+                      ${c.relevance_score !== undefined ? `<span class="badge badge-emerald">Score: ${c.relevance_score}</span>` : ''}
+                      ${c.control_type ? `<span class="badge badge-${typeColor}">${esc(c.control_type)}</span>` : ''}
+                      ${c.implementation_priority ? `<span class="badge badge-${prioColor}">${esc(c.implementation_priority)}</span>` : ''}
+                    </div>
+                  </div>
+                </div>`;
+              }).join('')}
             </div>
-          </div>`).join('') : `
+          `).join('')}
+        ` : `
           <div style="text-align:center;padding:32px;font-size:12px;color:#9ca3af">
             No controls generated yet. Go back and generate controls.
           </div>`}
       </div>
+      <!-- Question-to-Control Section -->
+      <div class="cs-q2c-section" style="border-top:1px solid #e5e7eb;padding-top:16px;margin-top:8px">
+        <div class="cs-q2c-header" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="var(--admin-primary)" stroke-width="1.5"/><path d="M6 6.5C6 5.7 6.7 5 7.5 5H8C9.1 5 10 5.9 10 7C10 8 9 8 8 8.5V9" stroke="var(--admin-primary)" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r="0.5" fill="var(--admin-primary)"/></svg>
+          <span style="font-weight:600;font-size:13px;color:#111827">Convert Question to Control</span>
+        </div>
+        <p style="font-size:11px;color:#6b7280;margin:0 0 8px">Paste a compliance question (from a questionnaire or F3 analysis) and AI will generate an AppliedControl that would make the answer "Yes / Compliant."</p>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <select id="cs-q2c-req" class="admin-form-select" style="flex:0 0 200px;font-size:11px">
+            <option value="-1">Link to requirement (optional)</option>
+            ${(csSessionData.requirements || []).map((r, i) => `<option value="${i}">${esc(r.refId || r.name || 'Req ' + (i+1))}</option>`).join('')}
+          </select>
+          <input type="text" id="cs-q2c-input" class="admin-form-input" style="flex:1;font-size:12px" placeholder="e.g. Does the organization maintain a documented access control policy?">
+          <button class="btn-admin-primary btn-admin-sm" onclick="csConvertQuestion()">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1V11M1 6H11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Convert
+          </button>
+        </div>
+        <div id="cs-q2c-result"></div>
+      </div>
+
       <div class="cs-wizard-footer">
-        <button class="btn-admin-ghost" onclick="csCurrentStep=3;csSessionData.step=3;csRenderWizard()">← Back</button>
-        <button class="btn-admin-primary" onclick="csCurrentStep=5;csSessionData.step=5;csRenderWizard()">
+        <button class="btn-admin-ghost" onclick="csCurrentStep=3;csSessionData.step=3;csRenderWizard()">← Back to Generate</button>
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=5;csSessionData.step=5;csRenderWizard()">
           Next: Export →
         </button>
       </div>
     </div>`;
 }
+
+function csToggleControl(ctrlId) {
+  const ctrl = (csSessionData.controls || []).find(c => c.id === ctrlId);
+  if (!ctrl) return;
+  ctrl.selected = ctrl.selected === false ? true : false;
+
+  // Update DOM without full re-render
+  const row = document.querySelector(`.cs-ctrl-row[data-ctrl-id="${ctrlId}"]`);
+  if (row) {
+    row.classList.toggle('deselected', !ctrl.selected);
+    const cb = row.querySelector('.cs-ctrl-checkbox');
+    if (cb) cb.classList.toggle('checked', ctrl.selected);
+  }
+  csUpdateReviewCount();
+}
+window.csToggleControl = csToggleControl;
+
+function csSelectAllControls(selectAll) {
+  (csSessionData.controls || []).forEach(c => c.selected = selectAll);
+  document.querySelectorAll('.cs-ctrl-row[data-ctrl-id]').forEach(row => {
+    row.classList.toggle('deselected', !selectAll);
+    const cb = row.querySelector('.cs-ctrl-checkbox');
+    if (cb) cb.classList.toggle('checked', selectAll);
+  });
+  csUpdateReviewCount();
+}
+window.csSelectAllControls = csSelectAllControls;
+
+function csUpdateReviewCount() {
+  const selected = (csSessionData.controls || []).filter(c => c.selected !== false).length;
+  const el = document.getElementById('cs-review-selected');
+  if (el) el.textContent = selected;
+}
+
+// ── Question-to-Control Conversion ──
+async function csConvertQuestion() {
+  const input = document.getElementById('cs-q2c-input');
+  const reqSelect = document.getElementById('cs-q2c-req');
+  const resultEl = document.getElementById('cs-q2c-result');
+  if (!input || !reqSelect) return;
+  const question = input.value.trim();
+  if (!question) { toast('error', 'Missing', 'Please enter a compliance question.'); input.focus(); return; }
+  if (!csSessionData.orgContext) { toast('error', 'Profile Required', 'Organization Profile required.'); return; }
+
+  const reqIdx = parseInt(reqSelect.value);
+  const req = (csSessionData.requirements || [])[reqIdx] || null;
+
+  resultEl.innerHTML = '<div class="studio-loading"><svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Converting question to control...</div>';
+
+  try {
+    const res = await fetch(API.questionToControl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        requirement: req ? { refId: req.refId, name: req.name, description: req.description, frameworkName: req.frameworkName } : null,
+        orgContext: csSessionData.orgContext,
+      }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Conversion failed');
+
+    const c = data.control;
+    c.id = 'ctrl-q2c-' + Date.now();
+    c.selected = true;
+    c.source = 'question';
+    c.source_question = question;
+    c.requirementRefId = req?.refId || '';
+    c.requirementName = req?.name || '';
+    c.framework = req?.frameworkName || '';
+    csSessionData.controls = csSessionData.controls || [];
+    csSessionData.controls.push(c);
+    csSaveStep();
+
+    toast('success', 'Converted', `Control "${c.name}" created from question.`);
+    csRenderWizard(); // Re-render review step
+  } catch (err) {
+    resultEl.innerHTML = `<div style="color:#ef4444;font-size:12px">Error: ${esc(err.message)}</div>`;
+    toast('error', 'Failed', err.message);
+  }
+}
+window.csConvertQuestion = csConvertQuestion;
 
 // Step 6: Export
 function csRenderStepExport(el) {
@@ -1693,13 +2570,10 @@ function csRenderStepExport(el) {
     </div>`;
 }
 
-function csDoExport() {
+async function csDoExport() {
   toast('info', 'Export', 'Export feature is under development. Controls will be pushed to Muraji when ready.');
   csSessionData.status = 'exported';
-  const list = csGetSessions();
-  const idx = list.findIndex(s => s.id === csSessionData.id);
-  if (idx >= 0) list[idx] = csSessionData; else list.push(csSessionData);
-  csSaveSessions(list);
+  await csSaveSession(csSessionData);
   csRenderWizard();
 }
 window.csDoExport = csDoExport;
@@ -1904,7 +2778,7 @@ function studioRenderCollections() {
   if (!listEl) return;
 
   if (!studioCollections.length) {
-    listEl.innerHTML = '<div class="studio-empty-msg">No collections yet. Create one or upload from <a href="index.html" style="color:var(--admin-primary)">Auditor</a>.</div>';
+    listEl.innerHTML = '<div class="studio-empty-msg">No collections yet. Create one or upload from <a href="javascript:navigateTo(\'file-collections\')" style="color:var(--admin-primary)">File Collections</a>.</div>';
     return;
   }
 
@@ -2242,6 +3116,14 @@ if (studioStartBtn) {
 
 // ─── Init ─────────────────────────────────────────────────────
 
-document.addEventListener('DOMContentLoaded', () => {
+console.log('[admin.js] Script loaded, readyState:', document.readyState);
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    console.log('[admin.js] DOMContentLoaded fired');
+    loadDashboard();
+  });
+} else {
+  console.log('[admin.js] DOM already ready, calling loadDashboard');
   loadDashboard();
-});
+}

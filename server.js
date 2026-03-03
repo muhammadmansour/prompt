@@ -31,6 +31,52 @@ loadEnv();
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // ==========================================
+// Authentication
+// ==========================================
+
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@wathbahs.com';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin@admin';
+const AUTH_SECRET = process.env.AUTH_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Active tokens (in-memory; survives until server restart)
+const authTokens = new Set();
+
+function generateToken() {
+  const token = crypto.randomBytes(48).toString('hex');
+  authTokens.add(token);
+  return token;
+}
+
+function isValidToken(token) {
+  return token && authTokens.has(token);
+}
+
+// Public paths that don't need auth
+const PUBLIC_PATHS = new Set([
+  '/login.html', '/login.css', '/login.js',
+  '/api/auth/login', '/api/auth/logout', '/api/auth/check',
+]);
+
+function isPublicPath(pathname) {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  // Fonts / favicons
+  if (pathname.endsWith('.woff2') || pathname.endsWith('.woff') || pathname === '/favicon.ico') return true;
+  return false;
+}
+
+function getTokenFromRequest(req) {
+  // Check cookie
+  const cookies = (req.headers.cookie || '').split(';').map(c => c.trim());
+  for (const c of cookies) {
+    if (c.startsWith('wathba_token=')) return c.substring('wathba_token='.length);
+  }
+  // Check Authorization header (for API clients)
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) return authHeader.substring(7);
+  return null;
+}
+
+// ==========================================
 // SQLite Database
 // ==========================================
 
@@ -72,14 +118,52 @@ db.exec(`
     name_en TEXT NOT NULL,
     name_ar TEXT DEFAULT '',
     sector TEXT DEFAULT '',
+    sector_custom TEXT DEFAULT '',
     size TEXT DEFAULT '',
+    compliance_maturity INTEGER DEFAULT 1,
+    regulatory_mandates TEXT DEFAULT '[]',
+    governance_structure TEXT DEFAULT '',
+    data_classification TEXT DEFAULT '',
+    geographic_scope TEXT DEFAULT '',
+    it_infrastructure TEXT DEFAULT '',
+    strategic_objectives TEXT DEFAULT '[]',
     obligatory_frameworks TEXT DEFAULT '[]',
     notes TEXT DEFAULT '',
     is_active INTEGER DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS cs_sessions (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
+    step INTEGER NOT NULL DEFAULT 0,
+    requirements TEXT NOT NULL DEFAULT '[]',
+    collections TEXT NOT NULL DEFAULT '[]',
+    selected_files TEXT NOT NULL DEFAULT '[]',
+    session_files TEXT NOT NULL DEFAULT '[]',
+    org_context TEXT DEFAULT NULL,
+    controls TEXT NOT NULL DEFAULT '[]',
+    framework TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
+
+// Migrate org_contexts: add new profile columns if missing
+try {
+  const cols = db.pragma('table_info(org_contexts)').map(c => c.name);
+  const addCol = (name, def) => { if (!cols.includes(name)) db.exec(`ALTER TABLE org_contexts ADD COLUMN ${name} ${def}`); };
+  addCol('sector_custom', "TEXT DEFAULT ''");
+  addCol('compliance_maturity', 'INTEGER DEFAULT 1');
+  addCol('regulatory_mandates', "TEXT DEFAULT '[]'");
+  addCol('governance_structure', "TEXT DEFAULT ''");
+  addCol('data_classification', "TEXT DEFAULT ''");
+  addCol('geographic_scope', "TEXT DEFAULT ''");
+  addCol('it_infrastructure', "TEXT DEFAULT ''");
+  addCol('strategic_objectives', "TEXT DEFAULT '[]'");
+} catch (migErr) { console.warn('Org profile migration:', migErr.message); }
 
 console.log('SQLite database initialized (sessions.db)');
 
@@ -124,13 +208,66 @@ const dbUpdateLocalPrompt = db.prepare(`
 const dbListOrgContexts = db.prepare(`SELECT * FROM org_contexts ORDER BY created_at DESC`);
 const dbGetOrgContext = db.prepare(`SELECT * FROM org_contexts WHERE id = ?`);
 const dbInsertOrgContext = db.prepare(`
-  INSERT INTO org_contexts (id, name_en, name_ar, sector, size, obligatory_frameworks, notes, is_active, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO org_contexts (id, name_en, name_ar, sector, sector_custom, size, compliance_maturity, regulatory_mandates, governance_structure, data_classification, geographic_scope, it_infrastructure, strategic_objectives, obligatory_frameworks, notes, is_active, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const dbUpdateOrgContext = db.prepare(`
-  UPDATE org_contexts SET name_en = ?, name_ar = ?, sector = ?, size = ?, obligatory_frameworks = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?
+  UPDATE org_contexts SET name_en = ?, name_ar = ?, sector = ?, sector_custom = ?, size = ?, compliance_maturity = ?, regulatory_mandates = ?, governance_structure = ?, data_classification = ?, geographic_scope = ?, it_infrastructure = ?, strategic_objectives = ?, obligatory_frameworks = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?
 `);
 const dbDeleteOrgContext = db.prepare(`DELETE FROM org_contexts WHERE id = ?`);
+
+function orgContextToJSON(r) {
+  return {
+    id: r.id,
+    nameEn: r.name_en,
+    nameAr: r.name_ar,
+    sector: r.sector,
+    sectorCustom: r.sector_custom || '',
+    size: r.size,
+    complianceMaturity: r.compliance_maturity || 1,
+    regulatoryMandates: JSON.parse(r.regulatory_mandates || '[]'),
+    governanceStructure: r.governance_structure || '',
+    dataClassification: r.data_classification || '',
+    geographicScope: r.geographic_scope || '',
+    itInfrastructure: r.it_infrastructure || '',
+    strategicObjectives: JSON.parse(r.strategic_objectives || '[]'),
+    obligatoryFrameworks: JSON.parse(r.obligatory_frameworks || '[]'),
+    notes: r.notes,
+    isActive: !!r.is_active,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  };
+}
+
+// Controls Studio sessions DB helpers
+const dbListCsSessions = db.prepare(`SELECT * FROM cs_sessions ORDER BY updated_at DESC`);
+const dbGetCsSession = db.prepare(`SELECT * FROM cs_sessions WHERE id = ?`);
+const dbInsertCsSession = db.prepare(`
+  INSERT INTO cs_sessions (id, name, status, step, requirements, collections, selected_files, session_files, org_context, controls, framework, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const dbUpdateCsSession = db.prepare(`
+  UPDATE cs_sessions SET name = ?, status = ?, step = ?, requirements = ?, collections = ?, selected_files = ?, session_files = ?, org_context = ?, controls = ?, framework = ?, updated_at = ? WHERE id = ?
+`);
+const dbDeleteCsSession = db.prepare(`DELETE FROM cs_sessions WHERE id = ?`);
+
+function csSessionToJSON(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    step: row.step,
+    requirements: JSON.parse(row.requirements || '[]'),
+    collections: JSON.parse(row.collections || '[]'),
+    selectedFiles: JSON.parse(row.selected_files || '[]'),
+    sessionFiles: JSON.parse(row.session_files || '[]'),
+    orgContext: row.org_context ? JSON.parse(row.org_context) : null,
+    controls: JSON.parse(row.controls || '[]'),
+    framework: row.framework || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
 
 // Gemini SDK client + in-memory chat sessions (SDK ChatSession objects)
 let genai = null;
@@ -156,6 +293,15 @@ try {
   console.warn('Chat prompt template not found.');
 }
 
+const controlsPromptPath = path.join(__dirname, 'prompts', 'controls-generator.txt');
+let controlsPromptTemplate = '';
+
+try {
+  controlsPromptTemplate = fs.readFileSync(controlsPromptPath, 'utf-8');
+} catch (error) {
+  console.warn('Controls generator prompt template not found.');
+}
+
 // Seed the chat-auditor prompt into the DB if not already present
 const CHAT_AUDITOR_PROMPT_ID = 'local-chat-auditor';
 const now = new Date().toISOString();
@@ -168,10 +314,27 @@ dbInsertLocalPrompt.run(
   now
 );
 
+// Seed the controls-generator prompt into the DB if not already present
+const CONTROLS_GENERATOR_PROMPT_ID = 'local-controls-generator';
+dbInsertLocalPrompt.run(
+  CONTROLS_GENERATOR_PROMPT_ID,
+  'controls_generator',
+  'Controls Generator (Applied Controls Studio)',
+  controlsPromptTemplate || 'You are an expert GRC consultant who specializes in designing applied controls for regulatory frameworks.',
+  now,
+  now
+);
+
 // Helper: get the current chat auditor prompt from DB (always use DB as source of truth)
 function getChatAuditorPrompt() {
   const row = dbGetLocalPromptByKey.get('chat_auditor');
   return row ? row.content : (chatPromptFileContent || 'You are an expert compliance and governance auditor for the Wathbah Auditor platform.');
+}
+
+// Helper: get the current controls generator prompt from DB (always use DB as source of truth)
+function getControlsGeneratorPrompt() {
+  const row = dbGetLocalPromptByKey.get('controls_generator');
+  return row ? row.content : (controlsPromptTemplate || 'You are an expert GRC consultant who specializes in designing applied controls for regulatory frameworks.');
 }
 
 // MIME types for static files
@@ -378,6 +541,219 @@ async function callGeminiAPIForMultiple(requirements, userPrompt, apiKey, contex
 }
 
 // ==========================================
+// Gemini Controls Generation API
+// ==========================================
+
+function buildOrgProfileText(orgContext) {
+  if (!orgContext) return 'No organization profile provided. Generate industry-agnostic controls.';
+  const p = [];
+  if (orgContext.nameEn) p.push(`Organization: ${orgContext.nameEn}`);
+  if (orgContext.nameAr) p.push(`Arabic Name: ${orgContext.nameAr}`);
+  const sectorLabels = { banking: 'Banking & Financial Services', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', other: 'Other' };
+  const sizeLabels = { small: 'Small (1–50)', medium: 'Medium (51–500)', large: 'Large (501–5000)', enterprise: 'Enterprise (5000+)' };
+  const sector = orgContext.sectorCustom || sectorLabels[orgContext.sector] || orgContext.sector;
+  if (sector) p.push(`Industry Vertical: ${sector}`);
+  if (orgContext.size) p.push(`Entity Size: ${sizeLabels[orgContext.size] || orgContext.size}`);
+  if (orgContext.complianceMaturity) p.push(`Compliance Maturity Level: ${orgContext.complianceMaturity} / 5`);
+  if (orgContext.regulatoryMandates && orgContext.regulatoryMandates.length) p.push(`Active Regulatory Mandates: ${orgContext.regulatoryMandates.join(', ')}`);
+  if (orgContext.governanceStructure) p.push(`Governance Structure: ${orgContext.governanceStructure}`);
+  if (orgContext.dataClassification) p.push(`Data Classification Level: ${orgContext.dataClassification}`);
+  if (orgContext.geographicScope) p.push(`Geographic Scope: ${orgContext.geographicScope}`);
+  if (orgContext.itInfrastructure) p.push(`IT Infrastructure Type: ${orgContext.itInfrastructure}`);
+  if (orgContext.strategicObjectives && orgContext.strategicObjectives.length) p.push(`Strategic Objectives:\n${orgContext.strategicObjectives.map(o => '  - ' + o).join('\n')}`);
+  if (orgContext.obligatoryFrameworks && orgContext.obligatoryFrameworks.length) p.push(`Obligatory Frameworks: ${orgContext.obligatoryFrameworks.join(', ')}`);
+  if (orgContext.notes) p.push(`Additional Notes: ${orgContext.notes}`);
+  return p.join('\n');
+}
+
+async function generateControlsForRequirement(requirement, orgContext, contextFiles, apiKey, existingControls) {
+  const orgContextText = buildOrgProfileText(orgContext);
+
+  // Build reference files text
+  let refFilesText = 'No reference files provided.';
+  if (contextFiles && contextFiles.length > 0) {
+    refFilesText = contextFiles.map((cf, i) => {
+      const content = cf.content && cf.content.length > 8000
+        ? cf.content.substring(0, 8000) + '\n... [truncated]'
+        : (cf.content || '(empty)');
+      return `### File ${i + 1}: ${cf.name}\n\`\`\`\n${content}\n\`\`\``;
+    }).join('\n\n');
+  }
+
+  // Build requirement text
+  const reqText = [
+    `Framework: ${requirement.frameworkName || 'Unknown'}`,
+    requirement.refId ? `Ref ID: ${requirement.refId}` : '',
+    `Name: ${requirement.name || ''}`,
+    `Description: ${requirement.description || ''}`,
+    requirement.depth !== undefined ? `Depth: ${requirement.depth}` : '',
+  ].filter(Boolean).join('\n');
+
+  // Build existing controls context (for reuse detection)
+  let existingCtrlsText = '';
+  if (existingControls && existingControls.length > 0) {
+    existingCtrlsText = '\n\n## Existing Applied Controls (already generated in this session)\n\nBefore creating new controls, check if any of the following existing controls already satisfy this requirement. If they do, include them with `"reuse": true` instead of generating duplicates.\n\n' +
+      existingControls.map((c, i) => `${i + 1}. **${c.name}** (${c.requirementRefId || 'unknown ref'}) — ${c.description || ''}`).join('\n');
+  }
+
+  const fullPrompt = getControlsGeneratorPrompt()
+    .replace('{{ORG_CONTEXT}}', orgContextText)
+    .replace('{{REFERENCE_FILES}}', refFilesText)
+    .replace('{{REQUIREMENT}}', reqText)
+    + existingCtrlsText;
+
+  const requestBody = {
+    contents: [{ parts: [{ text: fullPrompt }] }],
+    generationConfig: {
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 8192,
+    }
+  };
+
+  const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+  }
+
+  const data = await response.json();
+  const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!textResponse) throw new Error('No response from Gemini API');
+
+  // Parse JSON from response
+  let jsonStr = textResponse.trim();
+  const jsonMatch = textResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (jsonMatch) jsonStr = jsonMatch[1].trim();
+  if (!jsonStr.startsWith('{')) {
+    const obj = jsonStr.match(/\{[\s\S]*\}/);
+    if (obj) jsonStr = obj[0];
+  }
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (!parsed.controls || !Array.isArray(parsed.controls)) parsed.controls = [];
+    return parsed.controls;
+  } catch (e) {
+    console.error('Controls JSON parse failed:', e.message, 'First 500:', textResponse.substring(0, 500));
+    return [];
+  }
+}
+
+async function generateControlsBatch(requirements, orgContext, contextFiles, apiKey) {
+  const CONCURRENCY = 3;
+  const allControls = [];
+  const progress = { total: requirements.length, completed: 0, failed: 0 };
+
+  for (let i = 0; i < requirements.length; i += CONCURRENCY) {
+    const batch = requirements.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(batch.map(async (req, batchIdx) => {
+      const idx = i + batchIdx;
+      console.log(`[Controls] Generating for req ${idx + 1}/${requirements.length}: ${req.refId || req.name || 'Unknown'}`);
+      try {
+        // Pass existing controls so the AI can detect reuse opportunities
+        const controls = await generateControlsForRequirement(req, orgContext, contextFiles, apiKey, allControls);
+        progress.completed++;
+        return controls.map(c => ({
+          ...c,
+          requirementRefId: req.refId,
+          requirementName: req.name || req.description,
+          framework: req.frameworkName,
+          requirementUrn: req.nodeUrn,
+        }));
+      } catch (err) {
+        console.error(`[Controls] Failed req ${idx + 1}:`, err.message);
+        progress.failed++;
+        return [];
+      }
+    }));
+    allControls.push(...results.flat());
+  }
+
+  return { controls: allControls, progress };
+}
+
+// ---- Question-to-Control Conversion ----
+async function convertQuestionToControl(question, requirement, orgContext, apiKey) {
+  const orgContextText = buildOrgProfileText(orgContext);
+
+  const prompt = `You are a GRC expert. A compliance question was asked during an audit or assessment. Your job is to generate an Applied Control that, if implemented, would make the answer to this question "Yes / Compliant."
+
+## Organization Profile
+
+${orgContextText}
+
+## Source Requirement
+
+Framework: ${requirement?.frameworkName || 'Unknown'}
+${requirement?.refId ? `Ref ID: ${requirement.refId}` : ''}
+Name: ${requirement?.name || 'N/A'}
+Description: ${requirement?.description || 'N/A'}
+
+## Compliance Question
+
+"${question}"
+
+## Instructions
+
+Generate exactly ONE applied control that directly addresses this question. The control should be specific enough that implementing it would definitively answer the question with "Yes / Compliant."
+
+CRITICAL: Respond with ONLY valid JSON. No markdown. Start with { end with }.
+
+{
+  "control": {
+    "name": "Control name in English (5-15 words)",
+    "name_ar": "اسم الضابط بالعربية",
+    "description": "Detailed description (30-80 words) of what the control entails, how to implement it, and what evidence demonstrates compliance",
+    "description_ar": "وصف تفصيلي للضابط",
+    "control_type": "preventive|detective|corrective|directive",
+    "implementation_priority": "critical|high|medium|low",
+    "effort_estimate": "Low|Medium|High",
+    "relevance_score": 85,
+    "evidence_examples": ["Evidence 1", "Evidence 2"],
+    "source_question": "${question.replace(/"/g, '\\"')}"
+  }
+}`;
+
+  const requestBody = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.5, topK: 40, topP: 0.95, maxOutputTokens: 4096 }
+  };
+
+  const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+  }
+
+  const data = await response.json();
+  const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!textResponse) throw new Error('No response from Gemini API');
+
+  let jsonStr = textResponse.trim();
+  const jsonMatch = textResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (jsonMatch) jsonStr = jsonMatch[1].trim();
+  if (!jsonStr.startsWith('{')) {
+    const obj = jsonStr.match(/\{[\s\S]*\}/);
+    if (obj) jsonStr = obj[0];
+  }
+
+  const parsed = JSON.parse(jsonStr);
+  return parsed.control || parsed;
+}
+
+// ==========================================
 // Gemini File Search Store (Collections) API
 // ==========================================
 
@@ -544,7 +920,7 @@ const server = http.createServer(async (req, res) => {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, Authorization');
 
   // Handle preflight
   if (req.method === 'OPTIONS') {
@@ -554,6 +930,76 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
+
+  // ---- Auth: Login endpoint (public) ----
+  if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const { email, password } = body;
+      if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+        const token = generateToken();
+        console.log('Admin login successful:', email);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, token }));
+      } else {
+        console.log('Login failed for:', email);
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Invalid email or password' }));
+      }
+    } catch (error) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Auth: Logout endpoint ----
+  if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
+    const token = getTokenFromRequest(req);
+    if (token) authTokens.delete(token);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true }));
+    return;
+  }
+
+  // ---- Auth: Check endpoint ----
+  if (url.pathname === '/api/auth/check' && req.method === 'GET') {
+    const token = getTokenFromRequest(req);
+    const valid = isValidToken(token);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ authenticated: valid }));
+    return;
+  }
+
+  // ---- Auth Guard ----
+  if (!isPublicPath(url.pathname)) {
+    const token = getTokenFromRequest(req);
+    if (!isValidToken(token)) {
+      // For API requests, return 401
+      if (url.pathname.startsWith('/api/')) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized. Please log in.' }));
+        return;
+      }
+      // For page requests, redirect to login
+      if (url.pathname === '/' || url.pathname.endsWith('.html')) {
+        res.writeHead(302, { 'Location': '/login.html' });
+        res.end();
+        return;
+      }
+      // Static assets (css, js) — allow through so login page renders correctly
+      // But only known login assets are in PUBLIC_PATHS; others need auth
+      // Actually, let CSS/JS through since they don't expose data
+      const ext = path.extname(url.pathname);
+      if (['.css', '.js', '.svg', '.png', '.jpg', '.ico', '.woff', '.woff2'].includes(ext)) {
+        // Allow static assets through (no sensitive data)
+      } else {
+        res.writeHead(302, { 'Location': '/login.html' });
+        res.end();
+        return;
+      }
+    }
+  }
 
   // ---- Analyze API ----
   if (url.pathname === '/api/analyze' && req.method === 'POST') {
@@ -590,10 +1036,93 @@ const server = http.createServer(async (req, res) => {
       }
 
       const result = await callGeminiAPIForSingle(requirement, prompt, apiKey, contextFiles);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, data: result }));
+    } catch (error) {
+      console.error('Analyze API Error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+        return;
+      }
+      
+  // ---- Controls Generation API ----
+  if (url.pathname === '/api/controls/generate' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const { requirements, orgContext, contextFiles } = body;
+
+      const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+      if (!apiKey) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'API key not configured. Add GEMINI_API_KEY to .env file.' }));
+        return;
+      }
+
+      // Block generation if no org profile
+      if (!orgContext || !orgContext.nameEn) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Organization Profile is required. Please select or create an Organization Profile before generating controls.' }));
+        return;
+      }
+
+      if (!requirements || !Array.isArray(requirements) || requirements.length === 0) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'At least one requirement is needed.' }));
+        return;
+      }
+
+      console.log(`[Controls] Generating controls for ${requirements.length} requirements` +
+        ` (org: ${orgContext.nameEn}, sector: ${orgContext.sectorCustom || orgContext.sector || 'N/A'}, maturity: ${orgContext.complianceMaturity || 'N/A'})` +
+        (contextFiles?.length ? `, ${contextFiles.length} context files` : ''));
+
+      const result = await generateControlsBatch(requirements, orgContext, contextFiles, apiKey);
+
+      console.log(`[Controls] Done: ${result.controls.length} controls generated, ${result.progress.failed} reqs failed`);
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, data: result }));
     } catch (error) {
-      console.error('Analyze API Error:', error.message);
+      console.error('[Controls] Generate API Error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Question-to-Control Conversion API ----
+  if (url.pathname === '/api/controls/from-question' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const { question, requirement, orgContext } = body;
+
+      const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+      if (!apiKey) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'API key not configured.' }));
+        return;
+      }
+
+      if (!question) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Question is required.' }));
+        return;
+      }
+
+      if (!orgContext || !orgContext.nameEn) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Organization Profile is required to convert questions to controls.' }));
+        return;
+      }
+
+      console.log(`[Q2Control] Converting question for org "${orgContext.nameEn}": "${question.substring(0, 80)}..."`);
+      const control = await convertQuestionToControl(question, requirement, orgContext, apiKey);
+      console.log(`[Q2Control] Generated: "${control.name}"`);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, control }));
+    } catch (error) {
+      console.error('[Q2Control] Error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }
@@ -1036,21 +1565,122 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Org Contexts API ----
+  // ---- Controls Studio Sessions API ----
+  const csMatch = url.pathname.match(/^\/api\/cs-sessions(?:\/([^\/]+))?$/);
+
+  if (url.pathname === '/api/cs-sessions' && req.method === 'GET') {
+    try {
+      const rows = dbListCsSessions.all();
+      const sessions = rows.map(csSessionToJSON);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, sessions }));
+    } catch (error) {
+      console.error('List CS sessions error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/cs-sessions' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const id = body.id || crypto.randomUUID();
+      const now = new Date().toISOString();
+      dbInsertCsSession.run(
+        id,
+        body.name || '',
+        body.status || 'draft',
+        body.step || 0,
+        JSON.stringify(body.requirements || []),
+        JSON.stringify(body.collections || []),
+        JSON.stringify(body.selectedFiles || []),
+        JSON.stringify(body.sessionFiles || []),
+        body.orgContext ? JSON.stringify(body.orgContext) : null,
+        JSON.stringify(body.controls || []),
+        body.framework || '',
+        now,
+        now
+      );
+      const row = dbGetCsSession.get(id);
+      console.log(`CS session created: ${id} ("${body.name}")`);
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, session: csSessionToJSON(row) }));
+    } catch (error) {
+      console.error('Create CS session error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (csMatch && csMatch[1] && req.method === 'GET') {
+    try {
+      const row = dbGetCsSession.get(csMatch[1]);
+      if (!row) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Not found.' })); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, session: csSessionToJSON(row) }));
+    } catch (error) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (csMatch && csMatch[1] && req.method === 'PUT') {
+    try {
+      const id = csMatch[1];
+      const existing = dbGetCsSession.get(id);
+      if (!existing) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Not found.' })); return; }
+      const body = await parseBody(req);
+      const now = new Date().toISOString();
+      dbUpdateCsSession.run(
+        body.name !== undefined ? body.name : existing.name,
+        body.status !== undefined ? body.status : existing.status,
+        body.step !== undefined ? body.step : existing.step,
+        body.requirements !== undefined ? JSON.stringify(body.requirements) : existing.requirements,
+        body.collections !== undefined ? JSON.stringify(body.collections) : existing.collections,
+        body.selectedFiles !== undefined ? JSON.stringify(body.selectedFiles) : existing.selected_files,
+        body.sessionFiles !== undefined ? JSON.stringify(body.sessionFiles) : existing.session_files,
+        body.orgContext !== undefined ? (body.orgContext ? JSON.stringify(body.orgContext) : null) : existing.org_context,
+        body.controls !== undefined ? JSON.stringify(body.controls) : existing.controls,
+        body.framework !== undefined ? body.framework : existing.framework,
+        now,
+        id
+      );
+      const updated = dbGetCsSession.get(id);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, session: csSessionToJSON(updated) }));
+    } catch (error) {
+      console.error('Update CS session error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (csMatch && csMatch[1] && req.method === 'DELETE') {
+    try {
+      const id = csMatch[1];
+      const row = dbGetCsSession.get(id);
+      if (!row) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Not found.' })); return; }
+      dbDeleteCsSession.run(id);
+      console.log(`CS session deleted: ${id}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (error) {
+      console.error('Delete CS session error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Org Contexts API ----
   if (url.pathname === '/api/org-contexts' && req.method === 'GET') {
     try {
       const rows = dbListOrgContexts.all();
-      const contexts = rows.map(r => ({
-        id: r.id,
-        nameEn: r.name_en,
-        nameAr: r.name_ar,
-        sector: r.sector,
-        size: r.size,
-        obligatoryFrameworks: JSON.parse(r.obligatory_frameworks || '[]'),
-        notes: r.notes,
-        isActive: !!r.is_active,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-      }));
+      const contexts = rows.map(orgContextToJSON);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, contexts }));
     } catch (error) {
@@ -1071,7 +1701,15 @@ const server = http.createServer(async (req, res) => {
         body.nameEn || body.name || '',
         body.nameAr || '',
         body.sector || '',
+        body.sectorCustom || '',
         body.size || '',
+        body.complianceMaturity || 1,
+        JSON.stringify(body.regulatoryMandates || []),
+        body.governanceStructure || '',
+        body.dataClassification || '',
+        body.geographicScope || '',
+        body.itInfrastructure || '',
+        JSON.stringify(body.strategicObjectives || []),
         JSON.stringify(body.obligatoryFrameworks || []),
         body.notes || '',
         body.isActive !== undefined ? (body.isActive ? 1 : 0) : 1,
@@ -1081,21 +1719,7 @@ const server = http.createServer(async (req, res) => {
       const row = dbGetOrgContext.get(id);
       console.log(`Org context created: ${id} ("${body.nameEn || body.name}")`);
       res.writeHead(201, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        success: true,
-        context: {
-          id: row.id,
-          nameEn: row.name_en,
-          nameAr: row.name_ar,
-          sector: row.sector,
-          size: row.size,
-          obligatoryFrameworks: JSON.parse(row.obligatory_frameworks || '[]'),
-          notes: row.notes,
-          isActive: !!row.is_active,
-          created_at: row.created_at,
-          updated_at: row.updated_at,
-        }
-      }));
+      res.end(JSON.stringify({ success: true, context: orgContextToJSON(row) }));
     } catch (error) {
       console.error('Create org context error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1110,14 +1734,7 @@ const server = http.createServer(async (req, res) => {
       const row = dbGetOrgContext.get(orgCtxMatch[1]);
       if (!row) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Not found.' })); return; }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        success: true,
-        context: {
-          id: row.id, nameEn: row.name_en, nameAr: row.name_ar, sector: row.sector,
-          size: row.size, obligatoryFrameworks: JSON.parse(row.obligatory_frameworks || '[]'),
-          notes: row.notes, isActive: !!row.is_active, created_at: row.created_at, updated_at: row.updated_at,
-        }
-      }));
+      res.end(JSON.stringify({ success: true, context: orgContextToJSON(row) }));
     } catch (error) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
@@ -1136,7 +1753,15 @@ const server = http.createServer(async (req, res) => {
         body.nameEn !== undefined ? body.nameEn : row.name_en,
         body.nameAr !== undefined ? body.nameAr : row.name_ar,
         body.sector !== undefined ? body.sector : row.sector,
+        body.sectorCustom !== undefined ? body.sectorCustom : (row.sector_custom || ''),
         body.size !== undefined ? body.size : row.size,
+        body.complianceMaturity !== undefined ? body.complianceMaturity : (row.compliance_maturity || 1),
+        body.regulatoryMandates !== undefined ? JSON.stringify(body.regulatoryMandates) : (row.regulatory_mandates || '[]'),
+        body.governanceStructure !== undefined ? body.governanceStructure : (row.governance_structure || ''),
+        body.dataClassification !== undefined ? body.dataClassification : (row.data_classification || ''),
+        body.geographicScope !== undefined ? body.geographicScope : (row.geographic_scope || ''),
+        body.itInfrastructure !== undefined ? body.itInfrastructure : (row.it_infrastructure || ''),
+        body.strategicObjectives !== undefined ? JSON.stringify(body.strategicObjectives) : (row.strategic_objectives || '[]'),
         body.obligatoryFrameworks !== undefined ? JSON.stringify(body.obligatoryFrameworks) : row.obligatory_frameworks,
         body.notes !== undefined ? body.notes : row.notes,
         body.isActive !== undefined ? (body.isActive ? 1 : 0) : row.is_active,
@@ -1146,14 +1771,7 @@ const server = http.createServer(async (req, res) => {
       const updated = dbGetOrgContext.get(id);
       console.log(`Org context updated: ${id}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        success: true,
-        context: {
-          id: updated.id, nameEn: updated.name_en, nameAr: updated.name_ar, sector: updated.sector,
-          size: updated.size, obligatoryFrameworks: JSON.parse(updated.obligatory_frameworks || '[]'),
-          notes: updated.notes, isActive: !!updated.is_active, created_at: updated.created_at, updated_at: updated.updated_at,
-        }
-      }));
+      res.end(JSON.stringify({ success: true, context: orgContextToJSON(updated) }));
     } catch (error) {
       console.error('Update org context error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1308,7 +1926,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Static Files ----
-  let filePath = path.join(__dirname, url.pathname === '/' ? 'index.html' : url.pathname);
+  let filePath = path.join(__dirname, url.pathname === '/' ? 'admin.html' : url.pathname);
   serveStaticFile(res, filePath);
 });
 
