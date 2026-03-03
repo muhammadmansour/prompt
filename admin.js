@@ -337,8 +337,8 @@ function renderDashStudioSessions() {
 
   el.innerHTML = list.map(s => {
     const name = s.name || 'Untitled Session';
-    const orgCtx = s.org_context ? (typeof s.org_context === 'string' ? JSON.parse(s.org_context) : s.org_context) : null;
-    const orgName = orgCtx?.name_en || orgCtx?.name_ar || '';
+    const orgCtx = s.orgContext || (s.org_context ? (typeof s.org_context === 'string' ? JSON.parse(s.org_context) : s.org_context) : null);
+    const orgName = orgCtx?.nameEn || orgCtx?.name_en || orgCtx?.nameAr || orgCtx?.name_ar || '';
     const status = s.status || 'draft';
     const statusColors = {
       draft: 'color:#9ca3af',
@@ -2862,8 +2862,10 @@ async function loadMergeOptimizer() {
   try {
     const res = await fetch(API.csSessions);
     const data = await res.json();
-    moSessions = (data.success ? data.data : []).filter(s => s.status === 'exported' || s.status === 'generated' || (s.controls && s.controls.length > 0));
+    moSessions = (data.success ? (data.sessions || data.data || []) : []).filter(s => s.status === 'exported' || s.status === 'generated' || (s.controls && s.controls.length > 0));
   } catch (e) { moSessions = []; console.error('loadMergeOptimizer sessions:', e); }
+
+  console.log('[MO] Sessions loaded:', moSessions.length, moSessions.map(s => ({ id: s.id, name: s.name, status: s.status, controls: (s.controls||[]).length })));
 
   // Build existing controls from all exported sessions
   moExistingControls = [];
@@ -2880,6 +2882,8 @@ async function loadMergeOptimizer() {
       });
     });
   });
+
+  console.log('[MO] Existing controls built:', moExistingControls.length);
 
   // Build merge history from localStorage
   moMergeHistory = JSON.parse(localStorage.getItem('mo_merge_history') || '[]');
@@ -2973,7 +2977,11 @@ function moRender() {
   const select = document.getElementById('mo-session-select');
   const currentVal = select.value;
   select.innerHTML = '<option value="">Select a session...</option>' +
-    moSessions.map(s => `<option value="${esc(s.id)}">${esc(s.name || 'Unnamed')} (${(s.controls || []).length} controls)</option>`).join('');
+    moSessions.map(s => {
+      const cCount = (s.controls || []).length;
+      const statusLabel = s.status === 'exported' ? '✓ exported' : s.status === 'generated' ? '● generated' : s.status;
+      return `<option value="${esc(s.id)}">${esc(s.name || 'Unnamed')} — ${cCount} controls (${statusLabel})</option>`;
+    }).join('');
   select.value = moSelectedSessionId || currentVal || '';
   select.onchange = function () {
     moSelectedSessionId = this.value;
@@ -2996,7 +3004,9 @@ function moRenderSessionInfo() {
   const ctrls = session.controls || [];
   const fwSet = new Set();
   (session.requirements || []).forEach(r => { if (r.frameworkName) fwSet.add(r.frameworkName); });
-  const orgName = session.orgContext?.nameEn || session.orgContext?.name || '';
+  // Fallback: get framework names from controls if requirements is empty
+  if (!fwSet.size) ctrls.forEach(c => { if (c.framework) fwSet.add(c.framework); });
+  const orgName = session.orgContext?.nameEn || session.orgContext?.nameAr || session.orgContext?.name || '';
   el.innerHTML = `
     <div class="mo-session-detail">
       <div class="mo-session-detail-name">${esc(session.name || 'Unnamed')}</div>
@@ -3169,9 +3179,9 @@ async function moAnalyze() {
   moSuggestions = [];
 
   sessionControls.forEach((sc, idx) => {
-    // Try to find an existing control with overlapping requirement
+    // Try to find an existing control with overlapping requirement (from a different session)
     const match = moExistingControls.find(ec =>
-      ec.requirementIds.some(r => r === sc.requirementRefId) && ec.id !== sc.id
+      ec.requirementIds.some(r => r === sc.requirementRefId) && ec.id !== sc.id && ec.sessionId !== session.id
     );
     if (match) {
       moSuggestions.push({
@@ -3191,16 +3201,41 @@ async function moAnalyze() {
     }
   });
 
-  // If no real matches, create a couple sample suggestions for demo
-  if (moSuggestions.length === 0 && sessionControls.length >= 2) {
+  // If no cross-session matches, try matching against same-session exported controls (re-export scenario)
+  if (moSuggestions.length === 0) {
+    sessionControls.forEach((sc, idx) => {
+      const match = moExistingControls.find(ec =>
+        ec.id === sc.id || (ec.requirementIds.some(r => r === sc.requirementRefId) && ec.sessionId === session.id)
+      );
+      if (match && !moSuggestions.some(s => s.targetControlId === match.id)) {
+        moSuggestions.push({
+          id: 'sug-' + idx,
+          sourceControlId: sc.id,
+          sourceControlName: sc.name || sc.name_ar || 'New Control',
+          targetControlId: match.id,
+          targetControlName: match.name,
+          mergedName: sc.name || match.name,
+          mergedDescription: (sc.description || match.description || 'Updated control scope and implementation guidance'),
+          rationale: 'This control was previously exported and matches an existing platform control. Consider merging to update the existing control with any improvements.',
+          confidence: 'high',
+          status: 'pending',
+          combinedRequirementIds: [...new Set([...(match.requirementIds || []), sc.requirementRefId].filter(Boolean))],
+          combinedFrameworkNames: [...new Set([...(match.frameworkNames || []), sc.framework].filter(Boolean))],
+        });
+      }
+    });
+  }
+
+  // Final fallback: if still no suggestions, create sample demo suggestions
+  if (moSuggestions.length === 0 && sessionControls.length >= 2 && moExistingControls.length > 0) {
     moSuggestions.push({
       id: 'sug-demo-1',
       sourceControlId: sessionControls[0]?.id || 'sc0',
-      sourceControlName: sessionControls[0]?.name || 'New Control 1',
+      sourceControlName: sessionControls[0]?.name || sessionControls[0]?.name_ar || 'New Control 1',
       targetControlId: moExistingControls[0]?.id || 'ec0',
       targetControlName: moExistingControls[0]?.name || 'Existing Control',
-      mergedName: sessionControls[0]?.name || 'Merged Control',
-      mergedDescription: 'AI-suggested merge combining scope of both controls',
+      mergedName: sessionControls[0]?.name || moExistingControls[0]?.name || 'Merged Control',
+      mergedDescription: 'AI-suggested merge combining scope of both controls for improved coverage.',
       rationale: 'Controls share similar scope and can be consolidated for better coverage.',
       confidence: 'medium',
       status: 'pending',
