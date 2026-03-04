@@ -13,158 +13,127 @@
 <body class="admin-body">
 
   <!-- Admin Layout -->
-  <div class="admin-layout admin-layout-no-sidebar" id="admin-layout">
+  <div class="admin-layout">
 
-    <!-- Main Content -->
-    <div class="admin-main admin-main-full" id="admin-main">
+    <!-- Sidebar -->
+    <aside class="admin-sidebar" id="admin-sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-logo">W</div>
+        <div class="sidebar-brand-text">
+          <span class="sidebar-brand-name">WathbaGRC</span>
+          <span class="sidebar-brand-tag">ADMIN</span>
+        </div>
+      </div>
 
-      <!-- Inner-page top bar (shown when inside a sub-page) -->
-      <div class="inner-page-topbar" id="inner-page-topbar" style="display:none">
-        <button class="inner-page-back" onclick="navigateTo('dashboard')">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 11L5 7L9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          الرجوع
+      <nav class="sidebar-nav">
+        <button class="sidebar-item active" data-page="dashboard">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/></svg>
+          Dashboard
         </button>
-        <span class="inner-page-topbar-title" id="inner-page-title"></span>
-        <button class="dash-signout-btn dash-signout-btn-sm" onclick="adminLogout()" title="Sign out">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 13H4C3.4 13 3 12.6 3 12V4C3 3.4 3.4 3 4 3H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 11L13 8L10 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+
+        <div class="sidebar-divider"></div>
+
+        <button class="sidebar-section-toggle" data-section="ai-management">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M8 5V8L10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          AI MANAGEMENT
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 5L6 7L8 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <div class="sidebar-section open" id="section-ai-management">
+          <button class="sidebar-item" data-page="audit-sessions">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3H14M2 8H14M2 13H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Audit Sessions
+          </button>
+          <button class="sidebar-item" data-page="audit-studio">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12M4 12L2.5 13.5M13.5 2.5L12 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
+            Audit Studio
+          </button>
+        </div>
+
+        <button class="sidebar-section-toggle" data-section="ai-tools">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M8 2V5M8 11V14M2 8H5M11 8H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          AI TOOLS
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 5L6 7L8 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <div class="sidebar-section open" id="section-ai-tools">
+          <button class="sidebar-item" data-page="controls-studio">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Controls Studio
+          </button>
+          <button class="sidebar-item" data-page="merge-optimizer">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 2L12 14M4 4V8C4 10.2 5.8 12 8 12H12M4 4L2 6M4 4L6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Merge Optimizer
+          </button>
+          <button class="sidebar-item" data-page="org-contexts">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 13V4C2 3.4 2.4 3 3 3H13C13.6 3 14 3.4 14 4V13M5 7H11M5 10H9M8 3V1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Org Contexts
+          </button>
+        </div>
+
+        <button class="sidebar-section-toggle" data-section="config">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1V3M8 13V15M1 8H3M13 8H15M3.5 3.5L5 5M11 11L12.5 12.5M3.5 12.5L5 11M11 5L12.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          CONFIGURATION
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 5L6 7L8 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <div class="sidebar-section open" id="section-config">
+          <button class="sidebar-item" data-page="prompts">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3H14M2 6.5H10M2 10H12M2 13.5H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Prompts
+          </button>
+          <button class="sidebar-item" data-page="file-collections">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V12C2 12.6 2.4 13 3 13H13C13.6 13 14 12.6 14 12V7C14 6.4 13.6 6 13 6H8L6.5 4H3C2.4 4 2 4.4 2 5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            File Collections
+          </button>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button class="sidebar-logout-btn" onclick="adminLogout()" title="Sign out">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 12H3C2.4 12 2 11.6 2 11V3C2 2.4 2.4 2 3 2H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 10L12 7L9 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 7H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          Sign Out
         </button>
       </div>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="admin-main">
+      <header class="admin-header">
+        <div class="admin-header-left">
+          <div class="admin-header-brand">
+            <div class="admin-header-brand-logo">W</div>
+            <span class="admin-header-brand-name">WathbahGRC Admin</span>
+          </div>
+          <div class="admin-header-search">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <input type="text" placeholder="Search admin..." id="admin-global-search">
+          </div>
+        </div>
+        <div class="admin-header-right">
+          <span class="admin-header-powered">Powered by <strong>WATHBAH</strong></span>
+        </div>
+      </header>
 
       <main class="admin-content" id="admin-content">
 
-        <!-- =================== DASHBOARD (Card Grid) =================== -->
+        <!-- =================== DASHBOARD =================== -->
         <section class="admin-page active" id="page-dashboard">
-          <!-- Hero header -->
-          <div class="dash-hero">
-            <div class="dash-hero-inner">
-              <div class="dash-hero-icon">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 2L4 6V12C4 17 7.6 21.5 12 22.5C16.4 21.5 20 17 20 12V6L12 2Z" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div class="page-container">
+
+            <!-- Dashboard Banner -->
+            <div class="dash-banner">
+              <div class="dash-banner-text">
+                <h1 class="dash-banner-title">Admin Panel</h1>
+                <p class="dash-banner-subtitle">System management, data & configuration</p>
               </div>
-              <div class="dash-hero-text">
-                <h1 class="dash-hero-title">لوحة الإدارة</h1>
-                <p class="dash-hero-sub">إدارة النظام والبيانات والإعدادات</p>
+              <div class="dash-banner-icon">
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><path d="M20 4L34 12V20C34 28 27.5 34.5 20 36C12.5 34.5 6 28 6 20V12L20 4Z" stroke="rgba(255,255,255,0.5)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 20L18 24L26 16" stroke="rgba(255,255,255,0.7)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </div>
             </div>
-          </div>
 
-          <!-- Card grid -->
-          <div class="dash-cards-container">
-            <div class="dash-cards-grid" id="dash-cards-grid">
-
-              <!-- New Audit (dark/primary card) -->
-              <div class="dash-nav-card dash-nav-card-dark" onclick="navigateTo('audit-studio')">
-                <div class="dash-nav-card-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                </div>
-                <div class="dash-nav-card-body">
-                  <h3 class="dash-nav-card-title">تدقيق جديد</h3>
-                  <p class="dash-nav-card-desc">إنشاء مشروع تدقيق جديد</p>
-                </div>
-                <div class="dash-nav-card-footer">
-                  <span class="dash-nav-card-link">فتح</span>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-              </div>
-
-              <!-- File Collections -->
-              <div class="dash-nav-card" onclick="navigateTo('file-collections')">
-                <div class="dash-nav-card-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 7V17C3 17.6 3.4 18 4 18H20C20.6 18 21 17.6 21 17V10C21 9.4 20.6 9 20 9H12L10 7H4C3.4 7 3 7.4 3 8Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </div>
-                <div class="dash-nav-card-body">
-                  <h3 class="dash-nav-card-title">المجموعات</h3>
-                  <p class="dash-nav-card-desc">إدارة مجموعات الملفات والتحكم بها</p>
-                </div>
-                <div class="dash-nav-card-footer">
-                  <span class="dash-nav-card-link">فتح</span>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-              </div>
-
-              <!-- Audit Sessions -->
-              <div class="dash-nav-card" onclick="navigateTo('audit-sessions')">
-                <div class="dash-nav-card-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 5H20M4 10H20M4 15H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-                <div class="dash-nav-card-body">
-                  <h3 class="dash-nav-card-title">التدقيقات</h3>
-                  <p class="dash-nav-card-desc">عرض وإدارة جميع عمليات التدقيق</p>
-                </div>
-                <div class="dash-nav-card-footer">
-                  <span class="dash-nav-card-link">فتح</span>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-              </div>
-
-              <!-- Org Contexts -->
-              <div class="dash-nav-card" onclick="navigateTo('org-contexts')">
-                <div class="dash-nav-card-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2L4 6V12C4 17 7.6 21.5 12 22.5C16.4 21.5 20 17 20 12V6L12 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </div>
-                <div class="dash-nav-card-body">
-                  <h3 class="dash-nav-card-title">الخبراء</h3>
-                  <p class="dash-nav-card-desc">إدارة الخبراء والأنظمة</p>
-                </div>
-                <div class="dash-nav-card-footer">
-                  <span class="dash-nav-card-link">فتح</span>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-              </div>
-
-              <!-- Controls Studio (extract references) -->
-              <div class="dash-nav-card" onclick="navigateTo('controls-studio')">
-                <div class="dash-nav-card-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M8 12L11 15L16 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </div>
-                <div class="dash-nav-card-body">
-                  <h3 class="dash-nav-card-title">استخراج المراجع</h3>
-                  <p class="dash-nav-card-desc">استخراج المراجع من الملفات باستخدام الذكاء الاصطناعي</p>
-                </div>
-                <div class="dash-nav-card-footer">
-                  <span class="dash-nav-card-link">فتح</span>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-              </div>
-
-              <!-- Prompts / References -->
-              <div class="dash-nav-card" onclick="navigateTo('prompts')">
-                <div class="dash-nav-card-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 5H16L20 8V19C20 19.6 19.6 20 19 20H5C4.4 20 4 19.6 4 19V5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M8 12H16M8 16H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-                <div class="dash-nav-card-body">
-                  <h3 class="dash-nav-card-title">المراجع</h3>
-                  <p class="dash-nav-card-desc">عرض وإدارة المراجع المستخرجة</p>
-                </div>
-                <div class="dash-nav-card-footer">
-                  <span class="dash-nav-card-link">فتح</span>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-              </div>
-
-              <!-- Merge Optimizer -->
-              <div class="dash-nav-card" onclick="navigateTo('merge-optimizer')">
-                <div class="dash-nav-card-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M16 3V21M8 7V13C8 16.3 10.7 19 14 19H16M8 7L5 10M8 7L11 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </div>
-                <div class="dash-nav-card-body">
-                  <h3 class="dash-nav-card-title">Merge Optimizer</h3>
-                  <p class="dash-nav-card-desc">تحليل ودمج الضوابط المتداخلة</p>
-                </div>
-                <div class="dash-nav-card-footer">
-                  <span class="dash-nav-card-link">فتح</span>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </div>
-              </div>
-
+            <!-- Dashboard Card Grid -->
+            <div class="dash-card-grid" id="dash-card-grid">
+              <!-- Populated by JS -->
             </div>
 
-            <!-- Sign out row -->
-            <div class="dash-signout-row">
-              <button class="dash-signout-btn" onclick="adminLogout()">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 12H3C2.4 12 2 11.6 2 11V3C2 2.4 2.4 2 3 2H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 10L12 7L9 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 7H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-                مدير النظام
-              </button>
-            </div>
           </div>
         </section>
 
