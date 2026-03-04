@@ -51,28 +51,14 @@ const toastContainer = document.getElementById('toast-container');
 // ─── Navigation ───────────────────────────────────────────────
 
 function navigateTo(page) {
-  // Update sidebar
-  document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
-  const target = document.querySelector(`.sidebar-item[data-page="${page}"]`);
-  if (target) target.classList.add('active');
-
   // Update pages
   document.querySelectorAll('.admin-page').forEach(p => p.classList.remove('active'));
   const pageEl = document.getElementById('page-' + page);
   if (pageEl) pageEl.classList.add('active');
 
-  // Update header
-  const names = {
-    'dashboard': 'Dashboard',
-    'audit-sessions': 'Audit Sessions',
-    'audit-studio': 'Audit Studio',
-    'controls-studio': 'Applied Controls Studio',
-    'merge-optimizer': 'Control Merge Optimizer',
-    'org-contexts': 'Organization Contexts',
-    'prompts': 'Prompts',
-    'file-collections': 'File Collections',
-  };
-  if (headerTitle) headerTitle.textContent = names[page] || page;
+  // Show/hide back button (hidden on dashboard, visible on sub-pages)
+  const backBtn = document.getElementById('admin-back-btn');
+  if (backBtn) backBtn.style.display = (page === 'dashboard') ? 'none' : 'flex';
 
   // Load data for the page
   if (page === 'dashboard') loadDashboard();
@@ -85,20 +71,6 @@ function navigateTo(page) {
   if (page === 'merge-optimizer') loadMergeOptimizer();
 }
 window.navigateTo = navigateTo;
-
-// Sidebar nav click handlers
-document.querySelectorAll('.sidebar-item[data-page]').forEach(btn => {
-  btn.addEventListener('click', () => navigateTo(btn.dataset.page));
-});
-
-// Sidebar section toggles
-document.querySelectorAll('.sidebar-section-toggle').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const sec = document.getElementById('section-' + btn.dataset.section);
-    if (sec) sec.classList.toggle('open');
-    btn.classList.toggle('collapsed');
-  });
-});
 
 // ─── Toast ────────────────────────────────────────────────────
 
@@ -3645,14 +3617,19 @@ if (studioStartBtn) {
 
 // ─── Init ─────────────────────────────────────────────────────
 
-console.log('[admin.js] Script loaded, readyState:', document.readyState);
+function initAdmin() {
+  // Check URL hash for deep-linking (e.g. /admin.html#audit-sessions)
+  const hash = window.location.hash.replace('#', '');
+  const validPages = ['dashboard','audit-sessions','audit-studio','controls-studio','merge-optimizer','org-contexts','prompts','file-collections'];
+  if (hash && validPages.includes(hash)) {
+    navigateTo(hash);
+  } else {
+    navigateTo('dashboard');
+  }
+}
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    console.log('[admin.js] DOMContentLoaded fired');
-    loadDashboard();
-  });
+  document.addEventListener('DOMContentLoaded', initAdmin);
 } else {
-  console.log('[admin.js] DOM already ready, calling loadDashboard');
-  loadDashboard();
+  initAdmin();
 }

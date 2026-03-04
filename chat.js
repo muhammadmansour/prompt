@@ -14,17 +14,6 @@ const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send-btn');
 const toastContainer = document.getElementById('toast-container');
 
-// ── Sidebar section toggles ──
-document.querySelectorAll('.sidebar-section-toggle').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const sectionId = 'section-' + btn.getAttribute('data-section');
-    const section = document.getElementById(sectionId);
-    if (!section) return;
-    btn.classList.toggle('collapsed');
-    section.classList.toggle('open');
-  });
-});
-
 // ── Logout ──
 function adminLogout() {
   fetch('/api/auth/logout', { method: 'POST' }).finally(() => {
