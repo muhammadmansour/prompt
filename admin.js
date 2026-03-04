@@ -45,34 +45,39 @@ let csCollectionsData = [];    // fetched collections with files for controls st
 let csPendingPoll = null;
 
 // ─── DOM refs ─────────────────────────────────────────────────
-const headerTitle = document.getElementById('admin-header-title'); // may be null in new layout
 const toastContainer = document.getElementById('toast-container');
+const innerTopbar = document.getElementById('inner-page-topbar');
+const innerTitle = document.getElementById('inner-page-title');
+
+// ─── Page name map ────────────────────────────────────────────
+const PAGE_NAMES = {
+  'dashboard': 'لوحة الإدارة',
+  'audit-sessions': 'التدقيقات',
+  'audit-studio': 'تدقيق جديد',
+  'controls-studio': 'استخراج المراجع',
+  'merge-optimizer': 'Merge Optimizer',
+  'org-contexts': 'الخبراء',
+  'prompts': 'المراجع',
+  'file-collections': 'المجموعات',
+};
 
 // ─── Navigation ───────────────────────────────────────────────
 
 function navigateTo(page) {
-  // Update sidebar
-  document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
-  const target = document.querySelector(`.sidebar-item[data-page="${page}"]`);
-  if (target) target.classList.add('active');
-
   // Update pages
   document.querySelectorAll('.admin-page').forEach(p => p.classList.remove('active'));
   const pageEl = document.getElementById('page-' + page);
   if (pageEl) pageEl.classList.add('active');
 
-  // Update header
-  const names = {
-    'dashboard': 'Dashboard',
-    'audit-sessions': 'Audit Sessions',
-    'audit-studio': 'Audit Studio',
-    'controls-studio': 'Applied Controls Studio',
-    'merge-optimizer': 'Control Merge Optimizer',
-    'org-contexts': 'Organization Contexts',
-    'prompts': 'Prompts',
-    'file-collections': 'File Collections',
-  };
-  if (headerTitle) headerTitle.textContent = names[page] || page;
+  // Show/hide inner-page topbar
+  if (innerTopbar) {
+    if (page === 'dashboard') {
+      innerTopbar.style.display = 'none';
+    } else {
+      innerTopbar.style.display = 'flex';
+      if (innerTitle) innerTitle.textContent = PAGE_NAMES[page] || page;
+    }
+  }
 
   // Load data for the page
   if (page === 'dashboard') loadDashboard();
@@ -83,22 +88,11 @@ function navigateTo(page) {
   if (page === 'prompts') loadPrompts();
   if (page === 'controls-studio') loadControlsStudio();
   if (page === 'merge-optimizer') loadMergeOptimizer();
+
+  // Scroll to top
+  window.scrollTo(0, 0);
 }
 window.navigateTo = navigateTo;
-
-// Sidebar nav click handlers
-document.querySelectorAll('.sidebar-item[data-page]').forEach(btn => {
-  btn.addEventListener('click', () => navigateTo(btn.dataset.page));
-});
-
-// Sidebar section toggles
-document.querySelectorAll('.sidebar-section-toggle').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const sec = document.getElementById('section-' + btn.dataset.section);
-    if (sec) sec.classList.toggle('open');
-    btn.classList.toggle('collapsed');
-  });
-});
 
 // ─── Toast ────────────────────────────────────────────────────
 
@@ -205,201 +199,15 @@ async function fetchPromptCounts() {
 // ─── Dashboard ────────────────────────────────────────────────
 
 async function loadDashboard() {
-  console.log('[admin.js] loadDashboard started');
-  try {
-    const promptCountPromise = fetchPromptCounts();
-    await Promise.all([fetchSessions(), fetchCollections(), fetchFrameworks(), fetchCsSessions()]);
-    const promptCount = await promptCountPromise;
-    console.log('[admin.js] Data fetched:', { sessions: sessions.length, collections: collections.length, frameworks: frameworks.length, csSessions: (csSessions||[]).length, promptCount });
-    renderDashStats(promptCount);
-    renderDashSessions();
-    renderDashStudioSessions();
-    renderDashFrameworks();
-    console.log('[admin.js] Dashboard rendered');
-  } catch (e) {
-    console.error('[admin.js] loadDashboard error:', e);
-    // Still try to render what we can
-    try { renderDashStats(0); } catch (e2) { console.error('renderDashStats error:', e2); }
-    try { renderDashSessions(); } catch (e2) { console.error('renderDashSessions error:', e2); }
-    try { renderDashStudioSessions(); } catch (e2) { console.error('renderDashStudioSessions error:', e2); }
-    try { renderDashFrameworks(); } catch (e2) { console.error('renderDashFrameworks error:', e2); }
-  }
+  // Dashboard is now a card-grid navigation — no data fetching needed
+  console.log('[admin.js] loadDashboard (card-grid mode)');
 }
 
-function renderDashStats(promptCount) {
-  const el = document.getElementById('dash-stats');
-  if (!el) { console.error('dash-stats element not found'); return; }
-  const totalSessions = sessions.length;
-  const totalCollections = collections.length;
-  const totalFrameworks = frameworks.length;
-  const totalFiles = collections.reduce((a, c) => a + (c.file_counts?.active || c.fileCount || 0), 0);
-  promptCount = promptCount || 0;
-
-  el.innerHTML = `
-    <div class="stat-card">
-      <div class="stat-card-icon stat-bg-primary"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4H16L18 6V16C18 16.6 17.6 17 17 17H3C2.4 17 2 16.6 2 16V5C2 4.4 2.4 4 3 4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 10H13M7 13H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-      <div class="stat-card-value">${totalSessions}</div>
-      <div class="stat-card-label">Audit Sessions</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-icon stat-bg-emerald"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 4H17M3 8H12M3 12H15M3 16H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-      <div class="stat-card-value">${promptCount}</div>
-      <div class="stat-card-label">Prompts</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-icon stat-bg-amber"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 7V15C3 15.6 3.4 16 4 16H16C16.6 16 17 15.6 17 15V9C17 8.4 16.6 8 16 8H10L8.5 6H4C3.4 6 3 6.4 3 7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-      <div class="stat-card-value">${totalCollections}</div>
-      <div class="stat-card-label">File Collections</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-icon stat-bg-violet"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4H16V16H4V4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 8H16M4 12H16M8 4V16M12 4V16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-      <div class="stat-card-value">${totalFrameworks}</div>
-      <div class="stat-card-label">Frameworks Loaded</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-icon stat-bg-rose"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M14 2V18M6 6V14C6 16.2 7.8 18 10 18H14M6 6L4 8M6 6L8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-      <div class="stat-card-value">${(csSessions || []).length}</div>
-      <div class="stat-card-label">Merge Suggestions</div>
-    </div>`;
-}
-
-function renderDashSessions() {
-  const list = document.getElementById('dash-sessions-list');
-  const footer = document.getElementById('dash-sessions-footer');
-  if (!list || !footer) return;
-  const recent = sessions.slice(0, 5);
-
-  if (!recent.length) {
-    list.innerHTML = '<div style="padding:32px 20px;text-align:center;color:#9ca3af;font-size:13px">No sessions yet. Go to <a href="javascript:navigateTo(\'audit-studio\')" style="color:var(--admin-primary)">Audit Studio</a> to start.</div>';
-    footer.textContent = '';
-    return;
-  }
-
-  list.innerHTML = recent.map(s => {
-    // Handle both API format (camelCase) and raw DB format (snake_case)
-    const id = s.sessionId || s.id;
-    const createdAt = s.createdAt || s.created_at;
-    const msgCount = s.messageCount || s.message_count || 0;
-
-    // Get framework name from requirements or context
-    let fw = 'Unknown';
-    let reqCount = 0;
-    let fileCount = 0;
-
-    if (s.requirements && s.requirements.length) {
-      fw = s.requirements[0].frameworkName || 'Unknown';
-      reqCount = s.requirementsCount || s.requirements.length;
-    } else if (s.context) {
-      const ctx = parseContext(s.context);
-      fw = ctx.frameworkName || 'Unknown';
-      reqCount = (ctx.selectedRequirements || ctx.requirements || []).length;
-      fileCount = (ctx.selectedFiles || []).length + (ctx.contextFiles || []).length;
-    }
-
-    fileCount = fileCount || s.filesCount || 0;
-
-    return `
-      <div class="dash-session-row" onclick="goToSession('${esc(id)}')">
-        <div class="dash-session-info">
-          <div class="dash-session-name">${esc(fw)}</div>
-          <div class="dash-session-date">${fmtDate(createdAt)}</div>
-        </div>
-        <div class="dash-session-stats">
-          <div class="dash-session-stat"><div class="dash-session-stat-val dash-stat-purple">${reqCount}</div><div class="dash-session-stat-label">Req</div></div>
-          <div class="dash-session-stat"><div class="dash-session-stat-val dash-stat-blue">${fileCount}</div><div class="dash-session-stat-label">Files</div></div>
-          <div class="dash-session-stat"><div class="dash-session-stat-val dash-stat-amber">${msgCount}</div><div class="dash-session-stat-label">Msgs</div></div>
-        </div>
-        <svg class="dash-session-arrow" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      </div>`;
-  }).join('');
-
-  const totalMsgs = sessions.reduce((a, s) => a + (s.messageCount || s.message_count || 0), 0);
-  const totalFiles = sessions.reduce((a, s) => {
-    if (s.filesCount) return a + s.filesCount;
-    const ctx = parseContext(s.context);
-    return a + (ctx.selectedFiles || []).length + (ctx.contextFiles || []).length;
-  }, 0);
-  footer.textContent = `${sessions.length} sessions • ${totalMsgs} total messages • ${totalFiles} reference files`;
-}
-
-function renderDashStudioSessions() {
-  const el = document.getElementById('dash-studio-sessions');
-  if (!el) return;
-  const list = (csSessions || []).slice(0, 3);
-
-  if (!list.length) {
-    el.innerHTML = `<div style="padding:20px;text-align:center;font-size:12px;color:#9ca3af">
-      <p>No Controls Studio sessions yet.</p>
-      <button class="btn-admin-outline btn-admin-sm" onclick="navigateTo('controls-studio')" style="margin-top:8px">Open Studio</button>
-    </div>`;
-    return;
-  }
-
-  el.innerHTML = list.map(s => {
-    const name = s.name || 'Untitled Session';
-    const orgCtx = s.orgContext || (s.org_context ? (typeof s.org_context === 'string' ? JSON.parse(s.org_context) : s.org_context) : null);
-    const orgName = orgCtx?.nameEn || orgCtx?.name_en || orgCtx?.nameAr || orgCtx?.name_ar || '';
-    const status = s.status || 'draft';
-    const statusColors = {
-      draft: 'color:#9ca3af',
-      generating: 'color:#f59e0b',
-      generated: 'color:#10b981',
-      exported: 'color:#0077cc',
-      merged: 'color:#8b5cf6'
-    };
-    const statusBadges = {
-      merged: '<span class="badge badge-purple" style="font-size:9px;margin-right:4px">⅓ merge</span>',
-    };
-    return `
-      <div class="dash-studio-row" onclick="navigateTo('controls-studio')">
-        <div class="dash-studio-info">
-          <div class="dash-studio-name">${esc(name.length > 28 ? name.substring(0, 28) + '...' : name)}</div>
-          ${orgName ? `<div class="dash-studio-org">${esc(orgName)}</div>` : ''}
-        </div>
-        <div style="display:flex;align-items:center;gap:4px">
-          ${statusBadges[status] || ''}
-          <span class="dash-studio-status" style="${statusColors[status] || ''};font-size:11px;font-weight:500">${status}</span>
-        </div>
-      </div>`;
-  }).join('');
-}
-
-function renderDashFrameworks() {
-  const el = document.getElementById('dash-frameworks');
-  if (!el) return;
-
-  if (!frameworks.length) {
-    el.innerHTML = '<div style="padding:16px;text-align:center;font-size:12px;color:#9ca3af">No frameworks loaded.</div>';
-    return;
-  }
-
-  // Build framework summary: name + requirement count
-  const fwList = frameworks.map(lib => {
-    const fw = lib.content?.framework;
-    if (!fw) return null;
-    const name = fw.name || lib.name || 'Unknown';
-    const nodes = (fw.requirement_nodes || []).filter(n => n.description);
-    return { name, reqCount: nodes.length };
-  }).filter(Boolean);
-
-  const MAX_SHOW = 4;
-  const visible = fwList.slice(0, MAX_SHOW);
-  const remaining = fwList.length - MAX_SHOW;
-
-  let html = '<div class="dash-fw-list">';
-  visible.forEach(fw => {
-    html += `
-      <div class="dash-fw-row">
-        <div class="dash-fw-name">${esc(fw.name.length > 28 ? fw.name.substring(0, 28) + '...' : fw.name)}</div>
-        <span class="dash-fw-count">${fw.reqCount} req</span>
-      </div>`;
-  });
-  if (remaining > 0) {
-    html += `<div class="dash-fw-more">+${remaining} more framework${remaining > 1 ? 's' : ''}</div>`;
-  }
-  html += '</div>';
-  el.innerHTML = html;
-}
+// Dashboard render functions removed — dashboard is now a card-grid navigation
+function renderDashStats() {}
+function renderDashSessions() {}
+function renderDashStudioSessions() {}
+function renderDashFrameworks() {}
 
 // ─── Audit Sessions Page ──────────────────────────────────────
 
