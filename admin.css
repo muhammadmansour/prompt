@@ -476,161 +476,176 @@
   font-size: 10px;
 }
 
-/* ---------- Dashboard Banner ---------- */
-.dash-banner {
+/* ---------- Dashboard Hero Banner ---------- */
+.dash-hero {
   background: var(--admin-navy);
-  border-radius: 16px;
+  border-radius: 14px;
   padding: 32px 36px;
-  margin-bottom: 28px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 28px;
 }
-.dash-banner-text {
-  color: #fff;
+.dash-hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-.dash-banner-title {
+.dash-hero-title {
   font-size: 26px;
   font-weight: 700;
-  margin: 0;
   color: #fff;
+  margin: 0;
+  font-family: 'Cairo', sans-serif;
 }
-.dash-banner-subtitle {
+.dash-hero-sub {
   font-size: 13px;
   color: rgba(255,255,255,0.6);
-  margin: 4px 0 0;
+  margin: 0;
+  font-family: 'Cairo', sans-serif;
 }
-.dash-banner-icon {
+.dash-hero-icon {
   width: 56px;
   height: 56px;
-  background: rgba(255,255,255,0.08);
   border-radius: 14px;
+  background: rgba(255,255,255,0.1);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  color: #fff;
 }
 
-/* ---------- Dashboard Card Grid ---------- */
-.dash-card-grid {
+/* ---------- Dashboard Navigation Grid ---------- */
+.dash-nav-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 20px;
 }
-@media (max-width: 1024px) {
-  .dash-card-grid { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 900px) {
+  .dash-nav-grid { grid-template-columns: repeat(2, 1fr); }
 }
-@media (max-width: 640px) {
-  .dash-card-grid { grid-template-columns: 1fr; }
+@media (max-width: 560px) {
+  .dash-nav-grid { grid-template-columns: 1fr; }
 }
 
-/* Dashboard Navigation Card */
+/* Base Card */
 .dash-nav-card {
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 14px;
-  padding: 24px 24px 16px;
-  cursor: pointer;
-  transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  min-height: 160px;
+  gap: 16px;
+  cursor: pointer;
+  transition: box-shadow 0.2s, transform 0.15s;
+  position: relative;
+  font-family: 'Cairo', sans-serif;
 }
 .dash-nav-card:hover {
-  border-color: #d1d5db;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.08);
   transform: translateY(-2px);
 }
-.dash-nav-card-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+
+/* Dark Variant */
+.dash-nav-card--dark {
+  background: var(--admin-navy);
+  border-color: var(--admin-navy);
+  color: #fff;
 }
+.dash-nav-card--dark .dash-nav-card-title {
+  color: #fff;
+}
+.dash-nav-card--dark .dash-nav-card-desc {
+  color: rgba(255,255,255,0.6);
+}
+.dash-nav-card--dark .dash-nav-card-link {
+  color: rgba(255,255,255,0.7);
+}
+.dash-nav-card--dark:hover .dash-nav-card-link {
+  color: #fff;
+}
+
+/* Outline Variant (System Admin) */
+.dash-nav-card--outline {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+}
+
+/* Card Icon */
+.dash-nav-card-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: #f3f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #374151;
+  flex-shrink: 0;
+}
+.dash-nav-icon--dark {
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+}
+.dash-nav-icon--outline {
+  background: var(--admin-navy);
+  color: #fff;
+}
+
+/* Card Body */
 .dash-nav-card-body {
   flex: 1;
-  min-width: 0;
 }
 .dash-nav-card-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
   color: #111827;
-  margin: 0 0 6px;
+  margin: 0 0 4px;
+  font-family: 'Cairo', sans-serif;
 }
 .dash-nav-card-desc {
   font-size: 12px;
   color: #6b7280;
   margin: 0;
   line-height: 1.5;
+  font-family: 'Cairo', sans-serif;
 }
-.dash-nav-card-stat {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 500;
-  color: #9ca3af;
-  margin-top: 10px;
-  background: #f3f4f6;
-  padding: 2px 8px;
-  border-radius: 6px;
-}
-.dash-nav-card-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: var(--admin-navy);
-  color: rgba(255,255,255,0.85);
+
+/* Card "Open" Link */
+.dash-nav-card-link {
   display: flex;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.dash-nav-card-icon svg {
-  width: 24px;
-  height: 24px;
-}
-.dash-nav-card-open {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #9ca3af;
-  margin-top: 16px;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
   transition: color 0.15s;
+  font-family: 'Cairo', sans-serif;
 }
-.dash-nav-card:hover .dash-nav-card-open {
+.dash-nav-card:hover .dash-nav-card-link {
   color: var(--admin-primary);
 }
 
-/* Highlighted Card (primary action) */
-.dash-nav-card-highlight {
-  background: var(--admin-navy);
-  border-color: var(--admin-navy);
+/* Legacy dashboard classes kept for backward compat */
+.dash-fw-name {
+  font-size: 12px;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
 }
-.dash-nav-card-highlight .dash-nav-card-title {
-  color: #fff;
+.dash-fw-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: #d97706;
+  flex-shrink: 0;
 }
-.dash-nav-card-highlight .dash-nav-card-desc {
-  color: rgba(255,255,255,0.55);
-}
-.dash-nav-card-highlight .dash-nav-card-stat {
-  background: rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.7);
-}
-.dash-nav-card-highlight .dash-nav-card-open {
-  color: rgba(255,255,255,0.5);
-}
-.dash-nav-card-highlight:hover .dash-nav-card-open {
-  color: rgba(255,255,255,0.85);
-}
-.dash-nav-card-highlight:hover {
-  border-color: var(--admin-navy-light);
-  box-shadow: 0 4px 16px rgba(10,22,40,0.35);
-}
-.dash-nav-card-icon-hl {
-  background: rgba(255,255,255,0.12);
-  color: rgba(255,255,255,0.9);
+.dash-fw-more {
+  padding-top: 8px;
+  font-size: 11px;
+  color: #9ca3af;
 }
 
 /* ---------- Badges ---------- */
@@ -3360,6 +3375,9 @@
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1024px) {
+  .dash-nav-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
   .studio-three-col {
     grid-template-columns: 1fr;
   }

@@ -118,22 +118,122 @@
         <section class="admin-page active" id="page-dashboard">
           <div class="page-container">
 
-            <!-- Dashboard Banner -->
-            <div class="dash-banner">
-              <div class="dash-banner-text">
-                <h1 class="dash-banner-title">Admin Panel</h1>
-                <p class="dash-banner-subtitle">System management, data & configuration</p>
+            <!-- Hero Banner -->
+            <div class="dash-hero" dir="rtl">
+              <div class="dash-hero-text">
+                <h1 class="dash-hero-title">لوحة الإدارة</h1>
+                <p class="dash-hero-sub">إدارة النظام والبيانات</p>
               </div>
-              <div class="dash-banner-icon">
-                <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><path d="M20 4L34 12V20C34 28 27.5 34.5 20 36C12.5 34.5 6 28 6 20V12L20 4Z" stroke="rgba(255,255,255,0.5)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 20L18 24L26 16" stroke="rgba(255,255,255,0.7)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <div class="dash-hero-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none"><path d="M12 2L20 7V12C20 17 16.4 21.5 12 22.5C7.6 21.5 4 17 4 12V7L12 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </div>
             </div>
 
-            <!-- Dashboard Card Grid -->
-            <div class="dash-card-grid" id="dash-card-grid">
-              <!-- Populated by JS -->
-            </div>
+            <!-- Navigation Cards Grid -->
+            <div class="dash-nav-grid" dir="rtl">
 
+              <!-- Row 1 -->
+              <div class="dash-nav-card dash-nav-card--dark" onclick="navigateTo('audit-studio')">
+                <div class="dash-nav-card-icon dash-nav-icon--dark">
+                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 6V22M6 14H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </div>
+                <div class="dash-nav-card-body">
+                  <h3 class="dash-nav-card-title">تدقيق جديد</h3>
+                  <p class="dash-nav-card-desc">إنشاء مشروع تدقيق جديد</p>
+                </div>
+                <div class="dash-nav-card-link">
+                  فتح
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6 2L2 5L6 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </div>
+
+              <div class="dash-nav-card" onclick="navigateTo('file-collections')">
+                <div class="dash-nav-card-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 7V18C3 18.6 3.4 19 4 19H20C20.6 19 21 18.6 21 18V10C21 9.4 20.6 9 20 9H12L10 6H4C3.4 6 3 6.4 3 7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="dash-nav-card-body">
+                  <h3 class="dash-nav-card-title">المجموعات</h3>
+                  <p class="dash-nav-card-desc">إدارة مجموعات الملفات والتحكم بها</p>
+                </div>
+                <div class="dash-nav-card-link">
+                  فتح
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6 2L2 5L6 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </div>
+
+              <div class="dash-nav-card" onclick="navigateTo('audit-sessions')">
+                <div class="dash-nav-card-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 4H16C16.6 4 17 4.4 17 5V19C17 19.6 16.6 20 16 20H4C3.4 20 3 19.6 3 19V5C3 4.4 3.4 4 4 4Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M7 9H13M7 12H13M7 15H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M20 8V18C20 19.1 19.1 20 18 20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </div>
+                <div class="dash-nav-card-body">
+                  <h3 class="dash-nav-card-title">التدقيقات</h3>
+                  <p class="dash-nav-card-desc">عرض وإدارة جميع عمليات التدقيق</p>
+                </div>
+                <div class="dash-nav-card-link">
+                  فتح
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6 2L2 5L6 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </div>
+
+              <!-- Row 2 -->
+              <div class="dash-nav-card dash-nav-card--dark" onclick="navigateTo('controls-studio')">
+                <div class="dash-nav-card-icon dash-nav-icon--dark">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2L20 7V12C20 17 16.4 21.5 12 22.5C7.6 21.5 4 17 4 12V7L12 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="dash-nav-card-body">
+                  <h3 class="dash-nav-card-title">الخبراء</h3>
+                  <p class="dash-nav-card-desc">إدارة الخبراء والأنظمة</p>
+                </div>
+                <div class="dash-nav-card-link">
+                  فتح
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6 2L2 5L6 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </div>
+
+              <div class="dash-nav-card" onclick="navigateTo('merge-optimizer')">
+                <div class="dash-nav-card-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M12 2V6M12 18V22M2 12H6M18 12H22M5.6 5.6L8.5 8.5M15.5 15.5L18.4 18.4M5.6 18.4L8.5 15.5M15.5 8.5L18.4 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </div>
+                <div class="dash-nav-card-body">
+                  <h3 class="dash-nav-card-title">استخراج المراجع</h3>
+                  <p class="dash-nav-card-desc">استخراج المراجع من الملفات باستخدام الذكاء الاصطناعي</p>
+                </div>
+                <div class="dash-nav-card-link">
+                  فتح
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6 2L2 5L6 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </div>
+
+              <div class="dash-nav-card" onclick="navigateTo('prompts')">
+                <div class="dash-nav-card-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 19.5V4.5C4 3.1 5.1 2 6.5 2H19.5C19.8 2 20 2.2 20 2.5V17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6.5 17H20V19.5C20 20.9 18.9 22 17.5 22H6.5C5.1 22 4 20.9 4 19.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 7H16M8 10H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </div>
+                <div class="dash-nav-card-body">
+                  <h3 class="dash-nav-card-title">المراجع</h3>
+                  <p class="dash-nav-card-desc">عرض وإدارة المراجع المستخرجة</p>
+                </div>
+                <div class="dash-nav-card-link">
+                  فتح
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6 2L2 5L6 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </div>
+
+              <!-- Row 3 -->
+              <div class="dash-nav-card dash-nav-card--outline" onclick="navigateTo('org-contexts')">
+                <div class="dash-nav-card-icon dash-nav-icon--outline">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2L20 7V12C20 17 16.4 21.5 12 22.5C7.6 21.5 4 17 4 12V7L12 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="dash-nav-card-body">
+                  <h3 class="dash-nav-card-title">مدير النظام</h3>
+                  <p class="dash-nav-card-desc">إدارة النظام والبيانات والإعدادات</p>
+                </div>
+                <div class="dash-nav-card-link">
+                  فتح
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6 2L2 5L6 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </div>
+
+            </div>
           </div>
         </section>
 
