@@ -60,6 +60,9 @@ function navigateTo(page) {
   const backBtn = document.getElementById('admin-back-btn');
   if (backBtn) backBtn.style.display = (page === 'dashboard') ? 'none' : 'flex';
 
+  // Update URL hash for deep-linking
+  window.location.hash = (page === 'dashboard') ? '' : page;
+
   // Load data for the page
   if (page === 'dashboard') loadDashboard();
   if (page === 'audit-sessions') loadSessions();
@@ -3627,6 +3630,8 @@ function initAdmin() {
     navigateTo('dashboard');
   }
 }
+
+console.log('[admin.js] Script loaded, readyState:', document.readyState);
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initAdmin);
