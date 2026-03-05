@@ -30,6 +30,10 @@ loadEnv();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
+// GRC Platform configuration
+const GRC_API_URL = process.env.GRC_API_URL || 'https://grc.wathbah.dev';
+const GRC_API_TOKEN = process.env.GRC_API_TOKEN || '';
+
 // ==========================================
 // Authentication
 // ==========================================
@@ -323,7 +327,7 @@ dbInsertLocalPrompt.run(
   now
 );
 
-// Seed the controls-generator prompt into the DB if not already present
+// Seed the controls-generator prompt into the DB — always update to latest template
 const CONTROLS_GENERATOR_PROMPT_ID = 'local-controls-generator';
 dbInsertLocalPrompt.run(
   CONTROLS_GENERATOR_PROMPT_ID,
@@ -333,6 +337,10 @@ dbInsertLocalPrompt.run(
   now,
   now
 );
+// Force-update to latest prompt template (in case DB had older version)
+if (controlsPromptTemplate) {
+  dbUpdateLocalPrompt.run('Controls Generator (Applied Controls Studio)', controlsPromptTemplate, now, CONTROLS_GENERATOR_PROMPT_ID);
+}
 
 // Helper: get the current chat auditor prompt from DB (always use DB as source of truth)
 function getChatAuditorPrompt() {
@@ -1135,6 +1143,161 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: Get folders ----
+  if (url.pathname === '/api/grc/folders' && req.method === 'GET') {
+    try {
+      const token = GRC_API_TOKEN || req.headers['x-grc-token'];
+      if (!token) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'GRC API token not configured. Add GRC_API_TOKEN to .env file.' }));
+        return;
+      }
+      const grcRes = await fetch(`${GRC_API_URL}/api/folders/`, {
+        headers: { 'Authorization': `Token ${token}` }
+      });
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, folders: data.results || data }));
+    } catch (error) {
+      console.error('[GRC] Folders error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: Get requirement assessments ----
+  if (url.pathname === '/api/grc/requirement-assessments' && req.method === 'GET') {
+    try {
+      const token = GRC_API_TOKEN || req.headers['x-grc-token'];
+      if (!token) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'GRC API token not configured.' }));
+        return;
+      }
+      // Pass through query params (e.g. ?requirement__ref_id=3.4.1)
+      const qs = url.search || '';
+      const grcRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${qs}`, {
+        headers: { 'Authorization': `Token ${token}` }
+      });
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, results: data.results || data }));
+    } catch (error) {
+      console.error('[GRC] Requirement assessments error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: Export applied controls ----
+  if (url.pathname === '/api/grc/applied-controls' && req.method === 'POST') {
+    try {
+      const token = GRC_API_TOKEN || req.headers['x-grc-token'];
+      if (!token) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'GRC API token not configured. Add GRC_API_TOKEN to .env file.' }));
+        return;
+      }
+      const body = await parseBody(req);
+      const { controls, folder } = body;
+      if (!controls || !Array.isArray(controls) || controls.length === 0) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'No controls to export.' }));
+        return;
+      }
+      if (!folder) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Folder (domain) UUID is required.' }));
+        return;
+      }
+
+      console.log(`[GRC Export] Exporting ${controls.length} controls to folder ${folder}`);
+
+      // Priority string-to-int fallback map
+      const prioMap = { critical: 1, high: 2, medium: 3, low: 4 };
+      // Effort string normalization
+      const effortMap = { low: 'S', small: 'S', s: 'S', medium: 'M', m: 'M', high: 'L', large: 'L', l: 'L', 'extra-large': 'XL', xl: 'XL' };
+
+      const results = [];
+      const errors = [];
+
+      for (let i = 0; i < controls.length; i++) {
+        const c = controls[i];
+        try {
+          // Build GRC-compatible body
+          const grcBody = {
+            name: c.name || c.name_ar || 'Untitled Control',
+            description: c.description || c.description_ar || '',
+            folder: folder,
+            status: c.status || 'to_do',
+            priority: typeof c.priority === 'number' ? c.priority : (prioMap[(c.priority || c.implementation_priority || 'medium').toLowerCase()] || 3),
+            category: c.category || c.control_type || '',
+            csf_function: c.csf_function || c.csfFunction || '',
+            effort: effortMap[(c.effort || c.effort_estimate || 'M').toLowerCase()] || c.effort || 'M',
+          };
+
+          // Link requirement assessments if available
+          if (c.requirement_assessments && Array.isArray(c.requirement_assessments) && c.requirement_assessments.length > 0) {
+            grcBody.requirement_assessments = c.requirement_assessments;
+          }
+
+          console.log(`[GRC Export] ${i + 1}/${controls.length}: "${grcBody.name}" (priority: ${grcBody.priority}, category: ${grcBody.category})`);
+
+          const grcRes = await fetch(`${GRC_API_URL}/api/applied-controls/`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Token ${token}`
+            },
+            body: JSON.stringify(grcBody)
+          });
+
+          if (!grcRes.ok) {
+            const errText = await grcRes.text();
+            throw new Error(`${grcRes.status}: ${errText}`);
+          }
+
+          const created = await grcRes.json();
+          results.push({ controlId: c.id, grcId: created.id, name: grcBody.name, success: true });
+        } catch (err) {
+          console.error(`[GRC Export] Failed "${c.name}":`, err.message);
+          errors.push({ controlId: c.id, name: c.name, error: err.message });
+        }
+      }
+
+      console.log(`[GRC Export] Done: ${results.length} success, ${errors.length} failed`);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: errors.length === 0,
+        exported: results.length,
+        failed: errors.length,
+        results,
+        errors
+      }));
+    } catch (error) {
+      console.error('[GRC Export] Error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Config Check ----
+  if (url.pathname === '/api/grc/status' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      configured: !!(GRC_API_TOKEN),
+      url: GRC_API_URL,
+      hasToken: !!GRC_API_TOKEN,
+    }));
     return;
   }
 

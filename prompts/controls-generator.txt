@@ -26,17 +26,19 @@ Generate 1–3 candidate applied controls for the above requirement, tailored to
 - Data classification: Restricted/Confidential data demands stricter controls
 - Cloud-native vs on-premise vs hybrid: adapt technical implementation guidance accordingly
 
-Each control MUST include:
+Each control MUST include ALL of these fields:
 1. **name**: A clear, concise control name (English, 5-15 words)
 2. **name_ar**: Arabic translation of the control name
 3. **description**: Detailed description of what the control entails, how to implement it, and what evidence demonstrates it (English, 30-80 words)
 4. **description_ar**: Arabic translation of the description
-5. **control_type**: One of: "preventive", "detective", "corrective", "directive"
-6. **implementation_priority**: One of: "critical", "high", "medium", "low"
-7. **effort_estimate**: One of: "Low", "Medium", "High" — based on typical implementation effort for this org size/maturity
-8. **relevance_score**: Integer 0–100 indicating how relevant this control is to the specific organization (100 = perfectly tailored, 50 = generic)
-9. **evidence_examples**: Array of 2-3 specific evidence items that prove this control is in place
-10. **implementation_guidance**: Brief practical implementation guidance specific to the org's infrastructure and governance (2-3 sentences)
+5. **category**: One of: "policy", "process", "technical", "physical" — the nature of the control
+6. **csf_function**: One of: "govern", "identify", "protect", "detect", "respond", "recover" — which NIST CSF 2.0 function this control maps to
+7. **status**: Always "to_do" (controls start as not-yet-implemented)
+8. **priority**: Integer 1–4 where 1 = Critical/Urgent, 2 = High, 3 = Medium, 4 = Low — based on risk and compliance gap
+9. **effort**: One of: "S", "M", "L", "XL" — estimated implementation effort for this org size/maturity (S=Small/days, M=Medium/weeks, L=Large/months, XL=Extra-large/quarters)
+10. **relevance_score**: Integer 0–100 indicating how relevant this control is to the specific organization (100 = perfectly tailored, 50 = generic)
+11. **evidence_examples**: Array of 2-3 specific evidence items that prove this control is in place
+12. **implementation_guidance**: Brief practical implementation guidance specific to the org's infrastructure and governance (2-3 sentences)
 
 ## Response Format
 
@@ -49,9 +51,11 @@ CRITICAL: Respond with ONLY valid JSON. No markdown, no explanation. Start with 
       "name_ar": "اسم الضابط بالعربية",
       "description": "Detailed description of the control...",
       "description_ar": "وصف تفصيلي للضابط...",
-      "control_type": "preventive",
-      "implementation_priority": "high",
-      "effort_estimate": "Medium",
+      "category": "technical",
+      "csf_function": "protect",
+      "status": "to_do",
+      "priority": 2,
+      "effort": "M",
       "relevance_score": 85,
       "evidence_examples": [
         "Example evidence 1",

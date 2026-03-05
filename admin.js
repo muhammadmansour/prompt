@@ -2475,13 +2475,14 @@ function csRenderStepReview(el) {
   const alreadyExportedCount = hasExported ? controls.filter(c => exportedIds.includes(c.id)).length : 0;
   const newCount = hasExported ? controls.length - alreadyExportedCount : controls.length;
 
-  // Category / CSF / Priority configs (matching React Figma)
-  const catLabel = { policy: 'Policy', process: 'Process', technical: 'Technical' };
-  const catColor = { policy: 'cs-tag-blue', process: 'cs-tag-amber', technical: 'cs-tag-emerald' };
+  // Category / CSF / Priority configs (GRC-compatible)
+  const catLabel = { policy: 'Policy', process: 'Process', technical: 'Technical', physical: 'Physical', preventive: 'Preventive', detective: 'Detective', corrective: 'Corrective', directive: 'Directive' };
+  const catColor = { policy: 'cs-tag-blue', process: 'cs-tag-amber', technical: 'cs-tag-emerald', physical: 'cs-tag-gray', preventive: 'cs-tag-blue', detective: 'cs-tag-orange', corrective: 'cs-tag-red', directive: 'cs-tag-teal' };
   const csfLabel = { identify: 'Identify', protect: 'Protect', detect: 'Detect', respond: 'Respond', recover: 'Recover', govern: 'Govern' };
   const csfColor = { identify: 'cs-tag-sky', protect: 'cs-tag-teal', detect: 'cs-tag-orange', respond: 'cs-tag-red', recover: 'cs-tag-emerald', govern: 'cs-tag-gray' };
-  const prioLabel = { high: 'High', medium: 'Medium', low: 'Low', critical: 'Critical' };
-  const prioColor = { high: 'cs-tag-red', medium: 'cs-tag-amber', low: 'cs-tag-gray', critical: 'cs-tag-red' };
+  // Support both integer (GRC: 1-4) and string (legacy) priorities
+  const prioLabel = { 1: 'Critical', 2: 'High', 3: 'Medium', 4: 'Low', critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
+  const prioColor = { 1: 'cs-tag-red', 2: 'cs-tag-red', 3: 'cs-tag-amber', 4: 'cs-tag-gray', critical: 'cs-tag-red', high: 'cs-tag-red', medium: 'cs-tag-amber', low: 'cs-tag-gray' };
 
   // Read-only mode for exported sessions
   const readOnly = csSessionData.status === 'exported';
@@ -2538,7 +2539,7 @@ function csRenderStepReview(el) {
               const isSelected = c.selected !== false;
               const isExported = exportedIds.includes(c.id);
               const cat = c.category || c.control_type || '';
-              const csf = c.csfFunction || '';
+              const csf = c.csf_function || c.csfFunction || '';
               const prio = c.priority || c.implementation_priority || '';
               return `<div class="cs-ctrl-item ${isSelected ? 'cs-ctrl-selected' : 'cs-ctrl-deselected'} ${isExported ? 'cs-ctrl-exported' : ''}" data-ctrl-id="${esc(c.id)}" data-exported="${isExported}">
                 <div class="cs-ctrl-row-main">
@@ -2573,6 +2574,8 @@ function csRenderStepReview(el) {
                   ${c.rationale ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Rationale</span><p>${esc(c.rationale)}</p></div>` : ''}
                   ${c.requirementRefId ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Cross-Framework Mapping</span><div class="cs-ctrl-detail-pills"><span class="cs-tag cs-tag-mono">${esc(c.requirementRefId)}</span>${c.requirementName ? `<span class="cs-tag cs-tag-primary">${esc(c.requirementName)}</span>` : ''}</div></div>` : ''}
                   ${c.framework ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Framework</span><span class="cs-tag cs-tag-primary">${esc(c.framework)}</span></div>` : ''}
+                  ${(c.effort || c.effort_estimate) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Effort</span><span class="cs-tag cs-tag-gray">${esc(c.effort || c.effort_estimate)}</span></div>` : ''}
+                  ${c.status ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Status</span><span class="cs-tag cs-tag-gray">${esc(c.status)}</span></div>` : ''}
                   ${(c.evidence_examples && c.evidence_examples.length) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Evidence Examples</span><div class="cs-ctrl-detail-pills">${c.evidence_examples.map(e => `<span class="cs-tag cs-tag-gray">${esc(e)}</span>`).join('')}</div></div>` : ''}
                 </div>
               </div>`;
@@ -2763,7 +2766,7 @@ function csRenderStepExport(el) {
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M14 9V14C14 14.6 13.6 15 13 15H5C4.4 15 4 14.6 4 14V9" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M6 7L9 4L12 7M9 4V11" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span class="cs-review-header-title">Step 6: Export to WathbaGRC</span>
         </div>
-        <p class="cs-review-header-desc">Confirm and push selected controls to WathbaGRC at the framework level via REST API.</p>
+        <p class="cs-review-header-desc">Confirm and push selected controls to WathbaGRC via REST API.</p>
       </div>
       <div class="cs-export-body">
         <h3 class="cs-export-summary-title">Export Summary</h3>
@@ -2775,8 +2778,17 @@ function csRenderStepExport(el) {
           ` : ''}
           <div class="cs-export-summary-row"><span>Target Frameworks</span><span>${fwSet.size}</span></div>
           <div class="cs-export-summary-row"><span>Linked Requirements</span><span>${reqSet.size}</span></div>
-          <div class="cs-export-summary-row"><span>Service Account</span><span class="cs-export-mono">admin@wathba-grc</span></div>
         </div>
+
+        <div class="cs-export-folder-section">
+          <label class="cs-export-folder-label">Target Folder (Domain)</label>
+          <p style="font-size:11px;color:#9ca3af;margin:0 0 8px">Select the GRC folder where controls will be created</p>
+          <select id="cs-export-folder" class="cs-export-folder-select">
+            <option value="">Loading folders...</option>
+          </select>
+          <div id="cs-export-grc-status" style="font-size:11px;margin-top:6px;color:#9ca3af"></div>
+        </div>
+
         ${allExist ? `
           <div class="cs-export-merge-warning">
             <p>All selected controls already exist in WathbaGRC. Consider using the <strong>Merge Optimizer</strong> to consolidate and upgrade existing controls instead of re-exporting.</p>
@@ -2787,7 +2799,7 @@ function csRenderStepExport(el) {
           </div>
         ` : `
           <div class="cs-export-warning">
-            This will create ${newControls.length || total} AppliedControls in WathbaGRC at the framework level. Controls will be linked to their originating RequirementNodes and available across all audits.
+            This will create ${newControls.length || total} AppliedControls in WathbaGRC. Controls will be linked to their originating RequirementNodes and available across all audits.
           </div>
         `}
         <div class="cs-export-cta">
@@ -2810,36 +2822,150 @@ function csRenderStepExport(el) {
         <div></div>
       </div>
     </div>`;
+
+  // Load GRC folders for the dropdown
+  csLoadGrcFolders();
 }
+
+async function csLoadGrcFolders() {
+  const select = document.getElementById('cs-export-folder');
+  const statusEl = document.getElementById('cs-export-grc-status');
+  if (!select) return;
+
+  try {
+    // First check GRC config
+    const statusRes = await fetch('/api/grc/status');
+    const statusData = await statusRes.json();
+
+    if (!statusData.configured) {
+      select.innerHTML = '<option value="">⚠ GRC not configured</option>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444">GRC_API_TOKEN not set in .env. Export will save locally only.</span>';
+      return;
+    }
+
+    if (statusEl) statusEl.textContent = `Connected to ${statusData.url}`;
+
+    const res = await fetch('/api/grc/folders');
+    const data = await res.json();
+
+    if (!data.success || !data.folders || data.folders.length === 0) {
+      select.innerHTML = '<option value="">No folders found</option>';
+      return;
+    }
+
+    select.innerHTML = '<option value="">— Select a folder —</option>' +
+      data.folders.map(f => `<option value="${esc(f.id)}">${esc(f.name || f.str || f.id)}</option>`).join('');
+
+    // Restore previously selected folder
+    const savedFolder = csSessionData.exportFolder;
+    if (savedFolder) select.value = savedFolder;
+
+  } catch (err) {
+    console.error('[GRC] Load folders error:', err);
+    select.innerHTML = '<option value="">Error loading folders</option>';
+    if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">${err.message}</span>`;
+  }
+}
+window.csLoadGrcFolders = csLoadGrcFolders;
 
 async function csDoExport() {
   const btn = document.getElementById('cs-export-btn');
   const progressEl = document.getElementById('cs-export-progress');
   const fillEl = document.getElementById('cs-export-fill');
   const textEl = document.getElementById('cs-export-progress-text');
-  if (btn) btn.style.display = 'none';
-  if (progressEl) progressEl.style.display = '';
+
+  const folderSelect = document.getElementById('cs-export-folder');
+  const folder = folderSelect?.value;
 
   const controls = (csSessionData.controls || []).filter(c => c.selected !== false);
   const total = controls.length;
 
-  // Simulate export progress
-  for (let i = 0; i < total; i++) {
-    const pct = Math.round(((i + 1) / total) * 100);
-    if (fillEl) fillEl.style.width = pct + '%';
-    if (textEl) textEl.textContent = `Exporting control ${i + 1} of ${total}...`;
-    await new Promise(r => setTimeout(r, 200));
+  // Check if GRC is configured
+  let grcConfigured = false;
+  try {
+    const statusRes = await fetch('/api/grc/status');
+    const statusData = await statusRes.json();
+    grcConfigured = statusData.configured;
+  } catch (_) {}
+
+  // If GRC is configured, require folder
+  if (grcConfigured && !folder) {
+    toast('error', 'Folder Required', 'Please select a target folder before exporting.');
+    return;
   }
 
-  // Mark exported control IDs so review can show "Already exported" badges
-  const prevExported = csSessionData.exportedControlIds || [];
-  const newlyExported = controls.map(c => c.id).filter(Boolean);
-  csSessionData.exportedControlIds = [...new Set([...prevExported, ...newlyExported])];
-  csSessionData.status = 'exported';
-  await csSaveSession(csSessionData);
-  toast('success', 'Export Complete', `${total} controls exported to WathbaGRC.`);
-  csJustExported = true; // flag so Export step shows completion view
-  csRenderWizard();
+  if (btn) btn.style.display = 'none';
+  if (progressEl) progressEl.style.display = '';
+
+  // Save selected folder for future reference
+  if (folder) csSessionData.exportFolder = folder;
+
+  if (grcConfigured && folder) {
+    // ── Real GRC Export ──
+    try {
+      if (textEl) textEl.textContent = 'Sending controls to WathbaGRC...';
+      if (fillEl) fillEl.style.width = '20%';
+
+      const res = await fetch('/api/grc/applied-controls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ controls, folder })
+      });
+
+      if (fillEl) fillEl.style.width = '80%';
+
+      const data = await res.json();
+
+      if (fillEl) fillEl.style.width = '100%';
+
+      if (data.exported > 0) {
+        if (textEl) textEl.textContent = `${data.exported} controls exported successfully${data.failed > 0 ? `, ${data.failed} failed` : ''}`;
+        toast('success', 'Export Complete', `${data.exported} controls exported to WathbaGRC.${data.failed > 0 ? ` ${data.failed} failed.` : ''}`);
+
+        // Mark exported control IDs
+        const prevExported = csSessionData.exportedControlIds || [];
+        const newlyExported = (data.results || []).map(r => r.controlId).filter(Boolean);
+        csSessionData.exportedControlIds = [...new Set([...prevExported, ...newlyExported])];
+
+        // Store GRC IDs on the controls for future reference
+        (data.results || []).forEach(r => {
+          const ctrl = csSessionData.controls.find(c => c.id === r.controlId);
+          if (ctrl) ctrl.grcId = r.grcId;
+        });
+      } else {
+        throw new Error(data.error || `All ${data.failed} controls failed to export`);
+      }
+
+      csSessionData.status = 'exported';
+      await csSaveSession(csSessionData);
+      csJustExported = true;
+      csRenderWizard();
+
+    } catch (err) {
+      console.error('[Export] GRC export error:', err);
+      toast('error', 'Export Failed', err.message);
+      if (btn) btn.style.display = '';
+      if (progressEl) progressEl.style.display = 'none';
+    }
+
+  } else {
+    // ── Local-only export (GRC not configured) ──
+    for (let i = 0; i < total; i++) {
+      const pct = Math.round(((i + 1) / total) * 100);
+      if (fillEl) fillEl.style.width = pct + '%';
+      if (textEl) textEl.textContent = `Marking control ${i + 1} of ${total}...`;
+      await new Promise(r => setTimeout(r, 120));
+    }
+
+    const prevExported = csSessionData.exportedControlIds || [];
+    const newlyExported = controls.map(c => c.id).filter(Boolean);
+    csSessionData.exportedControlIds = [...new Set([...prevExported, ...newlyExported])];
+    csSessionData.status = 'exported';
+    await csSaveSession(csSessionData);
+    toast('success', 'Export Complete', `${total} controls marked as exported (GRC not configured — local only).`);
+    csJustExported = true;
+    csRenderWizard();
+  }
 }
 window.csDoExport = csDoExport;
 
