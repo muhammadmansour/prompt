@@ -2011,7 +2011,13 @@
   opacity: 0.45;
 }
 .cs-ctrl-item:hover { border-color: #93c5fd; }
+.cs-ctrl-item.expanded { overflow: visible; }
 .cs-ctrl-item.expanded .cs-ctrl-chevron { transform: rotate(90deg); }
+.cs-ctrl-item.expanded .cs-ctrl-desc-line {
+  -webkit-line-clamp: unset;
+  display: block;
+  overflow: visible;
+}
 
 .cs-ctrl-row-main {
   display: flex;
