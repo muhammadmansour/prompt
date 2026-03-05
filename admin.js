@@ -2782,10 +2782,13 @@ function csRenderStepExport(el) {
 
         <div class="cs-export-folder-section">
           <label class="cs-export-folder-label">Target Folder (Domain)</label>
-          <p style="font-size:11px;color:#9ca3af;margin:0 0 8px">Select the GRC folder where controls will be created</p>
+          <p style="font-size:11px;color:#9ca3af;margin:0 0 8px">Select or enter the GRC folder UUID where controls will be created</p>
           <select id="cs-export-folder" class="cs-export-folder-select">
             <option value="">Loading folders...</option>
           </select>
+          <div id="cs-export-folder-manual" style="margin-top:8px;display:none">
+            <input type="text" id="cs-export-folder-uuid" class="cs-export-folder-select" placeholder="Paste folder UUID here..." style="font-family:monospace;font-size:12px" />
+          </div>
           <div id="cs-export-grc-status" style="font-size:11px;margin-top:6px;color:#9ca3af"></div>
         </div>
 
@@ -2830,7 +2833,18 @@ function csRenderStepExport(el) {
 async function csLoadGrcFolders() {
   const select = document.getElementById('cs-export-folder');
   const statusEl = document.getElementById('cs-export-grc-status');
+  const manualDiv = document.getElementById('cs-export-folder-manual');
+  const manualInput = document.getElementById('cs-export-folder-uuid');
   if (!select) return;
+
+  function showManualInput(msg) {
+    select.style.display = 'none';
+    if (manualDiv) manualDiv.style.display = '';
+    if (statusEl) statusEl.innerHTML = `<span style="color:#f59e0b">${msg}</span>`;
+    // Restore saved UUID
+    const saved = csSessionData?.exportFolder;
+    if (saved && manualInput) manualInput.value = saved;
+  }
 
   try {
     // First check GRC config
@@ -2853,14 +2867,9 @@ async function csLoadGrcFolders() {
     const res = await fetch('/api/grc/folders');
     const data = await res.json();
 
-    if (!data.success) {
-      select.innerHTML = '<option value="">⚠ Could not load folders</option>';
-      if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">${data.error || 'GRC API returned an error'}</span>`;
-      return;
-    }
-
-    if (!data.folders || data.folders.length === 0) {
-      select.innerHTML = '<option value="">No folders found</option>';
+    if (!data.success || !data.folders || data.folders.length === 0) {
+      // Folders endpoint unavailable — show manual UUID input
+      showManualInput('Folder list unavailable — enter folder UUID manually. <span style="color:#9ca3af">Connected to ' + esc(statusData.url) + '</span>');
       return;
     }
 
@@ -2873,8 +2882,7 @@ async function csLoadGrcFolders() {
 
   } catch (err) {
     console.error('[GRC] Load folders error:', err);
-    select.innerHTML = '<option value="">Error loading folders</option>';
-    if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">${err.message}</span>`;
+    showManualInput('Could not load folders — enter folder UUID manually.');
   }
 }
 window.csLoadGrcFolders = csLoadGrcFolders;
@@ -2886,7 +2894,8 @@ async function csDoExport() {
   const textEl = document.getElementById('cs-export-progress-text');
 
   const folderSelect = document.getElementById('cs-export-folder');
-  const folder = folderSelect?.value;
+  const manualInput = document.getElementById('cs-export-folder-uuid');
+  const folder = folderSelect?.value || manualInput?.value?.trim() || '';
 
   const controls = (csSessionData.controls || []).filter(c => c.selected !== false);
   const total = controls.length;
@@ -2899,9 +2908,13 @@ async function csDoExport() {
     grcConfigured = statusData.configured;
   } catch (_) {}
 
-  // If GRC is configured, require folder
+  // If GRC is configured, require a valid folder UUID
   if (grcConfigured && !folder) {
-    toast('error', 'Folder Required', 'Please select a target folder before exporting.');
+    toast('error', 'Folder Required', 'Please select or enter a target folder UUID before exporting.');
+    return;
+  }
+  if (grcConfigured && folder && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(folder)) {
+    toast('error', 'Invalid UUID', 'The folder value must be a valid UUID (e.g. 12345678-abcd-1234-efgh-123456789abc).');
     return;
   }
 
