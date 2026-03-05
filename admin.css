@@ -2002,6 +2002,7 @@
   border-radius: 8px;
   transition: border-color 0.15s, background 0.15s, opacity 0.15s, box-shadow 0.15s;
   overflow: hidden;
+  flex-shrink: 0;
 }
 .cs-ctrl-item.cs-ctrl-selected {
   border-color: rgba(0,119,204,0.2);
