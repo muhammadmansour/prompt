@@ -2780,18 +2780,7 @@ function csRenderStepExport(el) {
           <div class="cs-export-summary-row"><span>Linked Requirements</span><span>${reqSet.size}</span></div>
         </div>
 
-        <div class="cs-export-folder-section">
-          <label class="cs-export-folder-label">Target Folder (Domain) <span style="font-weight:400;color:#9ca3af">— optional</span></label>
-          <p style="font-size:11px;color:#9ca3af;margin:0 0 8px">Leave empty to use the root folder, or select a specific domain</p>
-          <select id="cs-export-folder" class="cs-export-folder-select">
-            <option value="">Loading folders...</option>
-          </select>
-          <div id="cs-export-folder-manual" style="display:none;margin-top:8px">
-            <label style="font-size:11px;color:#9ca3af;display:block;margin-bottom:4px">Or enter folder UUID manually:</label>
-            <input id="cs-export-folder-uuid" type="text" placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890" style="width:100%;padding:8px 10px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;font-family:monospace;color:#1e293b" />
-          </div>
-          <div id="cs-export-grc-status" style="font-size:11px;margin-top:6px;color:#9ca3af"></div>
-        </div>
+        <div id="cs-export-grc-status" style="font-size:11px;margin-top:6px;color:#9ca3af"></div>
 
         ${allExist ? `
           <div class="cs-export-merge-warning">
@@ -2827,81 +2816,40 @@ function csRenderStepExport(el) {
       </div>
     </div>`;
 
-  // Load GRC folders for the dropdown
-  csLoadGrcFolders();
+  // Check GRC connection status
+  csCheckGrcStatus();
 }
 
-async function csLoadGrcFolders() {
-  const select = document.getElementById('cs-export-folder');
+async function csCheckGrcStatus() {
   const statusEl = document.getElementById('cs-export-grc-status');
-  const manualEl = document.getElementById('cs-export-folder-manual');
-  const manualInput = document.getElementById('cs-export-folder-uuid');
-  if (!select) return;
-
-  function showManualFallback(msg) {
-    if (manualEl) manualEl.style.display = '';
-    if (statusEl) statusEl.innerHTML = `<span style="color:#f59e0b">${msg} — use manual UUID input below.</span>`;
-    // Restore saved UUID in manual input
-    if (manualInput && csSessionData.exportFolder) manualInput.value = csSessionData.exportFolder;
-  }
+  if (!statusEl) return;
 
   try {
-    // First check GRC config
     const statusRes = await fetch('/api/grc/status');
     if (statusRes.status === 401) {
-      select.innerHTML = '<option value="">⚠ Session expired — please re-login</option>';
-      if (statusEl) statusEl.innerHTML = '<span style="color:#f59e0b">Session expired. Refresh the page and log in again.</span>';
+      statusEl.innerHTML = '<span style="color:#f59e0b">⚠ Session expired — please re-login to export.</span>';
       return;
     }
     const statusData = await statusRes.json();
 
     if (!statusData.configured) {
-      select.innerHTML = '<option value="">⚠ GRC not configured</option>';
-      if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444">GRC API not reachable. Export will save locally only.</span>';
+      statusEl.innerHTML = '<span style="color:#ef4444">⚠ GRC not configured. Export will save locally only.</span>';
       return;
     }
 
-    if (statusEl) statusEl.textContent = `Connected to ${statusData.url}`;
-
-    const res = await fetch('/api/grc/folders');
-    const data = await res.json();
-
-    if (!data.success) {
-      select.innerHTML = '<option value="">⚠ Could not load folders from API</option>';
-      showManualFallback('Folders API unavailable');
-      return;
-    }
-
-    if (!data.folders || data.folders.length === 0) {
-      select.innerHTML = '<option value="">No folders found</option>';
-      showManualFallback('No folders returned');
-      return;
-    }
-
-    select.innerHTML = '<option value="">— Select a folder —</option>' +
-      data.folders.map(f => `<option value="${esc(f.id)}">${esc(f.name || f.str || f.id)}</option>`).join('');
-
-    // Restore previously selected folder
-    const savedFolder = csSessionData.exportFolder;
-    if (savedFolder) select.value = savedFolder;
+    statusEl.innerHTML = `<span style="color:#10b981">✓ Connected to WathbaGRC</span> <span style="color:#9ca3af;font-size:11px">(${statusData.url})</span>`;
 
   } catch (err) {
-    console.error('[GRC] Load folders error:', err);
-    select.innerHTML = '<option value="">⚠ Error loading folders</option>';
-    showManualFallback('Could not reach API');
+    console.error('[GRC] Status check error:', err);
+    statusEl.innerHTML = `<span style="color:#ef4444">⚠ ${err.message}</span>`;
   }
 }
-window.csLoadGrcFolders = csLoadGrcFolders;
 
 async function csDoExport() {
   const btn = document.getElementById('cs-export-btn');
   const progressEl = document.getElementById('cs-export-progress');
   const fillEl = document.getElementById('cs-export-fill');
   const textEl = document.getElementById('cs-export-progress-text');
-
-  const folderSelect = document.getElementById('cs-export-folder');
-  const manualUuid = document.getElementById('cs-export-folder-uuid')?.value?.trim();
-  const folder = folderSelect?.value || manualUuid;
 
   const controls = (csSessionData.controls || []).filter(c => c.selected !== false);
   const total = controls.length;
@@ -2917,22 +2865,16 @@ async function csDoExport() {
   if (btn) btn.style.display = 'none';
   if (progressEl) progressEl.style.display = '';
 
-  // Save selected folder for future reference (optional)
-  if (folder) csSessionData.exportFolder = folder;
-
   if (grcConfigured) {
     // ── Real GRC Export ──
     try {
       if (textEl) textEl.textContent = 'Sending controls to WathbaGRC...';
       if (fillEl) fillEl.style.width = '20%';
 
-      const exportBody = { controls };
-      if (folder) exportBody.folder = folder;
-
       const res = await fetch('/api/grc/applied-controls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(exportBody)
+        body: JSON.stringify({ controls })
       });
 
       if (fillEl) fillEl.style.width = '80%';
