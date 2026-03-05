@@ -2839,7 +2839,7 @@ async function csLoadGrcFolders() {
 
     if (!statusData.configured) {
       select.innerHTML = '<option value="">⚠ GRC not configured</option>';
-      if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444">GRC_API_TOKEN not set in .env. Export will save locally only.</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444">GRC API not reachable. Export will save locally only.</span>';
       return;
     }
 

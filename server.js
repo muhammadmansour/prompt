@@ -32,7 +32,6 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // GRC Platform configuration
 const GRC_API_URL = process.env.GRC_API_URL || 'https://grc.wathbah.dev';
-const GRC_API_TOKEN = process.env.GRC_API_TOKEN || '';
 
 // ==========================================
 // Authentication
@@ -1149,15 +1148,7 @@ const server = http.createServer(async (req, res) => {
   // ---- GRC Platform Proxy: Get folders ----
   if (url.pathname === '/api/grc/folders' && req.method === 'GET') {
     try {
-      const token = GRC_API_TOKEN || req.headers['x-grc-token'];
-      if (!token) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'GRC API token not configured. Add GRC_API_TOKEN to .env file.' }));
-        return;
-      }
-      const grcRes = await fetch(`${GRC_API_URL}/api/folders/`, {
-        headers: { 'Authorization': `Token ${token}` }
-      });
+      const grcRes = await fetch(`${GRC_API_URL}/api/folders/`);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1173,17 +1164,8 @@ const server = http.createServer(async (req, res) => {
   // ---- GRC Platform Proxy: Get requirement assessments ----
   if (url.pathname === '/api/grc/requirement-assessments' && req.method === 'GET') {
     try {
-      const token = GRC_API_TOKEN || req.headers['x-grc-token'];
-      if (!token) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'GRC API token not configured.' }));
-        return;
-      }
-      // Pass through query params (e.g. ?requirement__ref_id=3.4.1)
       const qs = url.search || '';
-      const grcRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${qs}`, {
-        headers: { 'Authorization': `Token ${token}` }
-      });
+      const grcRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${qs}`);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1199,12 +1181,6 @@ const server = http.createServer(async (req, res) => {
   // ---- GRC Platform Proxy: Export applied controls ----
   if (url.pathname === '/api/grc/applied-controls' && req.method === 'POST') {
     try {
-      const token = GRC_API_TOKEN || req.headers['x-grc-token'];
-      if (!token) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'GRC API token not configured. Add GRC_API_TOKEN to .env file.' }));
-        return;
-      }
       const body = await parseBody(req);
       const { controls, folder } = body;
       if (!controls || !Array.isArray(controls) || controls.length === 0) {
@@ -1220,9 +1196,7 @@ const server = http.createServer(async (req, res) => {
 
       console.log(`[GRC Export] Exporting ${controls.length} controls to folder ${folder}`);
 
-      // Priority string-to-int fallback map
       const prioMap = { critical: 1, high: 2, medium: 3, low: 4 };
-      // Effort string normalization
       const effortMap = { low: 'S', small: 'S', s: 'S', medium: 'M', m: 'M', high: 'L', large: 'L', l: 'L', 'extra-large': 'XL', xl: 'XL' };
 
       const results = [];
@@ -1231,7 +1205,6 @@ const server = http.createServer(async (req, res) => {
       for (let i = 0; i < controls.length; i++) {
         const c = controls[i];
         try {
-          // Build GRC-compatible body
           const grcBody = {
             name: c.name || c.name_ar || 'Untitled Control',
             description: c.description || c.description_ar || '',
@@ -1243,7 +1216,6 @@ const server = http.createServer(async (req, res) => {
             effort: effortMap[(c.effort || c.effort_estimate || 'M').toLowerCase()] || c.effort || 'M',
           };
 
-          // Link requirement assessments if available
           if (c.requirement_assessments && Array.isArray(c.requirement_assessments) && c.requirement_assessments.length > 0) {
             grcBody.requirement_assessments = c.requirement_assessments;
           }
@@ -1252,10 +1224,7 @@ const server = http.createServer(async (req, res) => {
 
           const grcRes = await fetch(`${GRC_API_URL}/api/applied-controls/`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Token ${token}`
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(grcBody)
           });
 
@@ -1294,9 +1263,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/grc/status' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      configured: !!(GRC_API_TOKEN),
+      configured: true,
       url: GRC_API_URL,
-      hasToken: !!GRC_API_TOKEN,
     }));
     return;
   }
