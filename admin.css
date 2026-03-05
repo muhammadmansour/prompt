@@ -2105,23 +2105,12 @@
 
 /* Expandable detail */
 .cs-ctrl-expand {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 0.3s ease;
-  border-top: 1px solid transparent;
-}
-.cs-ctrl-expand-inner {
-  overflow: hidden;
-  padding: 0 14px;
-  transition: padding 0.3s ease;
+  display: none;
+  border-top: 1px solid #f3f4f6;
+  padding: 12px 14px 14px;
 }
 .cs-ctrl-item.expanded .cs-ctrl-expand {
-  grid-template-rows: 1fr;
-  border-top: 1px solid #f3f4f6;
-}
-.cs-ctrl-item.expanded .cs-ctrl-expand-inner {
-  overflow: visible;
-  padding: 12px 14px 14px;
+  display: block;
 }
 .cs-ctrl-detail {
   margin-top: 10px;
