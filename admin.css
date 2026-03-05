@@ -1990,7 +1990,7 @@
 
 /* Control list */
 .cs-ctrl-list {
-  max-height: 65vh;
+  max-height: calc(100vh - 220px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -2110,17 +2110,17 @@
   transition: grid-template-rows 0.3s ease;
   border-top: 1px solid transparent;
 }
-.cs-ctrl-expand > * {
+.cs-ctrl-expand-inner {
   overflow: hidden;
+  padding: 0 14px;
+  transition: padding 0.3s ease;
 }
 .cs-ctrl-item.expanded .cs-ctrl-expand {
   grid-template-rows: 1fr;
   border-top: 1px solid #f3f4f6;
 }
-.cs-ctrl-expand-inner {
-  padding: 0 14px;
-}
 .cs-ctrl-item.expanded .cs-ctrl-expand-inner {
+  overflow: visible;
   padding: 12px 14px 14px;
 }
 .cs-ctrl-detail {
