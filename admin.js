@@ -2835,6 +2835,11 @@ async function csLoadGrcFolders() {
   try {
     // First check GRC config
     const statusRes = await fetch('/api/grc/status');
+    if (statusRes.status === 401) {
+      select.innerHTML = '<option value="">⚠ Session expired — please re-login</option>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:#f59e0b">Session expired. Refresh the page and log in again.</span>';
+      return;
+    }
     const statusData = await statusRes.json();
 
     if (!statusData.configured) {
@@ -2848,7 +2853,13 @@ async function csLoadGrcFolders() {
     const res = await fetch('/api/grc/folders');
     const data = await res.json();
 
-    if (!data.success || !data.folders || data.folders.length === 0) {
+    if (!data.success) {
+      select.innerHTML = '<option value="">⚠ Could not load folders</option>';
+      if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">${data.error || 'GRC API returned an error'}</span>`;
+      return;
+    }
+
+    if (!data.folders || data.folders.length === 0) {
       select.innerHTML = '<option value="">No folders found</option>';
       return;
     }
