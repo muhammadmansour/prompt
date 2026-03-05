@@ -1188,13 +1188,8 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: 'No controls to export.' }));
         return;
       }
-      if (!folder) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Folder (domain) UUID is required.' }));
-        return;
-      }
+      console.log(`[GRC Export] Exporting ${controls.length} controls${folder ? ` to folder ${folder}` : ' (root folder)'}`);
 
-      console.log(`[GRC Export] Exporting ${controls.length} controls to folder ${folder}`);
 
       const prioMap = { critical: 1, high: 2, medium: 3, low: 4 };
       const effortMap = { low: 'S', small: 'S', s: 'S', medium: 'M', m: 'M', high: 'L', large: 'L', l: 'L', 'extra-large': 'XL', xl: 'XL' };
@@ -1208,13 +1203,15 @@ const server = http.createServer(async (req, res) => {
           const grcBody = {
             name: c.name || c.name_ar || 'Untitled Control',
             description: c.description || c.description_ar || '',
-            folder: folder,
             status: c.status || 'to_do',
             priority: typeof c.priority === 'number' ? c.priority : (prioMap[(c.priority || c.implementation_priority || 'medium').toLowerCase()] || 3),
             category: c.category || c.control_type || '',
             csf_function: c.csf_function || c.csfFunction || '',
             effort: effortMap[(c.effort || c.effort_estimate || 'M').toLowerCase()] || c.effort || 'M',
           };
+
+          // Only include folder if provided (otherwise GRC uses root folder)
+          if (folder) grcBody.folder = folder;
 
           if (c.requirement_assessments && Array.isArray(c.requirement_assessments) && c.requirement_assessments.length > 0) {
             grcBody.requirement_assessments = c.requirement_assessments;

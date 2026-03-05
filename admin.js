@@ -2781,8 +2781,8 @@ function csRenderStepExport(el) {
         </div>
 
         <div class="cs-export-folder-section">
-          <label class="cs-export-folder-label">Target Folder (Domain)</label>
-          <p style="font-size:11px;color:#9ca3af;margin:0 0 8px">Select the GRC folder where controls will be created</p>
+          <label class="cs-export-folder-label">Target Folder (Domain) <span style="font-weight:400;color:#9ca3af">— optional</span></label>
+          <p style="font-size:11px;color:#9ca3af;margin:0 0 8px">Leave empty to use the root folder, or select a specific domain</p>
           <select id="cs-export-folder" class="cs-export-folder-select">
             <option value="">Loading folders...</option>
           </select>
@@ -2914,28 +2914,25 @@ async function csDoExport() {
     grcConfigured = statusData.configured;
   } catch (_) {}
 
-  // If GRC is configured, require folder
-  if (grcConfigured && !folder) {
-    toast('error', 'Folder Required', 'Please select a target folder before exporting.');
-    return;
-  }
-
   if (btn) btn.style.display = 'none';
   if (progressEl) progressEl.style.display = '';
 
-  // Save selected folder for future reference
+  // Save selected folder for future reference (optional)
   if (folder) csSessionData.exportFolder = folder;
 
-  if (grcConfigured && folder) {
+  if (grcConfigured) {
     // ── Real GRC Export ──
     try {
       if (textEl) textEl.textContent = 'Sending controls to WathbaGRC...';
       if (fillEl) fillEl.style.width = '20%';
 
+      const exportBody = { controls };
+      if (folder) exportBody.folder = folder;
+
       const res = await fetch('/api/grc/applied-controls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ controls, folder })
+        body: JSON.stringify(exportBody)
       });
 
       if (fillEl) fillEl.style.width = '80%';
