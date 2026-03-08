@@ -161,7 +161,8 @@ async function fetchSessions() {
 async function fetchCollections() {
   try {
     const d = await fetchJSON(API.collections);
-    collections = d.data || [];
+    const stores = d.data?.fileSearchStores || d.data || [];
+    collections = Array.isArray(stores) ? stores : [];
   } catch (e) { console.error('Collections fetch error:', e); collections = []; }
 }
 
@@ -232,7 +233,7 @@ function renderDashStats(promptCount) {
   const totalSessions = sessions.length;
   const totalCollections = collections.length;
   const totalFrameworks = frameworks.length;
-  const totalFiles = collections.reduce((a, c) => a + (c.file_counts?.active || c.fileCount || 0), 0);
+  const totalFiles = collections.reduce((a, c) => a + parseInt(c.activeDocumentsCount || c.file_counts?.active || c.fileCount || 0, 10), 0);
   promptCount = promptCount || 0;
 
   el.innerHTML = `
