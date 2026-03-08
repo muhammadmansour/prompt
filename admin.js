@@ -2571,13 +2571,96 @@ function csRenderStepReview(el) {
                   <svg class="cs-ctrl-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                 </div>
                 <div class="cs-ctrl-expand" id="cs-ctrl-expand-${esc(c.id)}">
-                  ${c.implementation_guidance ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Implementation Guidance</span><p>${esc(c.implementation_guidance)}</p></div>` : ''}
-                  ${c.rationale ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Rationale</span><p>${esc(c.rationale)}</p></div>` : ''}
-                  ${c.requirementRefId ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Cross-Framework Mapping</span><div class="cs-ctrl-detail-pills"><span class="cs-tag cs-tag-mono">${esc(c.requirementRefId)}</span>${c.requirementName ? `<span class="cs-tag cs-tag-primary">${esc(c.requirementName)}</span>` : ''}</div></div>` : ''}
-                  ${c.framework ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Framework</span><span class="cs-tag cs-tag-primary">${esc(c.framework)}</span></div>` : ''}
-                  ${(c.effort || c.effort_estimate) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Effort</span><span class="cs-tag cs-tag-gray">${esc(c.effort || c.effort_estimate)}</span></div>` : ''}
-                  ${c.status ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Status</span><span class="cs-tag cs-tag-gray">${esc(c.status)}</span></div>` : ''}
-                  ${(c.evidence_examples && c.evidence_examples.length) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Evidence Examples</span><div class="cs-ctrl-detail-pills">${c.evidence_examples.map(e => `<span class="cs-tag cs-tag-gray">${esc(e)}</span>`).join('')}</div></div>` : ''}
+                  ${readOnly ? `
+                    ${c.implementation_guidance ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Implementation Guidance</span><p>${esc(c.implementation_guidance)}</p></div>` : ''}
+                    ${c.rationale ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Rationale</span><p>${esc(c.rationale)}</p></div>` : ''}
+                    ${c.requirementRefId ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Cross-Framework Mapping</span><div class="cs-ctrl-detail-pills"><span class="cs-tag cs-tag-mono">${esc(c.requirementRefId)}</span>${c.requirementName ? `<span class="cs-tag cs-tag-primary">${esc(c.requirementName)}</span>` : ''}</div></div>` : ''}
+                    ${c.framework ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Framework</span><span class="cs-tag cs-tag-primary">${esc(c.framework)}</span></div>` : ''}
+                    ${(c.effort || c.effort_estimate) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Effort</span><span class="cs-tag cs-tag-gray">${esc(c.effort || c.effort_estimate)}</span></div>` : ''}
+                    ${c.status ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Status</span><span class="cs-tag cs-tag-gray">${esc(c.status)}</span></div>` : ''}
+                    ${(c.evidence_examples && c.evidence_examples.length) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Evidence Examples</span><div class="cs-ctrl-detail-pills">${c.evidence_examples.map(e => `<span class="cs-tag cs-tag-gray">${esc(e)}</span>`).join('')}</div></div>` : ''}
+                  ` : `
+                    <form class="cs-edit-form" data-ctrl-id="${esc(c.id)}" onsubmit="event.preventDefault();csSaveControl('${esc(c.id)}')">
+                      <div class="cs-edit-row">
+                        <div class="cs-edit-field cs-edit-field-full">
+                          <label>Name</label>
+                          <input type="text" name="name" value="${esc(c.name || c.name_ar || '')}" placeholder="Control name" />
+                        </div>
+                      </div>
+                      <div class="cs-edit-row">
+                        <div class="cs-edit-field cs-edit-field-full">
+                          <label>Description</label>
+                          <textarea name="description" rows="3" placeholder="Control description">${esc(c.description || c.description_ar || '')}</textarea>
+                        </div>
+                      </div>
+                      <div class="cs-edit-row cs-edit-row-grid">
+                        <div class="cs-edit-field">
+                          <label>Category</label>
+                          <select name="category">
+                            <option value="">— None —</option>
+                            ${Object.entries(catLabel).map(([k,v]) => `<option value="${k}" ${(c.category||c.control_type)===k?'selected':''}>${v}</option>`).join('')}
+                          </select>
+                        </div>
+                        <div class="cs-edit-field">
+                          <label>CSF Function</label>
+                          <select name="csf_function">
+                            <option value="">— None —</option>
+                            ${Object.entries(csfLabel).map(([k,v]) => `<option value="${k}" ${(c.csf_function||c.csfFunction)===k?'selected':''}>${v}</option>`).join('')}
+                          </select>
+                        </div>
+                        <div class="cs-edit-field">
+                          <label>Priority</label>
+                          <select name="priority">
+                            <option value="1" ${String(c.priority)==='1'||c.priority==='critical'?'selected':''}>Critical (1)</option>
+                            <option value="2" ${String(c.priority)==='2'||c.priority==='high'?'selected':''}>High (2)</option>
+                            <option value="3" ${String(c.priority)==='3'||c.priority==='medium'||!c.priority?'selected':''}>Medium (3)</option>
+                            <option value="4" ${String(c.priority)==='4'||c.priority==='low'?'selected':''}>Low (4)</option>
+                          </select>
+                        </div>
+                        <div class="cs-edit-field">
+                          <label>Effort</label>
+                          <select name="effort">
+                            <option value="S" ${(c.effort||c.effort_estimate||'').toUpperCase()==='S'?'selected':''}>S (Small)</option>
+                            <option value="M" ${(c.effort||c.effort_estimate||'M').toUpperCase()==='M'?'selected':''}>M (Medium)</option>
+                            <option value="L" ${(c.effort||c.effort_estimate||'').toUpperCase()==='L'?'selected':''}>L (Large)</option>
+                            <option value="XL" ${(c.effort||c.effort_estimate||'').toUpperCase()==='XL'?'selected':''}>XL (Extra Large)</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div class="cs-edit-row">
+                        <div class="cs-edit-field cs-edit-field-full">
+                          <label>Implementation Guidance</label>
+                          <textarea name="implementation_guidance" rows="2" placeholder="How to implement this control">${esc(c.implementation_guidance || '')}</textarea>
+                        </div>
+                      </div>
+                      <div class="cs-edit-row cs-edit-row-grid">
+                        <div class="cs-edit-field">
+                          <label>Status</label>
+                          <select name="status">
+                            <option value="to_do" ${(c.status||'to_do')==='to_do'?'selected':''}>To Do</option>
+                            <option value="in_progress" ${c.status==='in_progress'?'selected':''}>In Progress</option>
+                            <option value="active" ${c.status==='active'?'selected':''}>Active</option>
+                            <option value="done" ${c.status==='done'?'selected':''}>Done</option>
+                          </select>
+                        </div>
+                        <div class="cs-edit-field">
+                          <label>Framework</label>
+                          <input type="text" name="framework" value="${esc(c.framework || '')}" placeholder="e.g. PDPL, NCA-ECC" />
+                        </div>
+                      </div>
+                      <div class="cs-edit-actions">
+                        <button type="submit" class="btn-admin-primary cs-edit-save-btn">
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                          Save Changes
+                        </button>
+                        <button type="button" class="cs-toolbar-btn cs-toolbar-btn-ghost" onclick="csExpandControl('${esc(c.id)}')">Cancel</button>
+                        <button type="button" class="cs-edit-delete-btn" onclick="csDeleteControl('${esc(c.id)}')">
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                          Remove
+                        </button>
+                      </div>
+                    </form>
+                  `}
                 </div>
               </div>`;
             }).join('')}
@@ -2634,13 +2717,16 @@ window.csFilterControls = csFilterControls;
 
 function csAddManualControl() {
   const controls = csSessionData.controls = csSessionData.controls || [];
+  const newId = 'ctrl-manual-' + Date.now();
   const newCtrl = {
-    id: 'ctrl-manual-' + Date.now(),
-    name: 'New Manual Control',
+    id: newId,
+    name: '',
     description: '',
     category: 'process',
-    csfFunction: 'govern',
-    priority: 'medium',
+    csf_function: 'govern',
+    priority: 3,
+    effort: 'M',
+    status: 'to_do',
     selected: true,
     framework: '',
     requirementRefId: '',
@@ -2648,9 +2734,54 @@ function csAddManualControl() {
   controls.push(newCtrl);
   csSaveStep();
   csRenderWizard();
-  toast('info', 'Added', 'Manual control added. Expand it to edit details.');
+  // Auto-expand the new control for editing
+  setTimeout(() => {
+    const item = document.querySelector(`.cs-ctrl-item[data-ctrl-id="${newId}"]`);
+    if (item) {
+      item.classList.add('expanded');
+      item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const nameInput = item.querySelector('input[name="name"]');
+      if (nameInput) nameInput.focus();
+    }
+  }, 100);
+  toast('info', 'Added', 'New control added — fill in the details below.');
 }
 window.csAddManualControl = csAddManualControl;
+
+function csSaveControl(ctrlId) {
+  const form = document.querySelector(`.cs-edit-form[data-ctrl-id="${ctrlId}"]`);
+  if (!form) return;
+  const ctrl = (csSessionData.controls || []).find(c => c.id === ctrlId);
+  if (!ctrl) return;
+
+  const fd = new FormData(form);
+  ctrl.name = fd.get('name') || 'Untitled Control';
+  ctrl.description = fd.get('description') || '';
+  ctrl.category = fd.get('category') || '';
+  ctrl.csf_function = fd.get('csf_function') || '';
+  ctrl.csfFunction = fd.get('csf_function') || '';
+  ctrl.priority = parseInt(fd.get('priority'), 10) || 3;
+  ctrl.effort = fd.get('effort') || 'M';
+  ctrl.status = fd.get('status') || 'to_do';
+  ctrl.implementation_guidance = fd.get('implementation_guidance') || '';
+  ctrl.framework = fd.get('framework') || '';
+
+  csSaveStep();
+  csRenderWizard();
+  toast('success', 'Saved', `Control "${ctrl.name}" updated.`);
+}
+window.csSaveControl = csSaveControl;
+
+function csDeleteControl(ctrlId) {
+  const ctrl = (csSessionData.controls || []).find(c => c.id === ctrlId);
+  const name = ctrl?.name || 'this control';
+  if (!confirm(`Remove "${name}"?`)) return;
+  csSessionData.controls = (csSessionData.controls || []).filter(c => c.id !== ctrlId);
+  csSaveStep();
+  csRenderWizard();
+  toast('info', 'Removed', `Control removed.`);
+}
+window.csDeleteControl = csDeleteControl;
 
 function csToggleControl(ctrlId) {
   const ctrl = (csSessionData.controls || []).find(c => c.id === ctrlId);

@@ -2139,6 +2139,94 @@
 }
 
 
+/* Inline Edit Form */
+.cs-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cs-edit-row {
+  display: flex;
+  gap: 12px;
+}
+.cs-edit-row-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.cs-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.cs-edit-field-full {
+  flex: 1;
+}
+.cs-edit-field label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cs-edit-field input,
+.cs-edit-field textarea,
+.cs-edit-field select {
+  padding: 7px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #1e293b;
+  background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+.cs-edit-field input:focus,
+.cs-edit-field textarea:focus,
+.cs-edit-field select:focus {
+  outline: none;
+  border-color: var(--admin-primary, #0077cc);
+  box-shadow: 0 0 0 2px rgba(0,119,204,0.12);
+}
+.cs-edit-field textarea {
+  resize: vertical;
+  min-height: 48px;
+}
+.cs-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #f3f4f6;
+}
+.cs-edit-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 6px 14px;
+}
+.cs-edit-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: #ef4444;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-left: auto;
+  transition: background 0.15s;
+}
+.cs-edit-delete-btn:hover {
+  background: rgba(239,68,68,0.08);
+}
+
 /* Review footer */
 .cs-review-footer {
   display: flex;
