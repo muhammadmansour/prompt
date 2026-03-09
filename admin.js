@@ -3000,58 +3000,50 @@ async function csDoExport() {
   if (grcConfigured) {
     // ── Real GRC Export ──
     try {
-      if (textEl) textEl.textContent = 'Fetching requirement assessments from GRC...';
+      if (textEl) textEl.textContent = 'Fetching requirement assessments...';
       if (fillEl) fillEl.style.width = '10%';
 
       // Fetch GRC requirement assessments and map them to controls
-      let reqAssessmentMap = {}; // requirementUrn/refId -> [assessment UUIDs]
       try {
         const raRes = await fetch('/api/grc/requirement-assessments');
         const raData = await raRes.json();
-        const assessments = raData.results || raData.data || [];
-        if (Array.isArray(assessments) && assessments.length > 0) {
-          console.log(`[Export] Found ${assessments.length} requirement assessments in GRC`);
-          // Build lookup by requirement node URN and ref_id
+        if (raData.success && raData.results) {
+          const assessments = Array.isArray(raData.results) ? raData.results : [];
+          console.log(`[Export] Fetched ${assessments.length} requirement assessments from GRC`);
+
+          // Build lookup maps: try matching by requirement URN, ref_id, or name
+          const byUrn = {};   // requirement node URN → [assessment UUIDs]
+          const byRefId = {}; // ref_id string → [assessment UUIDs]
+
           assessments.forEach(ra => {
-            const raId = ra.id || ra.uuid;
-            if (!raId) return;
-            // Match by requirement URN
-            const reqUrn = ra.requirement || ra.requirement_node || '';
-            if (reqUrn) {
-              if (!reqAssessmentMap[reqUrn]) reqAssessmentMap[reqUrn] = [];
-              reqAssessmentMap[reqUrn].push(raId);
-            }
-            // Also map by ref_id if available
-            const refId = ra.ref_id || ra.reference_id || '';
-            if (refId) {
-              if (!reqAssessmentMap[refId]) reqAssessmentMap[refId] = [];
-              reqAssessmentMap[refId].push(raId);
+            const id = ra.id || ra.uuid;
+            if (!id) return;
+
+            // The assessment may reference a requirement by URN, ref_id, or nested object
+            const urn = ra.requirement?.urn || ra.requirement_node || ra.urn || '';
+            const refId = ra.requirement?.ref_id || ra.ref_id || '';
+            const reqStr = typeof ra.requirement === 'string' ? ra.requirement : '';
+
+            if (urn) { if (!byUrn[urn]) byUrn[urn] = []; byUrn[urn].push(id); }
+            if (refId) { if (!byRefId[refId]) byRefId[refId] = []; byRefId[refId].push(id); }
+            if (reqStr) { if (!byUrn[reqStr]) byUrn[reqStr] = []; byUrn[reqStr].push(id); }
+          });
+
+          // Attach requirement_assessments to each control
+          controls.forEach(c => {
+            const matched = byUrn[c.requirementUrn] || byRefId[c.requirementRefId] || [];
+            if (matched.length) {
+              c.requirement_assessments = matched;
+              console.log(`[Export] Control "${c.name}" → ${matched.length} requirement assessment(s)`);
             }
           });
+
+          const withRA = controls.filter(c => c.requirement_assessments?.length).length;
+          console.log(`[Export] ${withRA}/${controls.length} controls mapped to requirement assessments`);
         }
       } catch (raErr) {
-        console.warn('[Export] Could not fetch requirement assessments:', raErr.message);
+        console.warn('[Export] Could not fetch requirement assessments (continuing without):', raErr.message);
       }
-
-      // Attach requirement_assessments to each control
-      const selectedReqs = csSessionData.requirements || [];
-      controls.forEach(c => {
-        const matched = new Set();
-        // Try matching by requirementUrn
-        if (c.requirementUrn && reqAssessmentMap[c.requirementUrn]) {
-          reqAssessmentMap[c.requirementUrn].forEach(id => matched.add(id));
-        }
-        // Try matching by requirementRefId
-        if (c.requirementRefId && reqAssessmentMap[c.requirementRefId]) {
-          reqAssessmentMap[c.requirementRefId].forEach(id => matched.add(id));
-        }
-        if (matched.size > 0) {
-          c.requirement_assessments = [...matched];
-        }
-      });
-
-      const matchedCount = controls.filter(c => c.requirement_assessments?.length > 0).length;
-      console.log(`[Export] Mapped requirement assessments to ${matchedCount}/${controls.length} controls`);
 
       if (textEl) textEl.textContent = 'Sending controls to WathbaGRC...';
       if (fillEl) fillEl.style.width = '20%';
