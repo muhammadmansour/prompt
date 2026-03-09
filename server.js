@@ -1217,7 +1217,7 @@ const server = http.createServer(async (req, res) => {
             grcBody.requirement_assessments = c.requirement_assessments;
           }
 
-          console.log(`[GRC Export] ${i + 1}/${controls.length}: "${grcBody.name}" (priority: ${grcBody.priority}, category: ${grcBody.category})`);
+          console.log(`[GRC Export] ${i + 1}/${controls.length}: "${grcBody.name}" (priority: ${grcBody.priority}, category: ${grcBody.category}${grcBody.requirement_assessments ? `, req_assessments: ${grcBody.requirement_assessments.length}` : ''})`);
 
           const grcRes = await fetch(`${GRC_API_URL}/api/applied-controls/`, {
             method: 'POST',
