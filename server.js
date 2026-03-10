@@ -1292,7 +1292,9 @@ const server = http.createServer(async (req, res) => {
             const urn = ra.requirement?.urn || ra.requirement_node || ra.urn || '';
             const refId = ra.requirement?.ref_id || ra.ref_id || '';
             const reqStr = typeof ra.requirement === 'string' ? ra.requirement : '';
-            const existing = Array.isArray(ra.applied_controls) ? ra.applied_controls : [];
+            // applied_controls may be objects {str, id} or plain UUID strings — normalize to UUIDs
+            const rawExisting = Array.isArray(ra.applied_controls) ? ra.applied_controls : [];
+            const existing = rawExisting.map(ac => typeof ac === 'object' && ac !== null ? (ac.id || ac.uuid || '') : String(ac)).filter(Boolean);
 
             const entry = { id, existing };
             if (urn) { if (!byUrn[urn]) byUrn[urn] = []; byUrn[urn].push(entry); }
