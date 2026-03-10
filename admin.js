@@ -3054,15 +3054,17 @@ async function csDoExport() {
         body: JSON.stringify({ controls })
       });
 
-      if (fillEl) fillEl.style.width = '80%';
+      if (fillEl) fillEl.style.width = '60%';
+      if (textEl) textEl.textContent = 'Creating controls & linking requirement assessments...';
 
       const data = await res.json();
 
       if (fillEl) fillEl.style.width = '100%';
 
       if (data.exported > 0) {
-        if (textEl) textEl.textContent = `${data.exported} controls exported successfully${data.failed > 0 ? `, ${data.failed} failed` : ''}`;
-        toast('success', 'Export Complete', `${data.exported} controls exported to WathbaGRC.${data.failed > 0 ? ` ${data.failed} failed.` : ''}`);
+        const linkedMsg = data.linked > 0 ? `, ${data.linked} requirement assessments linked` : '';
+        if (textEl) textEl.textContent = `${data.exported} controls exported${linkedMsg}${data.failed > 0 ? `, ${data.failed} failed` : ''}`;
+        toast('success', 'Export Complete', `${data.exported} controls exported to WathbaGRC.${data.linked > 0 ? ` ${data.linked} requirement assessments linked.` : ''}${data.failed > 0 ? ` ${data.failed} failed.` : ''}`);
 
         // Mark exported control IDs
         const prevExported = csSessionData.exportedControlIds || [];

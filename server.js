@@ -1178,6 +1178,33 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- GRC Platform Proxy: PATCH requirement assessment (link applied controls) ----
+  const raPatchMatch = url.pathname.match(/^\/api\/grc\/requirement-assessments\/([^/]+)$/);
+  if (raPatchMatch && req.method === 'PATCH') {
+    try {
+      const raId = raPatchMatch[1];
+      const body = await parseBody(req);
+      console.log(`[GRC] PATCH requirement-assessment ${raId}:`, JSON.stringify(body));
+      const grcRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!grcRes.ok) {
+        const errText = await grcRes.text();
+        throw new Error(`GRC API ${grcRes.status}: ${errText}`);
+      }
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, data }));
+    } catch (error) {
+      console.error('[GRC] PATCH requirement-assessment error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   // ---- GRC Platform Proxy: Export applied controls ----
   if (url.pathname === '/api/grc/applied-controls' && req.method === 'POST') {
     try {
@@ -1231,20 +1258,57 @@ const server = http.createServer(async (req, res) => {
           }
 
           const created = await grcRes.json();
-          results.push({ controlId: c.id, grcId: created.id, name: grcBody.name, success: true });
+          const appliedControlId = created.id;
+          results.push({ controlId: c.id, grcId: appliedControlId, name: grcBody.name, success: true, linkedRA: [] });
+
+          // ── Link: PATCH each requirement assessment to attach this applied control ──
+          if (c.requirement_assessments && Array.isArray(c.requirement_assessments) && c.requirement_assessments.length > 0 && appliedControlId) {
+            for (const raId of c.requirement_assessments) {
+              try {
+                // First GET the current applied_controls on this RA so we append (not overwrite)
+                let existingControls = [];
+                try {
+                  const getRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`);
+                  if (getRes.ok) {
+                    const raData = await getRes.json();
+                    existingControls = Array.isArray(raData.applied_controls) ? raData.applied_controls : [];
+                  }
+                } catch (_) { /* proceed with empty list */ }
+
+                const mergedControls = [...new Set([...existingControls, appliedControlId])];
+
+                const patchRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ applied_controls: mergedControls })
+                });
+                if (patchRes.ok) {
+                  console.log(`[GRC Link] RA ${raId} ← applied control ${appliedControlId}`);
+                  results[results.length - 1].linkedRA.push(raId);
+                } else {
+                  const errText = await patchRes.text();
+                  console.warn(`[GRC Link] Failed to PATCH RA ${raId}: ${patchRes.status} ${errText}`);
+                }
+              } catch (linkErr) {
+                console.warn(`[GRC Link] Error linking RA ${raId}:`, linkErr.message);
+              }
+            }
+          }
         } catch (err) {
           console.error(`[GRC Export] Failed "${c.name}":`, err.message);
           errors.push({ controlId: c.id, name: c.name, error: err.message });
         }
       }
 
-      console.log(`[GRC Export] Done: ${results.length} success, ${errors.length} failed`);
+      const totalLinked = results.reduce((sum, r) => sum + (r.linkedRA?.length || 0), 0);
+      console.log(`[GRC Export] Done: ${results.length} success, ${errors.length} failed, ${totalLinked} requirement assessments linked`);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         success: errors.length === 0,
         exported: results.length,
         failed: errors.length,
+        linked: totalLinked,
         results,
         errors
       }));
