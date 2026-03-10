@@ -6,7 +6,7 @@ const { GoogleGenAI } = require('@google/genai');
 const Database = require('better-sqlite3');
 
 const PORT = 5555;
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const GEMINI_UPLOAD_URL = 'https://generativelanguage.googleapis.com/upload/v1beta';
 
@@ -1568,7 +1568,7 @@ const server = http.createServer(async (req, res) => {
       let cachedContentName = null;
       try {
         const cache = await genai.caches.create({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-2.5-pro',
           config: {
             contents: [{
               role: 'user',
@@ -1619,7 +1619,7 @@ const server = http.createServer(async (req, res) => {
         context: context || {},
         createdAt,
         chat: genai.chats.create({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-2.5-pro',
           config: chatConfig
         })
       };
@@ -1700,7 +1700,7 @@ const server = http.createServer(async (req, res) => {
             context: JSON.parse(row.context || '{}'),
             createdAt: row.created_at,
             chat: genai.chats.create({
-              model: 'gemini-2.5-flash',
+              model: 'gemini-2.5-pro',
               config: chatConfig
             })
           };
@@ -1718,7 +1718,7 @@ const server = http.createServer(async (req, res) => {
             context: {},
             createdAt,
             chat: genai.chats.create({
-              model: 'gemini-2.5-flash',
+              model: 'gemini-2.5-pro',
               config: {
                 systemInstruction: sysPrompt,
                 temperature: 0.7,
