@@ -3000,62 +3000,21 @@ async function csDoExport() {
   if (grcConfigured) {
     // ── Real GRC Export ──
     try {
-      if (textEl) textEl.textContent = 'Fetching requirement assessments...';
+      if (textEl) textEl.textContent = 'Creating applied controls in WathbaGRC...';
       if (fillEl) fillEl.style.width = '10%';
 
-      // Fetch GRC requirement assessments and map them to controls
-      try {
-        const raRes = await fetch('/api/grc/requirement-assessments');
-        const raData = await raRes.json();
-        if (raData.success && raData.results) {
-          const assessments = Array.isArray(raData.results) ? raData.results : [];
-          console.log(`[Export] Fetched ${assessments.length} requirement assessments from GRC`);
-
-          // Build lookup maps: try matching by requirement URN, ref_id, or name
-          const byUrn = {};   // requirement node URN → [assessment UUIDs]
-          const byRefId = {}; // ref_id string → [assessment UUIDs]
-
-          assessments.forEach(ra => {
-            const id = ra.id || ra.uuid;
-            if (!id) return;
-
-            // The assessment may reference a requirement by URN, ref_id, or nested object
-            const urn = ra.requirement?.urn || ra.requirement_node || ra.urn || '';
-            const refId = ra.requirement?.ref_id || ra.ref_id || '';
-            const reqStr = typeof ra.requirement === 'string' ? ra.requirement : '';
-
-            if (urn) { if (!byUrn[urn]) byUrn[urn] = []; byUrn[urn].push(id); }
-            if (refId) { if (!byRefId[refId]) byRefId[refId] = []; byRefId[refId].push(id); }
-            if (reqStr) { if (!byUrn[reqStr]) byUrn[reqStr] = []; byUrn[reqStr].push(id); }
-          });
-
-          // Attach requirement_assessments to each control
-          controls.forEach(c => {
-            const matched = byUrn[c.requirementUrn] || byRefId[c.requirementRefId] || [];
-            if (matched.length) {
-              c.requirement_assessments = matched;
-              console.log(`[Export] Control "${c.name}" → ${matched.length} requirement assessment(s)`);
-            }
-          });
-
-          const withRA = controls.filter(c => c.requirement_assessments?.length).length;
-          console.log(`[Export] ${withRA}/${controls.length} controls mapped to requirement assessments`);
-        }
-      } catch (raErr) {
-        console.warn('[Export] Could not fetch requirement assessments (continuing without):', raErr.message);
-      }
-
-      if (textEl) textEl.textContent = 'Sending controls to WathbaGRC...';
-      if (fillEl) fillEl.style.width = '20%';
-
+      // Send controls to server — server will:
+      // 1. POST each applied control to GRC
+      // 2. Find matching requirement assessments by URN/refId
+      // 3. PATCH each RA to link the newly created applied control
       const res = await fetch('/api/grc/applied-controls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ controls })
       });
 
-      if (fillEl) fillEl.style.width = '60%';
-      if (textEl) textEl.textContent = 'Creating controls & linking requirement assessments...';
+      if (fillEl) fillEl.style.width = '70%';
+      if (textEl) textEl.textContent = 'Processing results...';
 
       const data = await res.json();
 
