@@ -258,7 +258,7 @@ const dbInsertCsSession = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const dbUpdateCsSession = db.prepare(`
-  UPDATE cs_sessions SET name = ?, status = ?, step = ?, requirements = ?, collections = ?, selected_files = ?, session_files = ?, org_context = ?, controls = ?, framework = ?, exported_control_ids = ?, updated_at = ? WHERE id = ?
+  UPDATE cs_sessions SET name = ?, status = ?, step = ?, requirements = ?, collections = ?, selected_files = ?, session_files = ?, org_context = ?, controls = ?, framework = ?, exported_control_ids = ?, compliance_assessment = ?, ra_map = ?, updated_at = ? WHERE id = ?
 `);
 const dbDeleteCsSession = db.prepare(`DELETE FROM cs_sessions WHERE id = ?`);
 
@@ -276,6 +276,8 @@ function csSessionToJSON(row) {
     controls: JSON.parse(row.controls || '[]'),
     framework: row.framework || '',
     exportedControlIds: JSON.parse(row.exported_control_ids || '[]'),
+    complianceAssessment: row.compliance_assessment || '',
+    raMap: JSON.parse(row.ra_map || '{}'),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1850,6 +1852,8 @@ const server = http.createServer(async (req, res) => {
         JSON.stringify(body.controls || []),
         body.framework || '',
         JSON.stringify(body.exportedControlIds || []),
+        body.complianceAssessment || '',
+        JSON.stringify(body.raMap || {}),
         now,
         now
       );
@@ -1897,6 +1901,8 @@ const server = http.createServer(async (req, res) => {
         body.controls !== undefined ? JSON.stringify(body.controls) : existing.controls,
         body.framework !== undefined ? body.framework : existing.framework,
         body.exportedControlIds !== undefined ? JSON.stringify(body.exportedControlIds) : existing.exported_control_ids,
+        body.complianceAssessment !== undefined ? body.complianceAssessment : (existing.compliance_assessment || ''),
+        body.raMap !== undefined ? JSON.stringify(body.raMap) : (existing.ra_map || '{}'),
         now,
         id
       );
