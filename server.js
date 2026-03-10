@@ -160,6 +160,12 @@ try {
   if (!csCols.includes('exported_control_ids')) {
     db.exec(`ALTER TABLE cs_sessions ADD COLUMN exported_control_ids TEXT NOT NULL DEFAULT '[]'`);
   }
+  if (!csCols.includes('compliance_assessment')) {
+    db.exec(`ALTER TABLE cs_sessions ADD COLUMN compliance_assessment TEXT DEFAULT ''`);
+  }
+  if (!csCols.includes('ra_map')) {
+    db.exec(`ALTER TABLE cs_sessions ADD COLUMN ra_map TEXT DEFAULT '{}'`);
+  }
 } catch (migErr) { console.warn('CS sessions migration:', migErr.message); }
 
 // Migrate org_contexts: add new profile columns if missing
