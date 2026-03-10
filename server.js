@@ -1225,7 +1225,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/grc/applied-controls' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
-      const { controls, folder, compliance_assessment } = body;
+      const { controls, folder, raMap } = body;
       if (!controls || !Array.isArray(controls) || controls.length === 0) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'No controls to export.' }));
@@ -1287,84 +1287,67 @@ const server = http.createServer(async (req, res) => {
 
       console.log(`[GRC Export] Phase 1 done: ${results.length} controls created, ${errors.length} failed`);
 
-      // ── Phase 2: Link selected requirements to generated applied controls ──
-      // Group all created control UUIDs by their source requirement
+      // ── Phase 2: PATCH requirement assessments with generated applied control UUIDs ──
+      // raMap (from step 1) maps refId/URN → RA UUID — no fetching needed
       let totalLinked = 0;
-      if (results.length > 0) {
-        try {
-          // Step 2a: Group applied control UUIDs by requirement (refId / URN)
-          const byReqRefId = {};  // refId → [grcId, grcId, ...]
-          const byReqUrn = {};    // URN → [grcId, grcId, ...]
-          for (const r of results) {
-            if (r.requirementRefId) {
-              if (!byReqRefId[r.requirementRefId]) byReqRefId[r.requirementRefId] = [];
-              byReqRefId[r.requirementRefId].push(r.grcId);
-            }
-            if (r.requirementUrn) {
-              if (!byReqUrn[r.requirementUrn]) byReqUrn[r.requirementUrn] = [];
-              byReqUrn[r.requirementUrn].push(r.grcId);
-            }
+      if (results.length > 0 && raMap && Object.keys(raMap).length > 0) {
+        // Group control UUIDs by requirement
+        const byReq = {};  // RA UUID → [applied control UUIDs]
+        for (const r of results) {
+          // Look up RA UUID from raMap using refId or URN
+          const raId = raMap[r.requirementRefId] || raMap[r.requirementUrn];
+          if (!raId) {
+            console.log(`[GRC Link] No RA mapping for control "${r.name}" (refId: ${r.requirementRefId}, URN: ${r.requirementUrn})`);
+            continue;
           }
+          if (!byReq[raId]) byReq[raId] = [];
+          byReq[raId].push(r.grcId);
+        }
 
-          const uniqueReqs = new Set([...Object.keys(byReqRefId), ...Object.keys(byReqUrn)]);
-          console.log(`[GRC Link] ${results.length} controls grouped into ${uniqueReqs.size} requirement(s)`);
+        const raEntries = Object.entries(byReq);
+        console.log(`[GRC Link] ${results.length} controls mapped to ${raEntries.length} requirement assessment(s)`);
 
-          // Step 2b: Fetch requirement assessments from GRC (filtered by compliance assessment)
-          const raFilter = compliance_assessment ? `?compliance_assessment=${compliance_assessment}` : '';
-          console.log(`[GRC Link] Fetching requirement assessments${compliance_assessment ? ` for assessment ${compliance_assessment}` : ' (all)'}...`);
-          const raRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raFilter}`);
-          if (!raRes.ok) throw new Error(`GRC API ${raRes.status}`);
-          const raJson = await raRes.json();
-          const assessments = Array.isArray(raJson.results) ? raJson.results : (Array.isArray(raJson) ? raJson : []);
-          console.log(`[GRC Link] Fetched ${assessments.length} requirement assessments`);
+        // PATCH each RA with its applied control UUIDs
+        for (const [raId, controlIds] of raEntries) {
+          try {
+            // GET existing applied_controls to append (not overwrite)
+            let existingIds = [];
+            try {
+              const getRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`);
+              if (getRes.ok) {
+                const raData = await getRes.json();
+                const raw = Array.isArray(raData.applied_controls) ? raData.applied_controls : [];
+                existingIds = raw.map(ac => typeof ac === 'object' && ac !== null ? (ac.id || ac.uuid || '') : String(ac)).filter(Boolean);
+              }
+            } catch (_) { /* proceed with empty */ }
 
-          // Step 2c: For each RA, check if its requirement matches any of our selected requirements
-          for (const ra of assessments) {
-            const raId = ra.id || ra.uuid;
-            if (!raId) continue;
-
-            const urn = ra.requirement?.urn || ra.requirement_node || ra.urn || '';
-            const refId = ra.requirement?.ref_id || ra.ref_id || '';
-            const reqStr = typeof ra.requirement === 'string' ? ra.requirement : '';
-
-            // Find which applied controls belong to this requirement
-            const controlIds = byReqRefId[refId] || byReqUrn[urn] || byReqUrn[reqStr] || [];
-            if (!controlIds.length) continue;
-
-            // Get existing applied_controls on this RA (normalize objects to UUIDs)
-            const rawExisting = Array.isArray(ra.applied_controls) ? ra.applied_controls : [];
-            const existingIds = rawExisting.map(ac => typeof ac === 'object' && ac !== null ? (ac.id || ac.uuid || '') : String(ac)).filter(Boolean);
-
-            // Merge: existing + all new control UUIDs for this requirement
             const merged = [...new Set([...existingIds, ...controlIds])];
 
-            console.log(`[GRC Link] RA ${raId} (req: ${refId || urn}) ← ${controlIds.length} applied control(s): ${controlIds.join(', ')}`);
+            console.log(`[GRC Link] PATCH RA ${raId} ← ${controlIds.length} control(s): ${controlIds.join(', ')}`);
 
-            try {
-              const patchRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ applied_controls: merged })
+            const patchRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ applied_controls: merged })
+            });
+
+            if (patchRes.ok) {
+              console.log(`[GRC Link] ✓ RA ${raId} linked`);
+              totalLinked++;
+              controlIds.forEach(grcId => {
+                const r = results.find(x => x.grcId === grcId);
+                if (r) r.linkedRA.push(raId);
               });
-              if (patchRes.ok) {
-                console.log(`[GRC Link] ✓ RA ${raId} linked with ${controlIds.length} control(s)`);
-                totalLinked++;
-                // Tag which controls got linked
-                controlIds.forEach(grcId => {
-                  const r = results.find(x => x.grcId === grcId);
-                  if (r) r.linkedRA.push(raId);
-                });
-              } else {
-                const errText = await patchRes.text();
-                console.warn(`[GRC Link] Failed PATCH RA ${raId}: ${patchRes.status} ${errText}`);
-              }
-            } catch (linkErr) {
-              console.warn(`[GRC Link] Error linking RA ${raId}:`, linkErr.message);
+            } else {
+              const errText = await patchRes.text();
+              console.warn(`[GRC Link] Failed PATCH RA ${raId}: ${patchRes.status} ${errText}`);
             }
+          } catch (linkErr) {
+            console.warn(`[GRC Link] Error linking RA ${raId}:`, linkErr.message);
           }
-        } catch (raErr) {
-          console.warn(`[GRC Link] Could not fetch/link requirement assessments:`, raErr.message);
         }
+      } else if (results.length > 0) {
+        console.log(`[GRC Link] No raMap provided — skipping RA linking`);
       }
 
       console.log(`[GRC Export] Done: ${results.length} created, ${errors.length} failed, ${totalLinked} RAs linked`);
