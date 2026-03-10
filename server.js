@@ -1145,6 +1145,57 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- GRC Platform Proxy: List frameworks ----
+  if (url.pathname === '/api/grc/frameworks' && req.method === 'GET') {
+    try {
+      const grcRes = await fetch(`${GRC_API_URL}/api/frameworks/`);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, results: data.results || data }));
+    } catch (error) {
+      console.error('[GRC] Frameworks error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: Get framework requirement tree ----
+  const fwTreeMatch = url.pathname.match(/^\/api\/grc\/frameworks\/([^/]+)\/tree$/);
+  if (fwTreeMatch && req.method === 'GET') {
+    try {
+      const fwId = fwTreeMatch[1];
+      const grcRes = await fetch(`${GRC_API_URL}/api/frameworks/${fwId}/tree/`);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, tree: data }));
+    } catch (error) {
+      console.error('[GRC] Framework tree error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: Get requirement nodes count for a framework ----
+  if (url.pathname === '/api/grc/requirement-nodes' && req.method === 'GET') {
+    try {
+      const qs = url.search || '';
+      const grcRes = await fetch(`${GRC_API_URL}/api/requirement-nodes/${qs}`);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, count: data.count, results: data.results || data }));
+    } catch (error) {
+      console.error('[GRC] Requirement nodes error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   // ---- GRC Platform Proxy: Get compliance assessments ----
   if (url.pathname === '/api/grc/compliance-assessments' && req.method === 'GET') {
     try {
@@ -1155,25 +1206,6 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ success: true, results: data.results || data }));
     } catch (error) {
       console.error('[GRC] Compliance assessments error:', error.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: error.message }));
-    }
-    return;
-  }
-
-  // ---- GRC Platform Proxy: Get compliance assessment tree ----
-  const caTreeMatch = url.pathname.match(/^\/api\/grc\/compliance-assessments\/([^/]+)\/tree\/?$/);
-  if (caTreeMatch && req.method === 'GET') {
-    try {
-      const caId = caTreeMatch[1];
-      console.log(`[GRC] Fetching tree for compliance assessment ${caId}`);
-      const grcRes = await fetch(`${GRC_API_URL}/api/compliance-assessments/${caId}/tree/`);
-      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
-      const data = await grcRes.json();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(data));
-    } catch (error) {
-      console.error('[GRC] Compliance assessment tree error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }

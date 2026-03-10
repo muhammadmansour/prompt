@@ -40,7 +40,7 @@ let csSessions = null;     // Controls Studio sessions (cached)
 let csMode = 'sessions';   // 'sessions' | 'wizard'
 let csCurrentStep = 0;
 let csSessionData = null;
-let csTreeCache = {};          // caId → tree data cache for controls studio
+let csLibraries = [];          // fetched frameworks for controls studio
 let csCollectionsData = [];    // fetched collections with files for controls studio
 let csPendingPoll = null;
 
@@ -1529,10 +1529,10 @@ function csGoStep(i) {
 }
 window.csGoStep = csGoStep;
 
-// Step 1: Requirements — from GRC Compliance Assessments
+// Step 1: Requirements — with real data
 function csRenderStepRequirements(el) {
   const reqs = csSessionData.requirements || [];
-  const fwName = csSessionData._caFrameworkName || '';
+  const fwCount = new Set(reqs.map(r => r.frameworkName)).size;
   el.innerHTML = `
     <div class="cs-wizard-card">
       <div class="cs-wizard-header navy">
@@ -1540,10 +1540,10 @@ function csRenderStepRequirements(el) {
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="white" stroke-width="1.5"/><path d="M6 9L8 11L12 7" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Step 1: Select Requirements
         </div>
-        <div class="cs-wizard-header-desc">Select a compliance assessment, then pick which requirements to generate controls for.</div>
+        <div class="cs-wizard-header-desc">Choose which framework requirements to generate controls for. Select entire frameworks or expand to pick sections.</div>
         <div class="cs-wizard-header-stat">
           <span class="big" id="cs-req-count">${reqs.length}</span>
-          <span class="label" id="cs-req-label">requirements selected${fwName ? ' from ' + fwName : ''}</span>
+          <span class="label">requirements from ${fwCount} frameworks</span>
         </div>
       </div>
       <div class="cs-wizard-body">
@@ -1552,18 +1552,18 @@ function csRenderStepRequirements(el) {
           <select id="cs-compliance-assessment" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid #374151;background:#1f2937;color:#e5e7eb;font-size:12px" onchange="csOnComplianceAssessmentChange()">
             <option value="">Loading assessments...</option>
           </select>
-          <div id="cs-ca-status" style="font-size:10px;color:#6b7280;margin-top:3px">Select a compliance assessment to load its requirement tree</div>
+          <div id="cs-ca-status" style="font-size:10px;color:#6b7280;margin-top:3px">Select the compliance assessment to link requirements from</div>
         </div>
         <div class="studio-search-bar" style="margin-bottom:10px">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          <input type="text" placeholder="Search requirements..." id="cs-fw-search" autocomplete="off">
+          <input type="text" placeholder="Search frameworks..." id="cs-fw-search" autocomplete="off">
           <div class="studio-search-actions">
             <button type="button" class="btn-studio-filter" id="cs-select-all-btn">Select All</button>
             <button type="button" class="btn-studio-filter" id="cs-clear-all-btn">Clear</button>
           </div>
         </div>
-        <div id="cs-fw-list" class="studio-fw-list" style="max-height:400px;overflow-y:auto">
-          <div class="studio-empty-msg" style="color:#6b7280">Select a compliance assessment above to load requirements</div>
+        <div id="cs-fw-list" class="studio-fw-list" style="max-height:320px;overflow-y:auto">
+          <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading frameworks...</span></div>
         </div>
       </div>
       <div class="cs-wizard-footer">
@@ -1574,214 +1574,242 @@ function csRenderStepRequirements(el) {
       </div>
     </div>`;
 
-  // Load compliance assessments dropdown
+  // Fetch frameworks from GRC + compliance assessments
   (async () => {
+    if (!csLibraries.length) {
+      try {
+        const d = await fetch('/api/grc/frameworks').then(r => r.json());
+        if (d.success && Array.isArray(d.results)) csLibraries = d.results;
+      } catch (e) { console.error('CS GRC frameworks fetch:', e); }
+    }
+    csRenderFwList();
+    csAttachFwSearch();
+
+    // Load compliance assessments dropdown
     const caSelect = document.getElementById('cs-compliance-assessment');
-    if (!caSelect) return;
-    try {
-      const caRes = await fetch('/api/grc/compliance-assessments');
-      const caData = await caRes.json();
-      const assessments = Array.isArray(caData.results) ? caData.results : [];
-      if (assessments.length > 0) {
-        const savedCA = csSessionData.complianceAssessment || '';
-        caSelect.innerHTML = '<option value="">-- Select Compliance Assessment --</option>' +
-          assessments.map(a => {
-            const name = a.name || a.str || a.id;
-            const fw = a.framework?.str || a.framework?.name || '';
-            const progress = typeof a.progress === 'number' ? ` (${a.progress}%)` : '';
-            const label = fw ? `${name} — ${fw}${progress}` : `${name}${progress}`;
-            return `<option value="${a.id}" data-fw="${esc(fw)}"${a.id === savedCA ? ' selected' : ''}>${esc(label)}</option>`;
-          }).join('');
-        // If we had a saved assessment, reload its tree
-        if (savedCA) csOnComplianceAssessmentChange();
-      } else {
-        caSelect.innerHTML = '<option value="">No compliance assessments found</option>';
+    if (caSelect) {
+      try {
+        const caRes = await fetch('/api/grc/compliance-assessments');
+        const caData = await caRes.json();
+        const assessments = Array.isArray(caData.results) ? caData.results : [];
+        if (assessments.length > 0) {
+          const savedCA = csSessionData.complianceAssessment || '';
+          caSelect.innerHTML = '<option value="">-- Select Assessment --</option>' +
+            assessments.map(a => {
+              const name = a.name || a.str || a.id;
+              const project = a.project?.str || a.project?.name || '';
+              const label = project ? `${name} (${project})` : name;
+              return `<option value="${a.id}"${a.id === savedCA ? ' selected' : ''}>${label}</option>`;
+            }).join('');
+          // If we had a saved assessment, re-fetch RAs
+          if (savedCA) csOnComplianceAssessmentChange();
+        } else {
+          caSelect.innerHTML = '<option value="">No assessments found</option>';
+        }
+      } catch (caErr) {
+        console.warn('[GRC] Could not fetch compliance assessments:', caErr);
+        caSelect.innerHTML = '<option value="">Failed to load (GRC not available)</option>';
       }
-    } catch (caErr) {
-      console.warn('[GRC] Could not fetch compliance assessments:', caErr);
-      caSelect.innerHTML = '<option value="">Failed to load (GRC not available)</option>';
     }
   })();
 }
 
-// When compliance assessment changes, fetch its tree and render
+// When compliance assessment changes, fetch its RAs and store mapping
 async function csOnComplianceAssessmentChange() {
   const caSelect = document.getElementById('cs-compliance-assessment');
   const statusEl = document.getElementById('cs-ca-status');
-  const listEl = document.getElementById('cs-fw-list');
   const caId = caSelect ? caSelect.value : '';
 
   csSessionData.complianceAssessment = caId;
+  csSessionData.raMap = {}; // refId/URN → RA UUID
 
   if (!caId) {
-    csSessionData.raMap = {};
-    if (statusEl) statusEl.textContent = 'Select a compliance assessment to load its requirement tree';
-    if (listEl) listEl.innerHTML = '<div class="studio-empty-msg" style="color:#6b7280">Select a compliance assessment above to load requirements</div>';
+    if (statusEl) statusEl.textContent = 'Select the compliance assessment to link requirements from';
     return;
   }
 
-  // Store framework name for display
-  const selOpt = caSelect?.selectedOptions?.[0];
-  csSessionData._caFrameworkName = selOpt?.dataset?.fw || '';
-
-  if (statusEl) statusEl.innerHTML = '<span style="color:#60a5fa">Loading requirement tree...</span>';
-  if (listEl) listEl.innerHTML = '<div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading requirement tree...</span></div>';
+  if (statusEl) statusEl.innerHTML = '<span style="color:#60a5fa">Fetching requirement assessments...</span>';
 
   try {
-    // Fetch tree
-    let tree;
-    if (csTreeCache[caId]) {
-      tree = csTreeCache[caId];
-    } else {
-      const treeRes = await fetch(`/api/grc/compliance-assessments/${caId}/tree`);
-      if (!treeRes.ok) throw new Error(`HTTP ${treeRes.status}`);
-      tree = await treeRes.json();
-      csTreeCache[caId] = tree;
-    }
+    const raRes = await fetch(`/api/grc/requirement-assessments?compliance_assessment=${caId}`);
+    const raData = await raRes.json();
+    const assessments = Array.isArray(raData.results) ? raData.results : [];
 
-    // Flatten the tree to build raMap (urn/refId → ra_id)
+    // Build RA map: refId/URN → RA UUID
     const raMap = {};
-    const flattenForRaMap = (nodes) => {
-      for (const [nodeId, node] of Object.entries(nodes)) {
-        if (node.assessable && node.ra_id) {
-          if (node.urn) raMap[node.urn] = node.ra_id;
-          if (node.ref_id) raMap[node.ref_id] = node.ra_id;
-          raMap[nodeId] = node.ra_id; // also map node UUID → RA UUID
-        }
-        if (node.children && Object.keys(node.children).length > 0) {
-          flattenForRaMap(node.children);
-        }
-      }
-    };
-    flattenForRaMap(tree);
+    assessments.forEach(ra => {
+      const raId = ra.id || ra.uuid;
+      if (!raId) return;
+      const refId = ra.requirement?.ref_id || ra.ref_id || '';
+      const urn = ra.requirement?.urn || ra.requirement_node || ra.urn || '';
+      const reqStr = typeof ra.requirement === 'string' ? ra.requirement : '';
+      if (refId) raMap[refId] = raId;
+      if (urn) raMap[urn] = raId;
+      if (reqStr) raMap[reqStr] = raId;
+    });
+
     csSessionData.raMap = raMap;
+    console.log(`[Step 1] Mapped ${assessments.length} RAs for assessment ${caId}`, raMap);
 
-    // Count total assessable
-    let totalAssessable = 0;
-    const countAssessable = (nodes) => {
-      for (const node of Object.values(nodes)) {
-        if (node.assessable) totalAssessable++;
-        if (node.children) countAssessable(node.children);
-      }
-    };
-    countAssessable(tree);
-
-    console.log(`[Step 1] Tree loaded: ${totalAssessable} assessable requirements, ${Object.keys(raMap).length} RA mappings`);
-    if (statusEl) statusEl.innerHTML = `<span style="color:#10b981">✓ ${totalAssessable} requirements loaded</span>`;
-
-    // Render tree
-    csRenderTree(listEl, tree);
-    csAttachFwSearch();
-
+    if (statusEl) statusEl.innerHTML = `<span style="color:#10b981">✓ ${assessments.length} requirement assessments loaded</span>`;
   } catch (err) {
-    console.error('[Step 1] Failed to fetch tree:', err);
-    if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">⚠ Failed to load tree: ${err.message}</span>`;
-    if (listEl) listEl.innerHTML = '<div class="studio-empty-msg" style="color:#ef4444">Failed to load requirement tree</div>';
+    console.error('[Step 1] Failed to fetch RAs:', err);
+    if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">⚠ ${err.message}</span>`;
   }
 }
 window.csOnComplianceAssessmentChange = csOnComplianceAssessmentChange;
 
-// Render the recursive tree into a container
-function csRenderTree(container, tree) {
+// Cache for loaded framework trees  { fwId -> flatNodes[] }
+const csFrameworkTrees = {};
+
+function csRenderFwList() {
+  const listEl = document.getElementById('cs-fw-list');
+  if (!listEl) return;
   const reqs = csSessionData.requirements || [];
-  const fwName = csSessionData._caFrameworkName || '';
 
-  function renderNodes(nodes, depth) {
-    let html = '';
-    const entries = Object.entries(nodes);
-    // Sort by ref_id for consistent display
-    entries.sort((a, b) => (a[1].ref_id || '').localeCompare(b[1].ref_id || '', undefined, { numeric: true }));
-
-    for (const [nodeId, node] of entries) {
-      const hasChildren = node.children && Object.keys(node.children).length > 0;
-      const isAssessable = node.assessable;
-      const refLabel = node.ref_id ? node.ref_id : '';
-      const nameLabel = node.name || '';
-      const desc = node.description || '';
-      const displayText = nameLabel || desc;
-      const searchText = `${refLabel} ${nameLabel} ${desc}`.toLowerCase();
-
-      if (isAssessable) {
-        // Leaf requirement — checkable item
-        const opt = {
-          nodeId: nodeId,
-          nodeUrn: node.urn || '',
-          refId: node.ref_id || '',
-          name: nameLabel,
-          description: desc,
-          frameworkName: fwName,
-          raId: node.ra_id || '',
-          assessable: true,
-          depth: depth,
-        };
-        const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(opt))));
-        const isSelected = reqs.some(r => (r.nodeUrn && r.nodeUrn === node.urn) || (r.nodeId && r.nodeId === nodeId));
-        const statusBadge = node.status && node.status !== 'to_do'
-          ? `<span class="cs-tree-status cs-tree-status-${node.status.replace(/\s/g, '_')}">${node.status_display || node.status}</span>` : '';
-
-        html += `<div class="studio-fw-item${isSelected ? ' selected' : ''}" data-opt="${encoded}" data-search="${esc(searchText)}" style="padding-left:${12 + depth * 16}px" onclick="csToggleReq(this)">
-          <div class="studio-fw-item-checkbox"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-          <div class="studio-fw-item-content">
-            ${refLabel ? `<span class="studio-fw-ref">${esc(refLabel)}</span>` : ''}
-            <span class="studio-fw-desc">${esc(displayText)}</span>
-            ${statusBadge}
-          </div>
-        </div>`;
-      } else if (hasChildren) {
-        // Section node — expandable group
-        const groupId = 'csg-' + nodeId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 12);
-        // Count assessable children (recursively)
-        let childAssessable = 0;
-        const countChildren = (ch) => { for (const c of Object.values(ch)) { if (c.assessable) childAssessable++; if (c.children) countChildren(c.children); } };
-        countChildren(node.children);
-        const selectedInGroup = reqs.filter(r => {
-          // Check if any selected req lives under this node
-          const checkUrn = (ch) => { for (const [cid, cv] of Object.entries(ch)) { if (cv.assessable && (reqs.some(rr => rr.nodeUrn === cv.urn || rr.nodeId === cid))) return true; if (cv.children && checkUrn(cv.children)) return true; } return false; };
-          return false; // simplified — we'll update via csUpdateTreeCheckboxes
-        }).length;
-
-        html += `<div class="studio-fw-group${depth > 0 ? '' : ' collapsed'}" data-group-id="${groupId}" data-depth="${depth}" style="${depth > 0 ? 'margin-left:' + (depth * 8) + 'px;' : ''}">
-          <div class="studio-fw-group-header">
-            <div class="cs-fw-cb" onclick="event.stopPropagation();csToggleTreeGroup('${groupId}')" style="cursor:pointer">
-              <span class="studio-cb-mark"></span>
-            </div>
-            <div class="studio-fw-group-toggle" onclick="csTreeToggleGroup(this)">
-              <svg class="chevron-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              <span>${refLabel ? `<span class="studio-fw-ref" style="margin-right:6px">${esc(refLabel)}</span>` : ''}${esc(displayText)}</span>
-            </div>
-            <div class="studio-fw-group-actions">
-              <span class="studio-fw-group-count">${childAssessable} req</span>
-            </div>
-          </div>
-          <div class="studio-fw-group-items" data-search="${esc(searchText)}">
-            ${renderNodes(node.children, depth + 1)}
-          </div>
-        </div>`;
-      }
-      // Skip nodes with no children and not assessable (empty sections)
-    }
-    return html;
+  if (!csLibraries.length) {
+    listEl.innerHTML = '<div class="studio-empty-msg">No frameworks loaded from GRC.</div>';
+    return;
   }
 
-  container.innerHTML = renderNodes(tree, 0) || '<div class="studio-empty-msg">No requirements found in this assessment</div>';
+  let html = '';
+  csLibraries.forEach((fw, li) => {
+    const fwName = fw.name || fw.ref_id || 'Unknown Framework';
+    const groupId = 'csg-' + li;
+    const fwId = fw.id;
+    // Count selected requirements in this framework
+    const selectedInGroup = reqs.filter(r => r.frameworkId === fwId).length;
+    const cachedNodes = csFrameworkTrees[fwId];
+    const nodeCount = cachedNodes ? cachedNodes.length : '';
 
-  // Update group checkboxes based on saved selections
-  csUpdateTreeCheckboxes();
+    html += `<div class="studio-fw-group collapsed" data-group-id="${groupId}" data-fw-id="${fwId}">
+      <div class="studio-fw-group-header">
+        <div class="cs-fw-cb" onclick="event.stopPropagation();csToggleFwGroup('${groupId}','${esc(fwName)}')" style="cursor:pointer">
+          <span class="studio-cb-mark ${cachedNodes && selectedInGroup === cachedNodes.length && cachedNodes.length > 0 ? 'checked' : (selectedInGroup > 0 ? 'indeterminate' : '')}"></span>
+        </div>
+        <div class="studio-fw-group-toggle" onclick="csGrcFwToggleGroup(this, '${fwId}')">
+          <svg class="chevron-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>${esc(fwName)}</span>
+          ${fw.provider ? `<span style="font-size:10px;color:#6b7280;margin-left:6px">(${esc(fw.provider)})</span>` : ''}
+        </div>
+        <div class="studio-fw-group-actions">
+          <span class="studio-fw-group-count">${selectedInGroup > 0 ? selectedInGroup + '/' : ''}${nodeCount || '…'} req</span>
+        </div>
+      </div>
+      <div class="studio-fw-group-items" id="cs-fw-items-${fwId}">
+        ${cachedNodes ? csRenderFwTreeItems(cachedNodes, fwId, fwName, groupId, reqs) : '<div class="studio-loading"><svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading requirements…</span></div>'}
+      </div>
+    </div>`;
+  });
+
+  listEl.innerHTML = html;
 }
 
-function csTreeToggleGroup(el) {
-  el.closest('.studio-fw-group').classList.toggle('collapsed');
+// Flatten a GRC tree into assessable leaf nodes
+function csFlattenTree(tree, depth = 0) {
+  const nodes = [];
+  for (const [nodeId, node] of Object.entries(tree)) {
+    if (node.assessable) {
+      nodes.push({
+        nodeId,
+        urn: node.urn || '',
+        ref_id: node.ref_id || '',
+        name: node.name || '',
+        description: node.description || '',
+        depth,
+        assessable: true,
+      });
+    }
+    if (node.children && Object.keys(node.children).length > 0) {
+      nodes.push(...csFlattenTree(node.children, depth + 1));
+    }
+  }
+  return nodes;
 }
-window.csTreeToggleGroup = csTreeToggleGroup;
+
+// Render requirement items for a loaded tree
+function csRenderFwTreeItems(nodes, fwId, fwName, groupId, reqs) {
+  return nodes.map(node => {
+    const opt = {
+      frameworkId: fwId,
+      frameworkName: fwName,
+      nodeId: node.nodeId,
+      nodeUrn: node.urn,
+      refId: node.ref_id,
+      name: node.name,
+      description: node.description,
+      depth: node.depth,
+      assessable: node.assessable,
+    };
+    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(opt))));
+    const isSelected = reqs.some(r => r.nodeUrn === node.urn || r.nodeId === node.nodeId);
+    const depthDot = node.depth === 0 ? '●' : node.depth === 1 ? '○' : node.depth === 2 ? '◦' : '·';
+    const label = node.description || node.name || node.ref_id || '';
+    return `<div class="studio-fw-item${isSelected ? ' selected' : ''}" data-opt="${encoded}" data-group-id="${groupId}" data-search="${esc((node.ref_id + ' ' + label + ' ' + fwName).toLowerCase())}" onclick="csToggleReq(this)">
+      <div class="studio-fw-item-checkbox"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="studio-fw-item-content">
+        ${node.ref_id ? `<span class="studio-fw-ref">${esc(node.ref_id)}</span>` : ''}
+        <span class="studio-fw-desc"><span class="studio-fw-depth">${depthDot}</span> ${esc(label)}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Toggle group: expand/collapse. On first expand, fetch tree from GRC.
+async function csGrcFwToggleGroup(el, fwId) {
+  const group = el.closest('.studio-fw-group');
+  if (!group) return;
+  const wasCollapsed = group.classList.contains('collapsed');
+  group.classList.toggle('collapsed');
+
+  // If expanding and tree not yet loaded, fetch it
+  if (wasCollapsed && !csFrameworkTrees[fwId]) {
+    const itemsEl = document.getElementById('cs-fw-items-' + fwId);
+    if (!itemsEl) return;
+    itemsEl.innerHTML = '<div class="studio-loading"><svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading requirements…</span></div>';
+    try {
+      const d = await fetch(`/api/grc/frameworks/${fwId}/tree`).then(r => r.json());
+      if (!d.success || !d.tree) throw new Error('No tree data');
+      const flat = csFlattenTree(d.tree);
+      csFrameworkTrees[fwId] = flat;
+      // Find framework info
+      const fw = csLibraries.find(f => f.id === fwId);
+      const fwName = fw ? (fw.name || fw.ref_id) : 'Unknown';
+      const groupId = group.dataset.groupId;
+      const reqs = csSessionData.requirements || [];
+      itemsEl.innerHTML = csRenderFwTreeItems(flat, fwId, fwName, groupId, reqs);
+      // Update count in header
+      const countEl = group.querySelector('.studio-fw-group-count');
+      const selectedInGroup = reqs.filter(r => r.frameworkId === fwId).length;
+      if (countEl) countEl.textContent = (selectedInGroup > 0 ? selectedInGroup + '/' : '') + flat.length + ' req';
+    } catch (err) {
+      console.error('[GRC] Tree fetch error:', err);
+      itemsEl.innerHTML = '<div class="studio-empty-msg">Failed to load requirements.</div>';
+    }
+  }
+}
+window.csGrcFwToggleGroup = csGrcFwToggleGroup;
 
 function csDecodeOpt(enc) {
   return JSON.parse(decodeURIComponent(escape(atob(enc))));
 }
 
+function csFwToggleGroup(el) {
+  el.closest('.studio-fw-group').classList.toggle('collapsed');
+}
+window.csFwToggleGroup = csFwToggleGroup;
+
+// Match a requirement by nodeId or nodeUrn (GRC uses nodeId, legacy uses nodeUrn)
+function csReqMatch(r, opt) {
+  if (opt.nodeId && r.nodeId === opt.nodeId) return true;
+  if (opt.nodeUrn && r.nodeUrn === opt.nodeUrn) return true;
+  return false;
+}
+
 function csToggleReq(itemEl) {
   const opt = csDecodeOpt(itemEl.dataset.opt);
   if (!csSessionData.requirements) csSessionData.requirements = [];
-  const idx = csSessionData.requirements.findIndex(r => (r.nodeUrn && r.nodeUrn === opt.nodeUrn) || (r.nodeId && r.nodeId === opt.nodeId));
+  const idx = csSessionData.requirements.findIndex(r => csReqMatch(r, opt));
   if (idx === -1) {
     csSessionData.requirements.push(opt);
     itemEl.classList.add('selected');
@@ -1790,55 +1818,57 @@ function csToggleReq(itemEl) {
     itemEl.classList.remove('selected');
   }
   csUpdateReqCount();
-  csUpdateTreeCheckboxes();
+  csUpdateFwGroupCheckboxes();
 }
 window.csToggleReq = csToggleReq;
 
-function csToggleTreeGroup(groupId) {
+function csToggleFwGroup(groupId, fwName) {
   if (!csSessionData.requirements) csSessionData.requirements = [];
   const group = document.querySelector(`.studio-fw-group[data-group-id="${groupId}"]`);
   if (!group) return;
   const items = group.querySelectorAll('.studio-fw-item');
+  // Check if all visible items in group are selected
   const allSelected = Array.from(items).every(i => i.classList.contains('selected'));
 
   items.forEach(item => {
     const opt = csDecodeOpt(item.dataset.opt);
-    const idx = csSessionData.requirements.findIndex(r => (r.nodeUrn && r.nodeUrn === opt.nodeUrn) || (r.nodeId && r.nodeId === opt.nodeId));
+    const idx = csSessionData.requirements.findIndex(r => csReqMatch(r, opt));
     if (allSelected) {
+      // Deselect all in group
       if (idx >= 0) csSessionData.requirements.splice(idx, 1);
       item.classList.remove('selected');
     } else {
+      // Select all in group
       if (idx === -1) csSessionData.requirements.push(opt);
       item.classList.add('selected');
     }
   });
   csUpdateReqCount();
-  csUpdateTreeCheckboxes();
+  csUpdateFwGroupCheckboxes();
 }
-window.csToggleTreeGroup = csToggleTreeGroup;
+window.csToggleFwGroup = csToggleFwGroup;
 
 function csUpdateReqCount() {
   const reqs = csSessionData.requirements || [];
   const countEl = document.getElementById('cs-req-count');
   if (countEl) countEl.textContent = reqs.length;
-  const labelEl = document.getElementById('cs-req-label');
-  const fwName = csSessionData._caFrameworkName || '';
-  if (labelEl) labelEl.textContent = `requirements selected${fwName ? ' from ' + fwName : ''}`;
+  const fwCount = new Set(reqs.map(r => r.frameworkName)).size;
+  const labelEl = countEl?.nextElementSibling;
+  if (labelEl) labelEl.textContent = `requirements from ${fwCount} framework${fwCount !== 1 ? 's' : ''}`;
 }
 
-function csUpdateTreeCheckboxes() {
+function csUpdateFwGroupCheckboxes() {
+  const reqs = csSessionData.requirements || [];
   document.querySelectorAll('#cs-fw-list .studio-fw-group').forEach(group => {
-    const items = group.querySelectorAll(':scope > .studio-fw-group-items > .studio-fw-item');
-    // Also count items in nested sub-groups
-    const allItems = group.querySelectorAll('.studio-fw-item');
-    const total = allItems.length;
-    const selected = Array.from(allItems).filter(i => i.classList.contains('selected')).length;
-    const cb = group.querySelector(':scope > .studio-fw-group-header .studio-cb-mark');
+    const items = group.querySelectorAll('.studio-fw-item');
+    const total = items.length;
+    const selected = Array.from(items).filter(i => i.classList.contains('selected')).length;
+    const cb = group.querySelector('.cs-fw-cb .studio-cb-mark');
     if (cb) {
       cb.classList.toggle('checked', selected === total && total > 0);
       cb.classList.toggle('indeterminate', selected > 0 && selected < total);
     }
-    const countEl = group.querySelector(':scope > .studio-fw-group-header .studio-fw-group-count');
+    const countEl = group.querySelector('.studio-fw-group-count');
     if (countEl) countEl.textContent = (selected > 0 ? selected + '/' : '') + total + ' req';
   });
 }
@@ -1848,16 +1878,16 @@ function csAttachFwSearch() {
   if (input) {
     input.addEventListener('input', e => {
       const q = e.target.value.toLowerCase().trim();
-      // Search all items (leaves)
-      document.querySelectorAll('#cs-fw-list .studio-fw-item').forEach(item => {
-        const match = !q || (item.dataset.search || '').includes(q);
-        item.style.display = match ? '' : 'none';
-      });
-      // Show/hide groups based on visible children
       document.querySelectorAll('#cs-fw-list .studio-fw-group').forEach(group => {
-        const visibleItems = group.querySelectorAll('.studio-fw-item:not([style*="display: none"])');
-        group.style.display = visibleItems.length > 0 ? '' : 'none';
-        if (q && visibleItems.length > 0) group.classList.remove('collapsed');
+        const items = group.querySelectorAll('.studio-fw-item');
+        let vis = 0;
+        items.forEach(item => {
+          const match = !q || (item.dataset.search || '').includes(q);
+          item.style.display = match ? '' : 'none';
+          if (match) vis++;
+        });
+        group.style.display = vis > 0 ? '' : 'none';
+        if (q && vis > 0) group.classList.remove('collapsed');
         else if (!q) group.classList.add('collapsed');
       });
     });
@@ -1868,13 +1898,13 @@ function csAttachFwSearch() {
       if (!csSessionData.requirements) csSessionData.requirements = [];
       document.querySelectorAll('#cs-fw-list .studio-fw-item:not([style*="display: none"])').forEach(item => {
         const opt = csDecodeOpt(item.dataset.opt);
-        if (!csSessionData.requirements.some(r => (r.nodeUrn && r.nodeUrn === opt.nodeUrn) || (r.nodeId && r.nodeId === opt.nodeId))) {
+        if (!csSessionData.requirements.some(r => csReqMatch(r, opt))) {
           csSessionData.requirements.push(opt);
           item.classList.add('selected');
         }
       });
       csUpdateReqCount();
-      csUpdateTreeCheckboxes();
+      csUpdateFwGroupCheckboxes();
     });
   }
   const clearBtn = document.getElementById('cs-clear-all-btn');
@@ -1883,7 +1913,7 @@ function csAttachFwSearch() {
       csSessionData.requirements = [];
       document.querySelectorAll('#cs-fw-list .studio-fw-item.selected').forEach(i => i.classList.remove('selected'));
       csUpdateReqCount();
-      csUpdateTreeCheckboxes();
+      csUpdateFwGroupCheckboxes();
     });
   }
 }
