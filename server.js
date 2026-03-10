@@ -1287,64 +1287,79 @@ const server = http.createServer(async (req, res) => {
 
       console.log(`[GRC Export] Phase 1 done: ${results.length} controls created, ${errors.length} failed`);
 
-      // ── Phase 2: Fetch requirement assessments and link them to created controls ──
+      // ── Phase 2: Link selected requirements to generated applied controls ──
+      // Group all created control UUIDs by their source requirement
       let totalLinked = 0;
       if (results.length > 0) {
         try {
+          // Step 2a: Group applied control UUIDs by requirement (refId / URN)
+          const byReqRefId = {};  // refId → [grcId, grcId, ...]
+          const byReqUrn = {};    // URN → [grcId, grcId, ...]
+          for (const r of results) {
+            if (r.requirementRefId) {
+              if (!byReqRefId[r.requirementRefId]) byReqRefId[r.requirementRefId] = [];
+              byReqRefId[r.requirementRefId].push(r.grcId);
+            }
+            if (r.requirementUrn) {
+              if (!byReqUrn[r.requirementUrn]) byReqUrn[r.requirementUrn] = [];
+              byReqUrn[r.requirementUrn].push(r.grcId);
+            }
+          }
+
+          const uniqueReqs = new Set([...Object.keys(byReqRefId), ...Object.keys(byReqUrn)]);
+          console.log(`[GRC Link] ${results.length} controls grouped into ${uniqueReqs.size} requirement(s)`);
+
+          // Step 2b: Fetch requirement assessments from GRC (filtered by compliance assessment)
           const raFilter = compliance_assessment ? `?compliance_assessment=${compliance_assessment}` : '';
-          console.log(`[GRC Link] Fetching requirement assessments from GRC${compliance_assessment ? ` (assessment: ${compliance_assessment})` : ' (all)'}...`);
+          console.log(`[GRC Link] Fetching requirement assessments${compliance_assessment ? ` for assessment ${compliance_assessment}` : ' (all)'}...`);
           const raRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raFilter}`);
           if (!raRes.ok) throw new Error(`GRC API ${raRes.status}`);
           const raJson = await raRes.json();
           const assessments = Array.isArray(raJson.results) ? raJson.results : (Array.isArray(raJson) ? raJson : []);
           console.log(`[GRC Link] Fetched ${assessments.length} requirement assessments`);
 
-          // Build lookup maps: requirement URN/refId → [RA objects with id + existing applied_controls]
-          const byUrn = {};
-          const byRefId = {};
+          // Step 2c: For each RA, check if its requirement matches any of our selected requirements
+          for (const ra of assessments) {
+            const raId = ra.id || ra.uuid;
+            if (!raId) continue;
 
-          assessments.forEach(ra => {
-            const id = ra.id || ra.uuid;
-            if (!id) return;
             const urn = ra.requirement?.urn || ra.requirement_node || ra.urn || '';
             const refId = ra.requirement?.ref_id || ra.ref_id || '';
             const reqStr = typeof ra.requirement === 'string' ? ra.requirement : '';
-            // applied_controls may be objects {str, id} or plain UUID strings — normalize to UUIDs
+
+            // Find which applied controls belong to this requirement
+            const controlIds = byReqRefId[refId] || byReqUrn[urn] || byReqUrn[reqStr] || [];
+            if (!controlIds.length) continue;
+
+            // Get existing applied_controls on this RA (normalize objects to UUIDs)
             const rawExisting = Array.isArray(ra.applied_controls) ? ra.applied_controls : [];
-            const existing = rawExisting.map(ac => typeof ac === 'object' && ac !== null ? (ac.id || ac.uuid || '') : String(ac)).filter(Boolean);
+            const existingIds = rawExisting.map(ac => typeof ac === 'object' && ac !== null ? (ac.id || ac.uuid || '') : String(ac)).filter(Boolean);
 
-            const entry = { id, existing };
-            if (urn) { if (!byUrn[urn]) byUrn[urn] = []; byUrn[urn].push(entry); }
-            if (refId) { if (!byRefId[refId]) byRefId[refId] = []; byRefId[refId].push(entry); }
-            if (reqStr) { if (!byUrn[reqStr]) byUrn[reqStr] = []; byUrn[reqStr].push(entry); }
-          });
+            // Merge: existing + all new control UUIDs for this requirement
+            const merged = [...new Set([...existingIds, ...controlIds])];
 
-          // For each created control, find matching RAs and PATCH them
-          for (const r of results) {
-            const matchedRAs = byUrn[r.requirementUrn] || byRefId[r.requirementRefId] || [];
-            if (!matchedRAs.length) continue;
+            console.log(`[GRC Link] RA ${raId} (req: ${refId || urn}) ← ${controlIds.length} applied control(s): ${controlIds.join(', ')}`);
 
-            console.log(`[GRC Link] Control "${r.name}" (${r.grcId}) → ${matchedRAs.length} matching RA(s)`);
-
-            for (const ra of matchedRAs) {
-              try {
-                const mergedControls = [...new Set([...ra.existing, r.grcId])];
-                const patchRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${ra.id}/`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ applied_controls: mergedControls })
+            try {
+              const patchRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ applied_controls: merged })
+              });
+              if (patchRes.ok) {
+                console.log(`[GRC Link] ✓ RA ${raId} linked with ${controlIds.length} control(s)`);
+                totalLinked++;
+                // Tag which controls got linked
+                controlIds.forEach(grcId => {
+                  const r = results.find(x => x.grcId === grcId);
+                  if (r) r.linkedRA.push(raId);
                 });
-                if (patchRes.ok) {
-                  console.log(`[GRC Link] ✓ RA ${ra.id} ← applied control ${r.grcId}`);
-                  r.linkedRA.push(ra.id);
-                  totalLinked++;
-                } else {
-                  const errText = await patchRes.text();
-                  console.warn(`[GRC Link] Failed PATCH RA ${ra.id}: ${patchRes.status} ${errText}`);
-                }
-              } catch (linkErr) {
-                console.warn(`[GRC Link] Error linking RA ${ra.id}:`, linkErr.message);
+              } else {
+                const errText = await patchRes.text();
+                console.warn(`[GRC Link] Failed PATCH RA ${raId}: ${patchRes.status} ${errText}`);
               }
+            } catch (linkErr) {
+              console.warn(`[GRC Link] Error linking RA ${raId}:`, linkErr.message);
             }
           }
         } catch (raErr) {
