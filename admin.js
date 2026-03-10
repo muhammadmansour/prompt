@@ -2912,6 +2912,14 @@ function csRenderStepExport(el) {
           <div class="cs-export-summary-row"><span>Linked Requirements</span><span>${reqSet.size}</span></div>
         </div>
 
+        <div style="margin-top:10px">
+          <label style="font-size:12px;font-weight:600;color:#d1d5db;display:block;margin-bottom:4px">Compliance Assessment</label>
+          <select id="cs-compliance-assessment" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid #374151;background:#1f2937;color:#e5e7eb;font-size:12px">
+            <option value="">Loading assessments...</option>
+          </select>
+          <div style="font-size:10px;color:#6b7280;margin-top:3px">Select the assessment to link requirement assessments from</div>
+        </div>
+
         <div id="cs-export-grc-status" style="font-size:11px;margin-top:6px;color:#9ca3af"></div>
 
         ${allExist ? `
@@ -2971,6 +2979,30 @@ async function csCheckGrcStatus() {
 
     statusEl.innerHTML = `<span style="color:#10b981">✓ Connected to WathbaGRC</span> <span style="color:#9ca3af;font-size:11px">(${statusData.url})</span>`;
 
+    // Fetch compliance assessments for the dropdown
+    const caSelect = document.getElementById('cs-compliance-assessment');
+    if (caSelect) {
+      try {
+        const caRes = await fetch('/api/grc/compliance-assessments');
+        const caData = await caRes.json();
+        const assessments = Array.isArray(caData.results) ? caData.results : [];
+        if (assessments.length > 0) {
+          caSelect.innerHTML = '<option value="">-- Select Assessment --</option>' +
+            assessments.map(a => {
+              const name = a.name || a.str || a.id;
+              const project = a.project?.str || a.project?.name || '';
+              const label = project ? `${name} (${project})` : name;
+              return `<option value="${a.id}">${label}</option>`;
+            }).join('');
+        } else {
+          caSelect.innerHTML = '<option value="">No assessments found</option>';
+        }
+      } catch (caErr) {
+        console.warn('[GRC] Could not fetch compliance assessments:', caErr);
+        caSelect.innerHTML = '<option value="">Failed to load assessments</option>';
+      }
+    }
+
   } catch (err) {
     console.error('[GRC] Status check error:', err);
     statusEl.innerHTML = `<span style="color:#ef4444">⚠ ${err.message}</span>`;
@@ -3003,14 +3035,18 @@ async function csDoExport() {
       if (textEl) textEl.textContent = 'Creating applied controls in WathbaGRC...';
       if (fillEl) fillEl.style.width = '10%';
 
+      // Get selected compliance assessment for RA filtering
+      const caSelect = document.getElementById('cs-compliance-assessment');
+      const complianceAssessment = caSelect ? caSelect.value : '';
+
       // Send controls to server — server will:
       // 1. POST each applied control to GRC
-      // 2. Find matching requirement assessments by URN/refId
+      // 2. Fetch RAs filtered by compliance assessment
       // 3. PATCH each RA to link the newly created applied control
       const res = await fetch('/api/grc/applied-controls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ controls })
+        body: JSON.stringify({ controls, compliance_assessment: complianceAssessment || undefined })
       });
 
       if (fillEl) fillEl.style.width = '70%';

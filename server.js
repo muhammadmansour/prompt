@@ -1145,6 +1145,22 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- GRC Platform Proxy: Get compliance assessments ----
+  if (url.pathname === '/api/grc/compliance-assessments' && req.method === 'GET') {
+    try {
+      const grcRes = await fetch(`${GRC_API_URL}/api/compliance-assessments/`);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, results: data.results || data }));
+    } catch (error) {
+      console.error('[GRC] Compliance assessments error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   // ---- GRC Platform Proxy: Get folders ----
   if (url.pathname === '/api/grc/folders' && req.method === 'GET') {
     try {
@@ -1209,7 +1225,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/grc/applied-controls' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
-      const { controls, folder } = body;
+      const { controls, folder, compliance_assessment } = body;
       if (!controls || !Array.isArray(controls) || controls.length === 0) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'No controls to export.' }));
@@ -1275,8 +1291,9 @@ const server = http.createServer(async (req, res) => {
       let totalLinked = 0;
       if (results.length > 0) {
         try {
-          console.log(`[GRC Link] Fetching requirement assessments from GRC...`);
-          const raRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/`);
+          const raFilter = compliance_assessment ? `?compliance_assessment=${compliance_assessment}` : '';
+          console.log(`[GRC Link] Fetching requirement assessments from GRC${compliance_assessment ? ` (assessment: ${compliance_assessment})` : ' (all)'}...`);
+          const raRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raFilter}`);
           if (!raRes.ok) throw new Error(`GRC API ${raRes.status}`);
           const raJson = await raRes.json();
           const assessments = Array.isArray(raJson.results) ? raJson.results : (Array.isArray(raJson) ? raJson : []);
