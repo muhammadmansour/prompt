@@ -260,8 +260,8 @@ function orgContextToJSON(r) {
 const dbListCsSessions = db.prepare(`SELECT * FROM cs_sessions ORDER BY updated_at DESC`);
 const dbGetCsSession = db.prepare(`SELECT * FROM cs_sessions WHERE id = ?`);
 const dbInsertCsSession = db.prepare(`
-  INSERT INTO cs_sessions (id, name, status, step, requirements, collections, selected_files, session_files, org_context, controls, framework, exported_control_ids, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO cs_sessions (id, name, status, step, requirements, collections, selected_files, session_files, org_context, controls, framework, exported_control_ids, compliance_assessment, ra_map, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const dbUpdateCsSession = db.prepare(`
   UPDATE cs_sessions SET name = ?, status = ?, step = ?, requirements = ?, collections = ?, selected_files = ?, session_files = ?, org_context = ?, controls = ?, framework = ?, exported_control_ids = ?, compliance_assessment = ?, ra_map = ?, updated_at = ? WHERE id = ?
