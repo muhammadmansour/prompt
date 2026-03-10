@@ -1037,6 +1037,31 @@
 .studio-fw-desc { font-size: 11px; color: #374151; line-height: 1.4; }
 .studio-fw-depth { color: #9ca3af; margin-right: 2px; }
 
+/* Tree status badges */
+.cs-tree-status {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  background: rgba(107,114,128,0.1);
+  color: #6b7280;
+}
+.cs-tree-status-in_progress { background: rgba(59,130,246,0.1); color: #3b82f6; }
+.cs-tree-status-partially_done { background: rgba(234,179,8,0.1); color: #ca8a04; }
+.cs-tree-status-done { background: rgba(16,185,129,0.1); color: #10b981; }
+.cs-tree-status-non_compliant { background: rgba(239,68,68,0.1); color: #ef4444; }
+
+/* Nested tree groups */
+.studio-fw-group .studio-fw-group {
+  border-left: 2px solid rgba(107,114,128,0.15);
+  margin-left: 0;
+}
+.studio-fw-group .studio-fw-group > .studio-fw-group-header {
+  padding-left: 4px;
+}
+
 .studio-loading {
   display: flex;
   align-items: center;

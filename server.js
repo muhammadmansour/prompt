@@ -160,12 +160,6 @@ try {
   if (!csCols.includes('exported_control_ids')) {
     db.exec(`ALTER TABLE cs_sessions ADD COLUMN exported_control_ids TEXT NOT NULL DEFAULT '[]'`);
   }
-  if (!csCols.includes('compliance_assessment')) {
-    db.exec(`ALTER TABLE cs_sessions ADD COLUMN compliance_assessment TEXT DEFAULT ''`);
-  }
-  if (!csCols.includes('ra_map')) {
-    db.exec(`ALTER TABLE cs_sessions ADD COLUMN ra_map TEXT DEFAULT '{}'`);
-  }
 } catch (migErr) { console.warn('CS sessions migration:', migErr.message); }
 
 // Migrate org_contexts: add new profile columns if missing
@@ -260,11 +254,11 @@ function orgContextToJSON(r) {
 const dbListCsSessions = db.prepare(`SELECT * FROM cs_sessions ORDER BY updated_at DESC`);
 const dbGetCsSession = db.prepare(`SELECT * FROM cs_sessions WHERE id = ?`);
 const dbInsertCsSession = db.prepare(`
-  INSERT INTO cs_sessions (id, name, status, step, requirements, collections, selected_files, session_files, org_context, controls, framework, exported_control_ids, compliance_assessment, ra_map, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO cs_sessions (id, name, status, step, requirements, collections, selected_files, session_files, org_context, controls, framework, exported_control_ids, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const dbUpdateCsSession = db.prepare(`
-  UPDATE cs_sessions SET name = ?, status = ?, step = ?, requirements = ?, collections = ?, selected_files = ?, session_files = ?, org_context = ?, controls = ?, framework = ?, exported_control_ids = ?, compliance_assessment = ?, ra_map = ?, updated_at = ? WHERE id = ?
+  UPDATE cs_sessions SET name = ?, status = ?, step = ?, requirements = ?, collections = ?, selected_files = ?, session_files = ?, org_context = ?, controls = ?, framework = ?, exported_control_ids = ?, updated_at = ? WHERE id = ?
 `);
 const dbDeleteCsSession = db.prepare(`DELETE FROM cs_sessions WHERE id = ?`);
 
@@ -282,8 +276,6 @@ function csSessionToJSON(row) {
     controls: JSON.parse(row.controls || '[]'),
     framework: row.framework || '',
     exportedControlIds: JSON.parse(row.exported_control_ids || '[]'),
-    complianceAssessment: row.compliance_assessment || '',
-    raMap: JSON.parse(row.ra_map || '{}'),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1169,6 +1161,25 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- GRC Platform Proxy: Get compliance assessment tree ----
+  const caTreeMatch = url.pathname.match(/^\/api\/grc\/compliance-assessments\/([^/]+)\/tree\/?$/);
+  if (caTreeMatch && req.method === 'GET') {
+    try {
+      const caId = caTreeMatch[1];
+      console.log(`[GRC] Fetching tree for compliance assessment ${caId}`);
+      const grcRes = await fetch(`${GRC_API_URL}/api/compliance-assessments/${caId}/tree/`);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    } catch (error) {
+      console.error('[GRC] Compliance assessment tree error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   // ---- GRC Platform Proxy: Get folders ----
   if (url.pathname === '/api/grc/folders' && req.method === 'GET') {
     try {
@@ -1858,8 +1869,6 @@ const server = http.createServer(async (req, res) => {
         JSON.stringify(body.controls || []),
         body.framework || '',
         JSON.stringify(body.exportedControlIds || []),
-        body.complianceAssessment || '',
-        JSON.stringify(body.raMap || {}),
         now,
         now
       );
@@ -1907,8 +1916,6 @@ const server = http.createServer(async (req, res) => {
         body.controls !== undefined ? JSON.stringify(body.controls) : existing.controls,
         body.framework !== undefined ? body.framework : existing.framework,
         body.exportedControlIds !== undefined ? JSON.stringify(body.exportedControlIds) : existing.exported_control_ids,
-        body.complianceAssessment !== undefined ? body.complianceAssessment : (existing.compliance_assessment || ''),
-        body.raMap !== undefined ? JSON.stringify(body.raMap) : (existing.ra_map || '{}'),
         now,
         id
       );
