@@ -1432,6 +1432,7 @@ async function csNewSession() {
     orgContext: null,
     controls: [],
     status: 'draft',
+    complianceAssessment: '',
   };
   // Save to DB immediately
   await csSaveSession(csSessionData);
@@ -1547,13 +1548,6 @@ function csRenderStepRequirements(el) {
         </div>
       </div>
       <div class="cs-wizard-body">
-        <div style="margin-bottom:10px">
-          <label style="font-size:12px;font-weight:600;color:#d1d5db;display:block;margin-bottom:4px">Compliance Assessment</label>
-          <select id="cs-compliance-assessment" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid #374151;background:#1f2937;color:#e5e7eb;font-size:12px" onchange="csOnComplianceAssessmentChange()">
-            <option value="">Loading assessments...</option>
-          </select>
-          <div id="cs-ca-status" style="font-size:10px;color:#6b7280;margin-top:3px">Select the compliance assessment to link requirements from</div>
-        </div>
         <div class="studio-search-bar" style="margin-bottom:10px">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           <input type="text" placeholder="Search frameworks..." id="cs-fw-search" autocomplete="off">
@@ -1562,7 +1556,7 @@ function csRenderStepRequirements(el) {
             <button type="button" class="btn-studio-filter" id="cs-clear-all-btn">Clear</button>
           </div>
         </div>
-        <div id="cs-fw-list" class="studio-fw-list" style="max-height:320px;overflow-y:auto">
+        <div id="cs-fw-list" class="studio-fw-list" style="max-height:55vh;overflow-y:auto">
           <div class="studio-loading"><svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading frameworks...</span></div>
         </div>
       </div>
@@ -1584,76 +1578,39 @@ function csRenderStepRequirements(el) {
     }
     csRenderFwList();
     csAttachFwSearch();
-
-    // Load compliance assessments dropdown
-    const caSelect = document.getElementById('cs-compliance-assessment');
-    if (caSelect) {
-      try {
-        const caRes = await fetch('/api/grc/compliance-assessments');
-        const caData = await caRes.json();
-        const assessments = Array.isArray(caData.results) ? caData.results : [];
-        if (assessments.length > 0) {
-          const savedCA = csSessionData.complianceAssessment || '';
-          caSelect.innerHTML = '<option value="">-- Select Assessment --</option>' +
-            assessments.map(a => {
-              const name = a.name || a.str || a.id;
-              const project = a.project?.str || a.project?.name || '';
-              const label = project ? `${name} (${project})` : name;
-              return `<option value="${a.id}"${a.id === savedCA ? ' selected' : ''}>${label}</option>`;
-            }).join('');
-          // If we had a saved assessment, re-fetch RAs
-          if (savedCA) csOnComplianceAssessmentChange();
-        } else {
-          caSelect.innerHTML = '<option value="">No assessments found</option>';
-        }
-      } catch (caErr) {
-        console.warn('[GRC] Could not fetch compliance assessments:', caErr);
-        caSelect.innerHTML = '<option value="">Failed to load (GRC not available)</option>';
-      }
-    }
   })();
 }
 
-// When compliance assessment changes, fetch its RAs and store mapping
+// When compliance assessment changes, fetch its tree (keys = RA UUIDs)
 async function csOnComplianceAssessmentChange() {
   const caSelect = document.getElementById('cs-compliance-assessment');
   const statusEl = document.getElementById('cs-ca-status');
   const caId = caSelect ? caSelect.value : '';
 
   csSessionData.complianceAssessment = caId;
-  csSessionData.raMap = {}; // refId/URN → RA UUID
+  csSessionData.caTree = null; // reset cached CA tree
+
+  // Clear framework tree caches so they reload from CA tree
+  Object.keys(csFrameworkTrees).forEach(k => delete csFrameworkTrees[k]);
 
   if (!caId) {
     if (statusEl) statusEl.textContent = 'Select the compliance assessment to link requirements from';
     return;
   }
 
-  if (statusEl) statusEl.innerHTML = '<span style="color:#60a5fa">Fetching requirement assessments...</span>';
+  if (statusEl) statusEl.innerHTML = '<span style="color:#60a5fa">Loading compliance assessment tree...</span>';
 
   try {
-    const raRes = await fetch(`/api/grc/requirement-assessments?compliance_assessment=${caId}`);
-    const raData = await raRes.json();
-    const assessments = Array.isArray(raData.results) ? raData.results : [];
+    const d = await fetch(`/api/grc/compliance-assessments/${caId}/tree`).then(r => r.json());
+    if (!d.success || !d.tree) throw new Error('No tree data');
+    csSessionData.caTree = d.tree;
+    console.log(`[Step 1] CA tree loaded for ${caId}`, Object.keys(d.tree).length, 'top-level entries');
+    if (statusEl) statusEl.innerHTML = `<span style="color:#10b981">✓ Compliance assessment loaded</span>`;
 
-    // Build RA map: refId/URN → RA UUID
-    const raMap = {};
-    assessments.forEach(ra => {
-      const raId = ra.id || ra.uuid;
-      if (!raId) return;
-      const refId = ra.requirement?.ref_id || ra.ref_id || '';
-      const urn = ra.requirement?.urn || ra.requirement_node || ra.urn || '';
-      const reqStr = typeof ra.requirement === 'string' ? ra.requirement : '';
-      if (refId) raMap[refId] = raId;
-      if (urn) raMap[urn] = raId;
-      if (reqStr) raMap[reqStr] = raId;
-    });
-
-    csSessionData.raMap = raMap;
-    console.log(`[Step 1] Mapped ${assessments.length} RAs for assessment ${caId}`, raMap);
-
-    if (statusEl) statusEl.innerHTML = `<span style="color:#10b981">✓ ${assessments.length} requirement assessments loaded</span>`;
+    // Re-render the framework list to update counts
+    csRenderFwList();
   } catch (err) {
-    console.error('[Step 1] Failed to fetch RAs:', err);
+    console.error('[Step 1] Failed to fetch CA tree:', err);
     if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">⚠ ${err.message}</span>`;
   }
 }
@@ -1768,9 +1725,21 @@ async function csGrcFwToggleGroup(el, fwId) {
     if (!itemsEl) return;
     itemsEl.innerHTML = '<div class="studio-loading"><svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Loading requirements…</span></div>';
     try {
-      const d = await fetch(`/api/grc/frameworks/${fwId}/tree`).then(r => r.json());
-      if (!d.success || !d.tree) throw new Error('No tree data');
-      const flat = csFlattenTree(d.tree);
+      let tree;
+      // If CA tree is loaded, extract this framework's subtree (keys = RA UUIDs)
+      const caTree = csSessionData.caTree;
+      if (caTree && caTree[fwId]) {
+        // CA tree has framework IDs at top level, children underneath
+        tree = caTree[fwId].children || caTree[fwId];
+        console.log(`[GRC] Using CA tree for framework ${fwId}`);
+      } else {
+        // Fallback: fetch from framework tree endpoint (keys = requirement node UUIDs)
+        const d = await fetch(`/api/grc/frameworks/${fwId}/tree`).then(r => r.json());
+        if (!d.success || !d.tree) throw new Error('No tree data');
+        tree = d.tree;
+        console.log(`[GRC] Using framework tree for ${fwId} (no CA tree available)`);
+      }
+      const flat = csFlattenTree(tree);
       csFrameworkTrees[fwId] = flat;
       // Find framework info
       const fw = csLibraries.find(f => f.id === fwId);
@@ -1813,9 +1782,11 @@ function csToggleReq(itemEl) {
   if (idx === -1) {
     csSessionData.requirements.push(opt);
     itemEl.classList.add('selected');
+    console.log(`[Req Selected] refId=${opt.refId}, nodeId=${opt.nodeId}, nodeUrn=${opt.nodeUrn}, name=${opt.name}`);
   } else {
     csSessionData.requirements.splice(idx, 1);
     itemEl.classList.remove('selected');
+    console.log(`[Req Deselected] refId=${opt.refId}, nodeId=${opt.nodeId}, nodeUrn=${opt.nodeUrn}`);
   }
   csUpdateReqCount();
   csUpdateFwGroupCheckboxes();
@@ -2528,6 +2499,7 @@ async function csStartGenerate() {
         description: r.description,
         frameworkName: r.frameworkName,
         nodeUrn: r.nodeUrn,
+        nodeId: r.nodeId,
         depth: r.depth,
       })),
       orgContext: csSessionData.orgContext || null,
@@ -3155,16 +3127,13 @@ async function csDoExport() {
       if (textEl) textEl.textContent = 'Creating applied controls in WathbaGRC...';
       if (fillEl) fillEl.style.width = '10%';
 
-      // Send controls + RA map to server
-      // raMap was built in step 1: refId/URN → RA UUID
-      const raMap = csSessionData.raMap || {};
-      const raCount = Object.keys(raMap).length;
-      console.log(`[Export] Sending ${controls.length} controls with ${raCount} RA mappings`);
+      const complianceAssessment = csSessionData.complianceAssessment || '';
+      console.log(`[Export] Sending ${controls.length} controls to GRC (CA: ${complianceAssessment || 'none'})`);
 
       const res = await fetch('/api/grc/applied-controls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ controls, raMap })
+        body: JSON.stringify({ controls, complianceAssessment })
       });
 
       if (fillEl) fillEl.style.width = '70%';

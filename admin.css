@@ -993,7 +993,7 @@
 }
 .btn-studio-group-select:hover { background: var(--admin-primary); color: #fff; border-color: var(--admin-primary); }
 
-.studio-fw-group-items { border-top: 1px solid #e5e7eb; }
+.studio-fw-group-items { border-top: 1px solid #e5e7eb; max-height: 50vh; overflow-y: auto; }
 .studio-fw-item {
   display: flex;
   align-items: flex-start;
@@ -1569,7 +1569,7 @@
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
-  overflow: hidden;
+  overflow: visible;
 }
 .cs-wizard-header {
   padding: 20px;
