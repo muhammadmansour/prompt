@@ -34,24 +34,33 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GRC_API_URL = process.env.GRC_API_URL || 'https://grc.wathbah.dev';
 
 // ==========================================
-// Authentication
+// Authentication (via GRC IAM)
 // ==========================================
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@wathbahs.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin@admin';
-const AUTH_SECRET = process.env.AUTH_SECRET || crypto.randomBytes(32).toString('hex');
+// Maps local session token → GRC auth token
+const authSessions = new Map(); // { localToken: { grcToken, username } }
 
-// Active tokens (in-memory; survives until server restart)
-const authTokens = new Set();
-
-function generateToken() {
-  const token = crypto.randomBytes(48).toString('hex');
-  authTokens.add(token);
-  return token;
+function generateLocalToken() {
+  return crypto.randomBytes(48).toString('hex');
 }
 
 function isValidToken(token) {
-  return token && authTokens.has(token);
+  return token && authSessions.has(token);
+}
+
+function getGrcToken(localToken) {
+  const session = authSessions.get(localToken);
+  return session ? session.grcToken : null;
+}
+
+// Helper: make authenticated GRC API fetch
+function grcFetch(url, options = {}, localToken) {
+  const grcToken = localToken ? getGrcToken(localToken) : null;
+  const headers = { ...(options.headers || {}) };
+  if (grcToken) {
+    headers['Authorization'] = `Token ${grcToken}`;
+  }
+  return fetch(url, { ...options, headers });
 }
 
 // Public paths that don't need auth
@@ -948,24 +957,53 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
-  // ---- Auth: Login endpoint (public) ----
+  // ---- Auth: Login endpoint (via GRC IAM) ----
   if (url.pathname === '/api/auth/login' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
-      const { email, password } = body;
-      if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-        const token = generateToken();
-        console.log('Admin login successful:', email);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, token }));
-      } else {
-        console.log('Login failed for:', email);
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'Invalid email or password' }));
+      const { username, password } = body;
+      if (!username || !password) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Username and password are required.' }));
+        return;
       }
+
+      // Authenticate via GRC IAM API
+      console.log(`[Auth] Logging in via GRC IAM for user: ${username}`);
+      const grcLoginRes = await fetch(`${GRC_API_URL}/api/iam/login/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      if (!grcLoginRes.ok) {
+        const errText = await grcLoginRes.text();
+        console.log(`[Auth] GRC login failed for ${username}: ${grcLoginRes.status}`);
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Invalid username or password' }));
+        return;
+      }
+
+      const grcData = await grcLoginRes.json();
+      const grcToken = grcData.token || grcData.key || grcData.access;
+      if (!grcToken) {
+        console.error('[Auth] GRC login response missing token:', JSON.stringify(grcData));
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'GRC login succeeded but no token returned.' }));
+        return;
+      }
+
+      // Create local session linked to GRC token
+      const localToken = generateLocalToken();
+      authSessions.set(localToken, { grcToken, username });
+      console.log(`[Auth] Login successful for ${username} — GRC token stored`);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, token: localToken }));
     } catch (error) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: false, error: error.message }));
+      console.error('[Auth] Login error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Login failed: ' + error.message }));
     }
     return;
   }
@@ -973,7 +1011,7 @@ const server = http.createServer(async (req, res) => {
   // ---- Auth: Logout endpoint ----
   if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
     const token = getTokenFromRequest(req);
-    if (token) authTokens.delete(token);
+    if (token) authSessions.delete(token);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: true }));
     return;
@@ -1017,6 +1055,9 @@ const server = http.createServer(async (req, res) => {
       }
     }
   }
+
+  // Extract local token for GRC-authenticated fetch calls
+  const reqToken = getTokenFromRequest(req);
 
   // ---- Analyze API ----
   if (url.pathname === '/api/analyze' && req.method === 'POST') {
@@ -1149,7 +1190,7 @@ const server = http.createServer(async (req, res) => {
   // ---- GRC Platform Proxy: List frameworks ----
   if (url.pathname === '/api/grc/frameworks' && req.method === 'GET') {
     try {
-      const grcRes = await fetch(`${GRC_API_URL}/api/frameworks/`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/frameworks/`, {}, reqToken);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1167,7 +1208,7 @@ const server = http.createServer(async (req, res) => {
   if (fwTreeMatch && req.method === 'GET') {
     try {
       const fwId = fwTreeMatch[1];
-      const grcRes = await fetch(`${GRC_API_URL}/api/frameworks/${fwId}/tree/`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/frameworks/${fwId}/tree/`, {}, reqToken);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1186,7 +1227,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const caId = caTreeMatch[1];
       console.log(`[GRC] Fetching tree for compliance assessment ${caId}`);
-      const grcRes = await fetch(`${GRC_API_URL}/api/compliance-assessments/${caId}/tree/`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/compliance-assessments/${caId}/tree/`, {}, reqToken);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1203,7 +1244,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/grc/requirement-nodes' && req.method === 'GET') {
     try {
       const qs = url.search || '';
-      const grcRes = await fetch(`${GRC_API_URL}/api/requirement-nodes/${qs}`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/requirement-nodes/${qs}`, {}, reqToken);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1219,7 +1260,7 @@ const server = http.createServer(async (req, res) => {
   // ---- GRC Platform Proxy: Get compliance assessments ----
   if (url.pathname === '/api/grc/compliance-assessments' && req.method === 'GET') {
     try {
-      const grcRes = await fetch(`${GRC_API_URL}/api/compliance-assessments/`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/compliance-assessments/`, {}, reqToken);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1232,10 +1273,53 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ---- GRC Platform Proxy: Get folders ----
+  // ---- GRC Platform Proxy: Get organisation objectives ----
+  if (url.pathname === '/api/grc/organisation-objectives' && req.method === 'GET') {
+    try {
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/organisation-objectives/`, {}, reqToken);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, results: data.results || data }));
+    } catch (error) {
+      console.error('[GRC] Organisation objectives error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: Create organisation objective ----
+  if (url.pathname === '/api/grc/organisation-objectives' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      console.log(`[GRC] Creating organisation objective: "${body.name}"`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/organisation-objectives/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }, reqToken);
+      if (!grcRes.ok) {
+        const errText = await grcRes.text();
+        throw new Error(`GRC API ${grcRes.status}: ${errText}`);
+      }
+      const data = await grcRes.json();
+      console.log(`[GRC] Organisation objective created: ${data.id}`);
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, result: data }));
+    } catch (error) {
+      console.error('[GRC] Create organisation objective error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: Get folders (with query params) ----
   if (url.pathname === '/api/grc/folders' && req.method === 'GET') {
     try {
-      const grcRes = await fetch(`${GRC_API_URL}/api/folders/`);
+      const qs = url.search || '';
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/folders/${qs}`, {}, reqToken);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1252,7 +1336,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/grc/requirement-assessments' && req.method === 'GET') {
     try {
       const qs = url.search || '';
-      const grcRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${qs}`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/requirement-assessments/${qs}`, {}, reqToken);
       if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
       const data = await grcRes.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1272,11 +1356,11 @@ const server = http.createServer(async (req, res) => {
       const raId = raPatchMatch[1];
       const body = await parseBody(req);
       console.log(`[GRC] PATCH requirement-assessment ${raId}:`, JSON.stringify(body));
-      const grcRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
-      });
+      }, reqToken);
       if (!grcRes.ok) {
         const errText = await grcRes.text();
         throw new Error(`GRC API ${grcRes.status}: ${errText}`);
@@ -1314,7 +1398,7 @@ const server = http.createServer(async (req, res) => {
       // Pre-fetch existing applied controls to handle duplicates
       let existingControls = [];
       try {
-        const listRes = await fetch(`${GRC_API_URL}/api/applied-controls/?page_size=1000`);
+        const listRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/?page_size=1000`, {}, reqToken);
         if (listRes.ok) {
           const listData = await listRes.json();
           existingControls = Array.isArray(listData.results) ? listData.results : [];
@@ -1340,11 +1424,11 @@ const server = http.createServer(async (req, res) => {
 
           console.log(`[GRC Export] ${i + 1}/${controls.length}: POST "${grcBody.name}" (priority: ${grcBody.priority}, category: ${grcBody.category})`);
 
-          const grcRes = await fetch(`${GRC_API_URL}/api/applied-controls/`, {
+          const grcRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(grcBody)
-          });
+          }, reqToken);
 
           if (grcRes.ok) {
             const created = await grcRes.json();
@@ -1413,7 +1497,7 @@ const server = http.createServer(async (req, res) => {
 
         try {
           // Step 1: Fetch ALL compliance assessments
-          const caRes = await fetch(`${GRC_API_URL}/api/compliance-assessments/`);
+          const caRes = await grcFetch(`${GRC_API_URL}/api/compliance-assessments/`, {}, reqToken);
           if (!caRes.ok) throw new Error(`Failed to fetch CAs: ${caRes.status}`);
           const caData = await caRes.json();
           const allCAs = Array.isArray(caData.results) ? caData.results : [];
@@ -1427,7 +1511,7 @@ const server = http.createServer(async (req, res) => {
             let allRAs = [];
             let raUrl = `${GRC_API_URL}/api/requirement-assessments/?compliance_assessment=${caId}&page_size=1000`;
             while (raUrl) {
-              const raRes = await fetch(raUrl);
+              const raRes = await grcFetch(raUrl, {}, reqToken);
               if (!raRes.ok) { console.warn(`[GRC Link] Failed to fetch RAs for CA ${caId}: ${raRes.status}`); break; }
               const raData = await raRes.json();
               allRAs = allRAs.concat(Array.isArray(raData.results) ? raData.results : []);
@@ -1459,11 +1543,11 @@ const server = http.createServer(async (req, res) => {
                 const newCount = merged.length - existingIds.length;
                 console.log(`[GRC Link] PATCH RA ${raId} ← ${newCount} new, ${merged.length} total applied_controls`);
 
-                const patchRes = await fetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
+                const patchRes = await grcFetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ applied_controls: merged })
-                });
+                }, reqToken);
 
                 if (patchRes.ok) {
                   console.log(`[GRC Link] ✓ RA ${raId} linked`);

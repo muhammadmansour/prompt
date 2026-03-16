@@ -769,9 +769,221 @@ function populateMandatesFromFrameworks() {
   ).join('');
 }
 
-function openOrgModal() { populateMandatesFromFrameworks(); orgModal.classList.add('active'); document.body.style.overflow = 'hidden'; }
+async function openOrgModal() {
+  populateMandatesFromFrameworks();
+  orgModal.classList.add('active');
+  document.body.style.overflow = 'hidden';
+
+  // Fetch GRC objectives if not cached
+  if (!grcObjectivesCache) {
+    const labelEl = document.getElementById('org-objectives-label');
+    if (labelEl) labelEl.textContent = 'Loading objectives…';
+    await fetchGrcObjectives();
+  }
+  // Render checkboxes (editOrgContext will call with selectedIds separately)
+  if (editingOrgIdx === null) {
+    renderObjectivesCheckboxes([]);
+  }
+  // Close dropdown by default
+  const dd = document.getElementById('org-objectives-dropdown');
+  if (dd) dd.classList.remove('open');
+}
 function closeOrgModal() { orgModal.classList.remove('active'); document.body.style.overflow = ''; editingOrgIdx = null; clearOrgForm(); }
-let orgObjectives = []; // temp state for objectives list
+let orgObjectives = []; // temp state for objectives list (now stores {id, name} objects)
+let grcObjectivesCache = null; // cache fetched GRC objectives
+
+async function fetchGrcObjectives() {
+  try {
+    const res = await fetch('/api/grc/organisation-objectives');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    grcObjectivesCache = (data.results || []).map(o => ({ id: o.id, name: o.name, description: o.description || '' }));
+    return grcObjectivesCache;
+  } catch (err) {
+    console.error('Failed to fetch GRC objectives:', err);
+    grcObjectivesCache = [];
+    return [];
+  }
+}
+
+function renderObjectivesCheckboxes(selectedIds = []) {
+  const labelEl = document.getElementById('org-objectives-label');
+  const optionsEl = document.getElementById('org-objectives-options');
+  if (!optionsEl) return;
+
+  if (!grcObjectivesCache || grcObjectivesCache.length === 0) {
+    if (labelEl) labelEl.textContent = 'No objectives available';
+    optionsEl.innerHTML = '';
+    return;
+  }
+
+  optionsEl.innerHTML = grcObjectivesCache.map(obj => {
+    const checked = selectedIds.includes(obj.id) ? 'checked' : '';
+    return `<label>
+      <input type="checkbox" value="${esc(obj.id)}" ${checked} onchange="updateObjectivesLabel()">
+      <span><strong>${esc(obj.name)}</strong>${obj.description ? '<br><span style="font-size:10px;color:#9ca3af">' + esc(obj.description) + '</span>' : ''}</span>
+    </label>`;
+  }).join('');
+
+  updateObjectivesLabel();
+}
+
+function toggleObjectivesDropdown() {
+  const dd = document.getElementById('org-objectives-dropdown');
+  if (dd) dd.classList.toggle('open');
+}
+window.toggleObjectivesDropdown = toggleObjectivesDropdown;
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {
+  const dd = document.getElementById('org-objectives-dropdown');
+  if (dd && !dd.contains(e.target)) dd.classList.remove('open');
+});
+
+function updateObjectivesLabel() {
+  const labelEl = document.getElementById('org-objectives-label');
+  const chipsEl = document.getElementById('org-objectives-chips');
+  const checkboxes = document.querySelectorAll('#org-objectives-options input[type="checkbox"]:checked');
+  const count = checkboxes.length;
+
+  if (labelEl) {
+    if (count === 0) {
+      labelEl.textContent = 'Select objectives…';
+      labelEl.classList.remove('has-selection');
+    } else {
+      labelEl.textContent = `${count} objective${count > 1 ? 's' : ''} selected`;
+      labelEl.classList.add('has-selection');
+    }
+  }
+
+  // Render chips
+  if (chipsEl) {
+    if (count === 0) {
+      chipsEl.innerHTML = '';
+    } else {
+      chipsEl.innerHTML = Array.from(checkboxes).map(cb => {
+        const obj = grcObjectivesCache?.find(o => o.id === cb.value);
+        if (!obj) return '';
+        return `<span class="multiselect-chip">
+          ${esc(obj.name)}
+          <button type="button" class="multiselect-chip-remove" onclick="removeObjectiveById('${esc(obj.id)}')">&times;</button>
+        </span>`;
+      }).join('');
+    }
+  }
+}
+window.updateObjectivesLabel = updateObjectivesLabel;
+
+function removeObjectiveById(id) {
+  const cb = document.querySelector(`#org-objectives-options input[value="${id}"]`);
+  if (cb) { cb.checked = false; updateObjectivesLabel(); }
+}
+window.removeObjectiveById = removeObjectiveById;
+
+function getSelectedObjectives() {
+  const checkboxes = document.querySelectorAll('#org-objectives-options input[type="checkbox"]:checked');
+  const selected = [];
+  checkboxes.forEach(cb => {
+    const obj = grcObjectivesCache?.find(o => o.id === cb.value);
+    if (obj) selected.push(obj.name);
+  });
+  return selected;
+}
+
+function getSelectedObjectiveIds() {
+  const checkboxes = document.querySelectorAll('#org-objectives-options input[type="checkbox"]:checked');
+  return Array.from(checkboxes).map(cb => cb.value);
+}
+
+// ── Add Objective Modal ──
+const addObjModal = document.getElementById('add-obj-modal-overlay');
+
+async function openAddObjectiveModal() {
+  if (!addObjModal) return;
+  addObjModal.classList.add('active');
+  document.getElementById('add-obj-name').value = '';
+
+  // Fetch folders for the select
+  const folderSelect = document.getElementById('add-obj-folder');
+  folderSelect.innerHTML = '<option value="">Loading folders…</option>';
+  try {
+    const res = await fetch('/api/grc/folders?content_type=DO&content_type=GL');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const folders = data.folders || data.results || [];
+    if (folders.length === 0) {
+      folderSelect.innerHTML = '<option value="">No folders available</option>';
+    } else {
+      folderSelect.innerHTML = '<option value="">Select a folder…</option>' +
+        folders.map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('');
+    }
+  } catch (err) {
+    console.error('Failed to fetch folders:', err);
+    folderSelect.innerHTML = '<option value="">Error loading folders</option>';
+  }
+  document.getElementById('add-obj-name').focus();
+}
+window.openAddObjectiveModal = openAddObjectiveModal;
+
+function closeAddObjectiveModal() {
+  if (addObjModal) addObjModal.classList.remove('active');
+}
+window.closeAddObjectiveModal = closeAddObjectiveModal;
+
+async function saveNewObjective() {
+  const name = document.getElementById('add-obj-name').value.trim();
+  const folder = document.getElementById('add-obj-folder').value;
+
+  if (!name) {
+    toast('error', 'Validation', 'Name is required.');
+    document.getElementById('add-obj-name').focus();
+    return;
+  }
+  if (!folder) {
+    toast('error', 'Validation', 'Please select a folder.');
+    document.getElementById('add-obj-folder').focus();
+    return;
+  }
+
+  const saveBtn = document.getElementById('add-obj-save');
+  saveBtn.disabled = true;
+  try {
+    const res = await fetch('/api/grc/organisation-objectives', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, folder })
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || 'HTTP ' + res.status);
+    }
+    const data = await res.json();
+    toast('success', 'Created', `Objective "${name}" created in GRC.`);
+    closeAddObjectiveModal();
+
+    // Refresh the objectives cache and re-render checkboxes
+    grcObjectivesCache = null;
+    await fetchGrcObjectives();
+    // Preserve any currently checked items
+    const currentlySelected = getSelectedObjectiveIds();
+    // Auto-select the newly created objective
+    const newId = data.result?.id;
+    if (newId && !currentlySelected.includes(newId)) currentlySelected.push(newId);
+    renderObjectivesCheckboxes(currentlySelected);
+  } catch (err) {
+    console.error('Create objective error:', err);
+    toast('error', 'Failed', err.message);
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+window.saveNewObjective = saveNewObjective;
+
+// Close modal on Escape / overlay click
+if (addObjModal) {
+  addObjModal.addEventListener('click', e => { if (e.target === addObjModal) closeAddObjectiveModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && addObjModal.classList.contains('active')) closeAddObjectiveModal(); });
+}
 
 function clearOrgForm() {
   document.getElementById('org-name-en').value = '';
@@ -788,7 +1000,7 @@ function clearOrgForm() {
   document.getElementById('org-geographic').value = '';
   document.getElementById('org-it-infra').value = '';
   orgObjectives = [];
-  renderObjectivesList();
+  renderObjectivesCheckboxes([]);
   document.getElementById('org-notes').value = '';
 }
 
@@ -798,35 +1010,12 @@ function updateMaturityLabels(val) {
   });
 }
 
-function renderObjectivesList() {
-  const el = document.getElementById('org-objectives-list');
-  if (!el) return;
-  if (!orgObjectives.length) { el.innerHTML = ''; return; }
-  el.innerHTML = orgObjectives.map((obj, i) => `
-    <div class="objective-chip">
-      <span>${esc(obj)}</span>
-      <button type="button" onclick="removeObjective(${i})" class="objective-chip-remove">&times;</button>
-    </div>`).join('');
-}
-function removeObjective(i) { orgObjectives.splice(i, 1); renderObjectivesList(); }
-window.removeObjective = removeObjective;
-
 // Maturity slider
 document.getElementById('org-maturity')?.addEventListener('input', e => updateMaturityLabels(e.target.value));
 
 // Sector "custom" toggle
 document.getElementById('org-sector')?.addEventListener('change', e => {
   document.getElementById('org-sector-custom-row').style.display = e.target.value === 'custom' ? '' : 'none';
-});
-
-// Objectives add
-document.getElementById('org-objective-add')?.addEventListener('click', () => {
-  const inp = document.getElementById('org-objective-input');
-  const val = inp.value.trim();
-  if (val) { orgObjectives.push(val); inp.value = ''; renderObjectivesList(); }
-});
-document.getElementById('org-objective-input')?.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('org-objective-add')?.click(); }
 });
 
 document.getElementById('btn-new-context').addEventListener('click', () => {
@@ -874,7 +1063,7 @@ orgModalSave.addEventListener('click', async () => {
     dataClassification: dataCls,
     geographicScope: geo,
     itInfrastructure: itInfra,
-    strategicObjectives: orgObjectives,
+    strategicObjectives: getSelectedObjectives(),
     obligatoryFrameworks: mandates,
     notes,
     isActive: true,
@@ -903,7 +1092,7 @@ orgModalSave.addEventListener('click', async () => {
 });
 
 // Edit org profile
-function editOrgContext(idx) {
+async function editOrgContext(idx) {
   const ctx = orgContexts[idx];
   if (!ctx) return;
   editingOrgIdx = idx;
@@ -921,10 +1110,16 @@ function editOrgContext(idx) {
   document.getElementById('org-data-classification').value = ctx.dataClassification || '';
   document.getElementById('org-geographic').value = ctx.geographicScope || '';
   document.getElementById('org-it-infra').value = ctx.itInfrastructure || '';
-  orgObjectives = [...(ctx.strategicObjectives || [])];
-  renderObjectivesList();
   document.getElementById('org-notes').value = ctx.notes || '';
-  openOrgModal(); // populates mandate checkboxes from frameworks first
+  await openOrgModal(); // populates mandate checkboxes from frameworks first + fetches objectives
+
+  // Pre-select saved objectives by matching name → id
+  const savedObjNames = ctx.strategicObjectives || [];
+  const selectedIds = (grcObjectivesCache || [])
+    .filter(o => savedObjNames.includes(o.name))
+    .map(o => o.id);
+  renderObjectivesCheckboxes(selectedIds);
+
   // Now set mandates checkboxes after they've been populated
   const mandates = ctx.regulatoryMandates || [];
   document.querySelectorAll('#org-mandates-options input[type="checkbox"]').forEach(c => {

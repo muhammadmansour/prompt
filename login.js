@@ -56,11 +56,11 @@ loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   errorBox.classList.add('hidden');
 
-  const email = emailInput.value.trim();
+  const username = emailInput.value.trim();
   const password = passwordInput.value;
 
-  if (!email || !password) {
-    showError('Please enter both email and password.');
+  if (!username || !password) {
+    showError('Please enter both username and password.');
     return;
   }
 
@@ -75,7 +75,7 @@ loginForm.addEventListener('submit', async (e) => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ username, password })
     });
 
     const data = await res.json();

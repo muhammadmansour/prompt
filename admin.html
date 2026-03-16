@@ -689,15 +689,23 @@
           </div>
           <div class="admin-form-row">
             <label class="admin-form-label">Strategic Objectives</label>
-            <div class="objectives-list" id="org-objectives-list"></div>
-            <div class="objectives-input-row">
-              <input type="text" class="admin-form-input" id="org-objective-input" placeholder="Add a strategic objective…">
-              <button type="button" class="btn-admin-ghost btn-admin-sm" id="org-objective-add">
+            <div style="display:flex;gap:8px;align-items:flex-start">
+              <div class="multiselect-dropdown" id="org-objectives-dropdown" style="flex:1">
+                <div class="multiselect-trigger" id="org-objectives-trigger" onclick="toggleObjectivesDropdown()">
+                  <span class="multiselect-placeholder" id="org-objectives-label">Loading objectives…</span>
+                  <svg class="multiselect-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="multiselect-menu" id="org-objectives-menu">
+                  <div id="org-objectives-options"></div>
+                </div>
+              </div>
+              <button type="button" class="btn-admin-primary btn-admin-sm" onclick="openAddObjectiveModal()" title="Add new objective" style="white-space:nowrap;padding:8px 12px;border-radius:8px;height:38px;display:flex;align-items:center;gap:4px">
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1V11M1 6H11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                 Add
               </button>
             </div>
-            <span class="admin-form-hint">Free-text list of organizational strategic objectives for compliance alignment</span>
+            <div class="multiselect-chips" id="org-objectives-chips"></div>
+            <span class="admin-form-hint">Select strategic objectives from GRC organisation objectives</span>
           </div>
           <div class="admin-form-row">
             <label class="admin-form-label">Additional Notes</label>
@@ -710,6 +718,37 @@
         <button class="btn-admin-primary" id="org-modal-save">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           Create Context
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Objective Modal -->
+  <div class="admin-modal-overlay" id="add-obj-modal-overlay">
+    <div class="admin-modal" style="max-width:480px">
+      <div class="admin-modal-header">
+        <h3 class="admin-modal-title">New Strategic Objective</h3>
+        <button class="admin-modal-close" id="add-obj-modal-close" onclick="closeAddObjectiveModal()">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="admin-modal-body">
+        <div class="admin-form-row">
+          <label class="admin-form-label">Name <span class="required">*</span></label>
+          <input type="text" class="admin-form-input" id="add-obj-name" placeholder="e.g. Digital Transformation Strategy">
+        </div>
+        <div class="admin-form-row">
+          <label class="admin-form-label">Folder <span class="required">*</span></label>
+          <select class="admin-form-input" id="add-obj-folder" style="padding:8px 10px">
+            <option value="">Loading folders…</option>
+          </select>
+        </div>
+      </div>
+      <div class="admin-modal-footer">
+        <button class="btn-admin-ghost" onclick="closeAddObjectiveModal()">Cancel</button>
+        <button class="btn-admin-primary" id="add-obj-save" onclick="saveNewObjective()">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Create Objective
         </button>
       </div>
     </div>
