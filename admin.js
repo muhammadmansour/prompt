@@ -692,6 +692,12 @@ function renderOrgContextsList(query) {
     const mandates = ctx.regulatoryMandates || [];
     const mandHtml = mandates.map(m => `<span class="org-fw-pill" style="color:#b45309;background:#fffbeb;border-color:#fde68a">${esc(m)}</span>`).join('');
     const objectives = ctx.strategicObjectives || [];
+    const policies = ctx.policies || [];
+    const policiesHtml = policies.map(p => {
+      const name = typeof p === 'object' ? p.name : p;
+      const refId = typeof p === 'object' && p.refId ? ` (${esc(p.refId)})` : '';
+      return `<span class="org-fw-pill" style="color:#4338ca;background:#eef2ff;border-color:#c7d2fe">${esc(name)}${refId}</span>`;
+    }).join('');
 
     return `
       <div class="org-ctx-card" id="org-card-${origIdx}">
@@ -729,6 +735,7 @@ function renderOrgContextsList(query) {
           ${fws.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Obligatory Frameworks</span><div class="org-ctx-detail-pills">${allFwHtml}</div></div>` : ''}
           ${mandates.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Regulatory Mandates</span><div class="org-ctx-detail-pills">${mandHtml}</div></div>` : ''}
           ${objectives.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Strategic Objectives</span><ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(o)}</li>`).join('')}</ul></div>` : ''}
+          ${policies.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Policies</span><div class="org-ctx-detail-pills">${policiesHtml}</div></div>` : ''}
           ${ctx.notes ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Notes</span><p class="org-ctx-notes-text">${esc(ctx.notes)}</p></div>` : ''}
         </div>
       </div>`;
@@ -748,18 +755,34 @@ const orgModalSave = document.getElementById('org-modal-save');
 const orgModalTitle = document.getElementById('org-modal-title');
 let editingOrgIdx = null;
 
-function populateMandatesFromFrameworks() {
+let grcFrameworksCache = null; // cached GRC frameworks for mandate checkboxes
+
+async function populateMandatesFromFrameworks() {
   const container = document.getElementById('org-mandates-options');
   if (!container) return;
-  // Build list from Muraji frameworks
-  const fwNames = [];
-  if (frameworks && frameworks.length) {
-    frameworks.forEach(lib => {
-      const fw = lib.content?.framework;
-      const name = fw?.name || lib.name || '';
-      if (name) fwNames.push(name);
-    });
+
+  // Show loading state
+  container.innerHTML = '<span class="admin-form-hint" style="color:#9ca3af">Loading frameworks from GRC…</span>';
+
+  // Fetch from GRC frameworks API (use cache if available)
+  if (!grcFrameworksCache) {
+    try {
+      const d = await fetch('/api/grc/frameworks').then(r => r.json());
+      if (d.success && Array.isArray(d.results)) {
+        grcFrameworksCache = d.results;
+      } else {
+        grcFrameworksCache = [];
+      }
+    } catch (e) {
+      console.error('GRC frameworks fetch error for mandates:', e);
+      grcFrameworksCache = [];
+    }
   }
+
+  const fwNames = grcFrameworksCache
+    .map(fw => fw.name || fw.ref_id || '')
+    .filter(Boolean);
+
   if (!fwNames.length) {
     container.innerHTML = '<span class="admin-form-hint" style="color:#9ca3af">No frameworks loaded. Please check your connection.</span>';
     return;
@@ -770,7 +793,7 @@ function populateMandatesFromFrameworks() {
 }
 
 async function openOrgModal() {
-  populateMandatesFromFrameworks();
+  await populateMandatesFromFrameworks();
   orgModal.classList.add('active');
   document.body.style.overflow = 'hidden';
 
@@ -787,6 +810,18 @@ async function openOrgModal() {
   // Close dropdown by default
   const dd = document.getElementById('org-objectives-dropdown');
   if (dd) dd.classList.remove('open');
+
+  // Fetch GRC policies if not cached
+  if (!grcPoliciesCache) {
+    const polLabel = document.getElementById('org-policies-label');
+    if (polLabel) polLabel.textContent = 'Loading policies…';
+    await fetchGrcPolicies();
+  }
+  if (editingOrgIdx === null) {
+    renderPoliciesCheckboxes([]);
+  }
+  const polDd = document.getElementById('org-policies-dropdown');
+  if (polDd) polDd.classList.remove('open');
 }
 function closeOrgModal() { orgModal.classList.remove('active'); document.body.style.overflow = ''; editingOrgIdx = null; clearOrgForm(); }
 let orgObjectives = []; // temp state for objectives list (now stores {id, name} objects)
@@ -892,6 +927,124 @@ function getSelectedObjectives() {
 
 function getSelectedObjectiveIds() {
   const checkboxes = document.querySelectorAll('#org-objectives-options input[type="checkbox"]:checked');
+  return Array.from(checkboxes).map(cb => cb.value);
+}
+
+// ── Policies (from GRC applied-controls) ──
+let grcPoliciesCache = null;
+
+async function fetchGrcPolicies() {
+  try {
+    const res = await fetch('/api/grc/policies');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    grcPoliciesCache = (data.results || []).map(p => ({
+      id: p.id,
+      name: p.name || '',
+      refId: p.ref_id || '',
+      category: p.category || '',
+      status: p.status || '',
+      csfFunction: p.csf_function || '',
+      folder: p.folder ? (p.folder.str || '') : '',
+    }));
+    return grcPoliciesCache;
+  } catch (err) {
+    console.error('Failed to fetch GRC policies:', err);
+    grcPoliciesCache = [];
+    return [];
+  }
+}
+
+function renderPoliciesCheckboxes(selectedIds = []) {
+  const labelEl = document.getElementById('org-policies-label');
+  const optionsEl = document.getElementById('org-policies-options');
+  if (!optionsEl) return;
+
+  if (!grcPoliciesCache || grcPoliciesCache.length === 0) {
+    if (labelEl) labelEl.textContent = 'No policies available';
+    optionsEl.innerHTML = '';
+    return;
+  }
+
+  optionsEl.innerHTML = grcPoliciesCache.map(pol => {
+    const checked = selectedIds.includes(pol.id) ? 'checked' : '';
+    const badge = pol.refId ? `<span style="color:#6b7280;font-size:10px;margin-left:4px">${esc(pol.refId)}</span>` : '';
+    return `<label>
+      <input type="checkbox" value="${esc(pol.id)}" ${checked} onchange="updatePoliciesLabel()">
+      <span>${esc(pol.name)}${badge}</span>
+    </label>`;
+  }).join('');
+
+  updatePoliciesLabel();
+}
+
+function togglePoliciesDropdown() {
+  const dd = document.getElementById('org-policies-dropdown');
+  if (dd) dd.classList.toggle('open');
+}
+window.togglePoliciesDropdown = togglePoliciesDropdown;
+
+// Close policies dropdown when clicking outside
+document.addEventListener('click', e => {
+  const dd = document.getElementById('org-policies-dropdown');
+  if (dd && !dd.contains(e.target)) dd.classList.remove('open');
+});
+
+function filterPoliciesDropdown(query) {
+  const q = (query || '').toLowerCase();
+  const options = document.querySelectorAll('#org-policies-options label');
+  options.forEach(lbl => {
+    const text = lbl.textContent.toLowerCase();
+    lbl.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+window.filterPoliciesDropdown = filterPoliciesDropdown;
+
+function updatePoliciesLabel() {
+  const labelEl = document.getElementById('org-policies-label');
+  const chipsEl = document.getElementById('org-policies-chips');
+  const checkboxes = document.querySelectorAll('#org-policies-options input[type="checkbox"]:checked');
+  const count = checkboxes.length;
+
+  if (labelEl) {
+    labelEl.textContent = count === 0 ? 'Select policies…' : `${count} polic${count === 1 ? 'y' : 'ies'} selected`;
+  }
+
+  if (chipsEl) {
+    if (count === 0) {
+      chipsEl.innerHTML = '';
+    } else {
+      chipsEl.innerHTML = Array.from(checkboxes).map(cb => {
+        const pol = grcPoliciesCache?.find(p => p.id === cb.value);
+        if (!pol) return '';
+        return `<span class="multiselect-chip">
+          ${esc(pol.name)}
+          <button type="button" onclick="removePolicyById('${esc(pol.id)}')" class="multiselect-chip-remove">&times;</button>
+        </span>`;
+      }).join('');
+    }
+  }
+}
+window.updatePoliciesLabel = updatePoliciesLabel;
+
+function removePolicyById(id) {
+  const cb = document.querySelector(`#org-policies-options input[value="${id}"]`);
+  if (cb) { cb.checked = false; updatePoliciesLabel(); }
+}
+window.removePolicyById = removePolicyById;
+
+function getSelectedPolicies() {
+  const checkboxes = document.querySelectorAll('#org-policies-options input[type="checkbox"]:checked');
+  const selected = [];
+  checkboxes.forEach(cb => {
+    const pol = grcPoliciesCache?.find(p => p.id === cb.value);
+    if (pol) selected.push({ id: pol.id, name: pol.name, refId: pol.refId });
+  });
+  return selected;
+}
+
+function getSelectedPolicyIds() {
+  const checkboxes = document.querySelectorAll('#org-policies-options input[type="checkbox"]:checked');
   return Array.from(checkboxes).map(cb => cb.value);
 }
 
@@ -1001,6 +1154,7 @@ function clearOrgForm() {
   document.getElementById('org-it-infra').value = '';
   orgObjectives = [];
   renderObjectivesCheckboxes([]);
+  renderPoliciesCheckboxes([]);
   document.getElementById('org-notes').value = '';
 }
 
@@ -1065,6 +1219,7 @@ orgModalSave.addEventListener('click', async () => {
     itInfrastructure: itInfra,
     strategicObjectives: getSelectedObjectives(),
     obligatoryFrameworks: mandates,
+    policies: getSelectedPolicies(),
     notes,
     isActive: true,
   };
@@ -1125,6 +1280,12 @@ async function editOrgContext(idx) {
   document.querySelectorAll('#org-mandates-options input[type="checkbox"]').forEach(c => {
     c.checked = mandates.includes(c.value);
   });
+
+  // Pre-select saved policies by matching id
+  const savedPolicies = ctx.policies || [];
+  const savedPolicyIds = savedPolicies.map(p => typeof p === 'object' ? p.id : p).filter(Boolean);
+  renderPoliciesCheckboxes(savedPolicyIds);
+
   document.getElementById('org-name-en').focus();
 }
 window.editOrgContext = editOrgContext;

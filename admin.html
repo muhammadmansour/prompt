@@ -624,7 +624,7 @@
           <div class="admin-form-row">
             <label class="admin-form-label">Active Regulatory Mandates</label>
             <div class="mandate-options" id="org-mandates-options">
-              <span class="admin-form-hint" style="color:#9ca3af">Loading frameworks from Muraji…</span>
+              <span class="admin-form-hint" style="color:#9ca3af">Loading frameworks from GRC…</span>
             </div>
             <span class="admin-form-hint">Select all applicable regulatory mandates</span>
           </div>
@@ -707,6 +707,35 @@
             <div class="multiselect-chips" id="org-objectives-chips"></div>
             <span class="admin-form-hint">Select strategic objectives from GRC organisation objectives</span>
           </div>
+        </div>
+
+        <!-- Section: Policies -->
+        <div class="org-form-section">
+          <div class="org-form-section-title">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 2H11C11.6 2 12 2.4 12 3V11C12 11.6 11.6 12 11 12H3C2.4 12 2 11.6 2 11V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M5 5H9M5 7.5H9M5 10H7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Policies
+          </div>
+          <div class="admin-form-row">
+            <label class="admin-form-label">Linked Policies</label>
+            <div style="display:flex;gap:8px;align-items:flex-start">
+              <div class="multiselect-dropdown" id="org-policies-dropdown" style="flex:1">
+                <div class="multiselect-trigger" id="org-policies-trigger" onclick="togglePoliciesDropdown()">
+                  <span class="multiselect-placeholder" id="org-policies-label">Loading policies…</span>
+                  <svg class="multiselect-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="multiselect-menu" id="org-policies-menu">
+                  <input type="text" class="multiselect-search" id="org-policies-search" placeholder="Search policies…" oninput="filterPoliciesDropdown(this.value)" autocomplete="off" />
+                  <div id="org-policies-options" style="max-height:200px;overflow-y:auto"></div>
+                </div>
+              </div>
+            </div>
+            <div class="multiselect-chips" id="org-policies-chips"></div>
+            <span class="admin-form-hint">Select policies from GRC applied controls</span>
+          </div>
+        </div>
+
+        <!-- Section: Additional Notes -->
+        <div class="org-form-section">
           <div class="admin-form-row">
             <label class="admin-form-label">Additional Notes</label>
             <textarea class="admin-form-textarea" id="org-notes" rows="3" placeholder="Any additional context about this organization (Digital Twin will consume this profile)…"></textarea>

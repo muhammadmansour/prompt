@@ -183,6 +183,7 @@ try {
   addCol('geographic_scope', "TEXT DEFAULT ''");
   addCol('it_infrastructure', "TEXT DEFAULT ''");
   addCol('strategic_objectives', "TEXT DEFAULT '[]'");
+  addCol('policies', "TEXT DEFAULT '[]'");
 } catch (migErr) { console.warn('Org profile migration:', migErr.message); }
 
 console.log('SQLite database initialized (sessions.db)');
@@ -228,11 +229,11 @@ const dbUpdateLocalPrompt = db.prepare(`
 const dbListOrgContexts = db.prepare(`SELECT * FROM org_contexts ORDER BY created_at DESC`);
 const dbGetOrgContext = db.prepare(`SELECT * FROM org_contexts WHERE id = ?`);
 const dbInsertOrgContext = db.prepare(`
-  INSERT INTO org_contexts (id, name_en, name_ar, sector, sector_custom, size, compliance_maturity, regulatory_mandates, governance_structure, data_classification, geographic_scope, it_infrastructure, strategic_objectives, obligatory_frameworks, notes, is_active, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO org_contexts (id, name_en, name_ar, sector, sector_custom, size, compliance_maturity, regulatory_mandates, governance_structure, data_classification, geographic_scope, it_infrastructure, strategic_objectives, obligatory_frameworks, policies, notes, is_active, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const dbUpdateOrgContext = db.prepare(`
-  UPDATE org_contexts SET name_en = ?, name_ar = ?, sector = ?, sector_custom = ?, size = ?, compliance_maturity = ?, regulatory_mandates = ?, governance_structure = ?, data_classification = ?, geographic_scope = ?, it_infrastructure = ?, strategic_objectives = ?, obligatory_frameworks = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?
+  UPDATE org_contexts SET name_en = ?, name_ar = ?, sector = ?, sector_custom = ?, size = ?, compliance_maturity = ?, regulatory_mandates = ?, governance_structure = ?, data_classification = ?, geographic_scope = ?, it_infrastructure = ?, strategic_objectives = ?, obligatory_frameworks = ?, policies = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?
 `);
 const dbDeleteOrgContext = db.prepare(`DELETE FROM org_contexts WHERE id = ?`);
 
@@ -252,6 +253,7 @@ function orgContextToJSON(r) {
     itInfrastructure: r.it_infrastructure || '',
     strategicObjectives: JSON.parse(r.strategic_objectives || '[]'),
     obligatoryFrameworks: JSON.parse(r.obligatory_frameworks || '[]'),
+    policies: JSON.parse(r.policies || '[]'),
     notes: r.notes,
     isActive: !!r.is_active,
     created_at: r.created_at,
@@ -587,6 +589,7 @@ function buildOrgProfileText(orgContext) {
   if (orgContext.itInfrastructure) p.push(`IT Infrastructure Type: ${orgContext.itInfrastructure}`);
   if (orgContext.strategicObjectives && orgContext.strategicObjectives.length) p.push(`Strategic Objectives:\n${orgContext.strategicObjectives.map(o => '  - ' + o).join('\n')}`);
   if (orgContext.obligatoryFrameworks && orgContext.obligatoryFrameworks.length) p.push(`Obligatory Frameworks: ${orgContext.obligatoryFrameworks.join(', ')}`);
+  if (orgContext.policies && orgContext.policies.length) p.push(`Linked Policies:\n${orgContext.policies.map(pol => '  - ' + (pol.name || pol)).join('\n')}`);
   if (orgContext.notes) p.push(`Additional Notes: ${orgContext.notes}`);
   return p.join('\n');
 }
@@ -1267,6 +1270,23 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ success: true, results: data.results || data }));
     } catch (error) {
       console.error('[GRC] Compliance assessments error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: List policies (applied controls) ----
+  if (url.pathname === '/api/grc/policies' && req.method === 'GET') {
+    try {
+      const qs = url.search || '';
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/${qs ? qs + '&page_size=500' : '?page_size=500'}`, {}, reqToken);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, results: data.results || data }));
+    } catch (error) {
+      console.error('[GRC] Policies error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }
@@ -2179,6 +2199,7 @@ const server = http.createServer(async (req, res) => {
         body.itInfrastructure || '',
         JSON.stringify(body.strategicObjectives || []),
         JSON.stringify(body.obligatoryFrameworks || []),
+        JSON.stringify(body.policies || []),
         body.notes || '',
         body.isActive !== undefined ? (body.isActive ? 1 : 0) : 1,
         now,
@@ -2231,6 +2252,7 @@ const server = http.createServer(async (req, res) => {
         body.itInfrastructure !== undefined ? body.itInfrastructure : (row.it_infrastructure || ''),
         body.strategicObjectives !== undefined ? JSON.stringify(body.strategicObjectives) : (row.strategic_objectives || '[]'),
         body.obligatoryFrameworks !== undefined ? JSON.stringify(body.obligatoryFrameworks) : row.obligatory_frameworks,
+        body.policies !== undefined ? JSON.stringify(body.policies) : (row.policies || '[]'),
         body.notes !== undefined ? body.notes : row.notes,
         body.isActive !== undefined ? (body.isActive ? 1 : 0) : row.is_active,
         now,
