@@ -68,6 +68,7 @@ function navigateTo(page) {
     'audit-studio': 'Audit Studio',
     'controls-studio': 'Applied Controls Studio',
     'merge-optimizer': 'Control Merge Optimizer',
+    'policy-ingestion': 'Organization Policy Ingestion',
     'org-contexts': 'Organization Contexts',
     'prompts': 'Prompts',
     'file-collections': 'File Collections',
@@ -83,6 +84,7 @@ function navigateTo(page) {
   if (page === 'prompts') loadPrompts();
   if (page === 'controls-studio') loadControlsStudio();
   if (page === 'merge-optimizer') loadMergeOptimizer();
+  if (page === 'policy-ingestion') loadPolicyIngestion();
 }
 window.navigateTo = navigateTo;
 
@@ -4541,6 +4543,669 @@ if (studioStartBtn) {
     sessionStorage.setItem('auditSession', JSON.stringify(auditSession));
     window.location.href = '/chat.html';
   });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// POLICY INGESTION
+// ═══════════════════════════════════════════════════════════════
+
+let piCollections = [];
+let piPhase = 'collections'; // collections | collection-detail | config-modal | generating | review | success
+let piSelectedCollectionId = null;
+let piSelectedFileIds = [];
+let piGenerationResult = null;
+let piReviewPolicies = [];
+let piGrcFrameworksCache = null;
+
+// Mock data for initial demo (will be replaced by API)
+const PI_MOCK_COLLECTIONS = [
+  {
+    id: 'pc-1',
+    name: 'Information Security Policies',
+    description: 'Collection of information security, access control, and incident response policies',
+    files: [
+      { id: 'pf-1', name: 'Access-Control-Policy-2025.pdf', type: 'pdf', size: '2.4 MB', uploadedAt: 'Mar 15, 2026' },
+      { id: 'pf-2', name: 'Information-Security-Policy-v3.docx', type: 'docx', size: '890 KB', uploadedAt: 'Mar 15, 2026' },
+      { id: 'pf-3', name: 'Incident-Response-Procedures.pdf', type: 'pdf', size: '1.1 MB', uploadedAt: 'Mar 16, 2026' },
+      { id: 'pf-4', name: 'Data-Classification-Guidelines.pptx', type: 'pptx', size: '3.2 MB', uploadedAt: 'Mar 18, 2026' },
+    ],
+    status: 'ready',
+    lastUpdated: 'Mar 15, 2026',
+  },
+  {
+    id: 'pc-2',
+    name: 'HR Security Policies',
+    description: 'Human resources policy documents related to cybersecurity',
+    files: [
+      { id: 'pf-5', name: 'Acceptable-Use-Policy.pdf', type: 'pdf', size: '1.8 MB', uploadedAt: 'Mar 18, 2026' },
+      { id: 'pf-6', name: 'Employee-Security-Handbook.docx', type: 'docx', size: '2.1 MB', uploadedAt: 'Mar 18, 2026' },
+    ],
+    status: 'ready',
+    lastUpdated: 'Mar 18, 2026',
+  },
+  {
+    id: 'pc-3',
+    name: 'General Compliance Documents',
+    description: '',
+    files: [],
+    status: 'empty',
+    lastUpdated: 'Mar 20, 2026',
+  },
+];
+
+const PI_MOCK_GENERATED_POLICIES = [
+  { id: 'gp-1', code: 'RC-ISP-01', name: 'Access Control Policy', description: 'Defines controls for granting and revoking access to organizational systems and data, including account management and multi-factor authentication', category: 'policy', csfFunction: 'protect', sourceFile: 'Access-Control-Policy-2025.pdf', sourcePages: 'Pages 1-8', linkedRequirements: ['SAMA 3.4.1', 'NCA 2-3-1'], linkedFrameworks: ['SAMA Cyber Security', 'Essential Cybersecurity Controls'] },
+  { id: 'gp-2', code: 'RC-ISP-02', name: 'Privileged Access Management Procedures', description: 'Governs privileged access permissions and high-privilege accounts, including monitoring and periodic review mechanisms', category: 'process', csfFunction: 'protect', sourceFile: 'Access-Control-Policy-2025.pdf', sourcePages: 'Pages 9-14', linkedRequirements: ['SAMA 3.4.2'], linkedFrameworks: ['SAMA Cyber Security'] },
+  { id: 'gp-3', code: 'RC-ISP-03', name: 'General Information Security Policy', description: 'Establishes the overall information security framework for the organization, defining roles, responsibilities, and required governance', category: 'policy', csfFunction: 'govern', sourceFile: 'Information-Security-Policy-v3.docx', sourcePages: 'Full document', linkedRequirements: ['SAMA 3.1.1', 'NCA 1-1-1'], linkedFrameworks: ['SAMA Cyber Security', 'Essential Cybersecurity Controls'] },
+  { id: 'gp-4', code: 'RC-ISP-04', name: 'Incident Response Procedures', description: 'Defines the steps for detection, reporting, containment, and recovery from cybersecurity incidents', category: 'process', csfFunction: 'respond', sourceFile: 'Incident-Response-Procedures.pdf', sourcePages: 'Pages 1-18', linkedRequirements: ['SAMA 3.6.1'], linkedFrameworks: ['SAMA Cyber Security'] },
+  { id: 'gp-5', code: 'RC-ISP-05', name: 'Data Classification Policy', description: 'Defines data classification levels, handling criteria for each level, and appropriate protection controls', category: 'policy', csfFunction: 'identify', sourceFile: 'Data-Classification-Guidelines.pptx', sourcePages: 'Slides 1-22', linkedRequirements: ['SAMA 3.2.3', 'NCA 2-1-2'], linkedFrameworks: ['SAMA Cyber Security', 'Essential Cybersecurity Controls'] },
+  { id: 'gp-6', code: 'RC-ISP-06', name: 'Remote Access Controls', description: 'Defines technical requirements for remote access including VPN, authentication, encryption, and session monitoring', category: 'technical', csfFunction: 'protect', sourceFile: 'Access-Control-Policy-2025.pdf', sourcePages: 'Pages 15-20', linkedRequirements: ['SAMA 3.4.5'], linkedFrameworks: ['SAMA Cyber Security'] },
+  { id: 'gp-7', code: 'RC-ISP-07', name: 'Access Rights Review Policy', description: 'Governs periodic review of user access rights and revocation of unused permissions', category: 'process', csfFunction: 'govern', sourceFile: 'Access-Control-Policy-2025.pdf', sourcePages: 'Pages 21-25', linkedRequirements: ['SAMA 3.4.3'], linkedFrameworks: ['SAMA Cyber Security'] },
+  { id: 'gp-8', code: 'RC-ISP-08', name: 'User Registration Procedures', description: 'Defines steps for creating, modifying, and deactivating user accounts throughout the digital identity lifecycle', category: 'process', csfFunction: 'protect', sourceFile: 'Access-Control-Policy-2025.pdf', sourcePages: 'Pages 26-30', linkedRequirements: ['SAMA 3.4.1'], linkedFrameworks: ['SAMA Cyber Security'] },
+  { id: 'gp-9', code: 'RC-ISP-09', name: 'Third-Party Management Policy', description: 'Defines requirements for assessing and monitoring security risks from vendors and external service providers', category: 'policy', csfFunction: 'govern', sourceFile: 'Information-Security-Policy-v3.docx', sourcePages: 'Chapter 8', linkedRequirements: ['SAMA 3.1.4'], linkedFrameworks: ['SAMA Cyber Security'] },
+  { id: 'gp-10', code: 'RC-ISP-10', name: 'Personal Data Protection Controls', description: 'Defines controls for collecting, processing, and storing personal data in accordance with data protection regulations', category: 'policy', csfFunction: 'protect', sourceFile: 'Data-Classification-Guidelines.pptx', sourcePages: 'Slides 23-35', linkedRequirements: ['PDPL Art.14'], linkedFrameworks: ['Saudi Arabia Personal Data Protection'] },
+  { id: 'gp-11', code: 'RC-ISP-11', name: 'Backup and Recovery Procedures', description: 'Defines policies and procedures for periodic backups and recovery testing for critical systems and data', category: 'process', csfFunction: 'recover', sourceFile: 'Incident-Response-Procedures.pdf', sourcePages: 'Pages 19-24', linkedRequirements: ['SAMA 3.7.1'], linkedFrameworks: ['SAMA Cyber Security'] },
+  { id: 'gp-12', code: 'RC-ISP-12', name: 'Security Awareness and Training Policy', description: 'Defines the ongoing security awareness and training program for all organizational personnel', category: 'policy', csfFunction: 'govern', sourceFile: 'Information-Security-Policy-v3.docx', sourcePages: 'Chapter 12', linkedRequirements: ['SAMA 3.7.2', 'NCA 1-4-1'], linkedFrameworks: ['SAMA Cyber Security', 'Essential Cybersecurity Controls'] },
+];
+
+const PI_MOCK_GENERATION_RESULT = {
+  id: 'pg-1', collectionId: 'pc-1', libraryName: 'Information Security Policies — FinTech Test', provider: 'FinTech Test', language: 'en', confidenceScore: 87, generationTime: '4 min 22 sec', sourceFileCount: 4, policies: PI_MOCK_GENERATED_POLICIES, linkedFrameworks: ['SAMA Cyber Security', 'Essential Cybersecurity Controls', 'Saudi Arabia Personal Data Protection'],
+};
+
+const PI_MOCK_FRAMEWORKS = [
+  { id: 'f-1', name: 'Saudi Arabia Personal Data Protection', requirementCount: 91 },
+  { id: 'f-2', name: 'Digital Transformation (Qiyas)', requirementCount: 483 },
+  { id: 'f-3', name: 'Digital Transformation (Qiyas 2)', requirementCount: 131 },
+  { id: 'f-4', name: 'SAMA Cyber Security', requirementCount: 114 },
+  { id: 'f-5', name: 'Operational Technology Security', requirementCount: 192 },
+  { id: 'f-6', name: 'Essential Cybersecurity Controls', requirementCount: 143 },
+];
+
+function loadPolicyIngestion() {
+  if (!piCollections.length) piCollections = [...PI_MOCK_COLLECTIONS];
+  piRender();
+}
+
+function piRender() {
+  const el = document.getElementById('pi-content');
+  if (!el) return;
+  const coll = piCollections.find(c => c.id === piSelectedCollectionId) || null;
+
+  if (piPhase === 'collections') {
+    el.innerHTML = piRenderCollectionsList();
+  } else if (piPhase === 'collection-detail' || piPhase === 'config-modal') {
+    el.innerHTML = coll ? piRenderCollectionDetail(coll) : '';
+    if (piPhase === 'config-modal' && coll) {
+      el.innerHTML += piRenderConfigModal(coll);
+    }
+  } else if (piPhase === 'generating') {
+    el.innerHTML = piRenderProgress();
+    piStartProgressAnimation();
+  } else if (piPhase === 'review') {
+    el.innerHTML = piRenderReview();
+  } else if (piPhase === 'success') {
+    el.innerHTML = piRenderSuccess();
+  }
+}
+
+// ─── Collections List ──────────────────────────────────
+function piRenderCollectionsList() {
+  const statusCfg = { ready: { label: 'Ready', cls: 'pi-status-ready' }, empty: { label: 'Empty', cls: 'pi-status-empty' }, generating: { label: 'Generating', cls: 'pi-status-generating' }, generated: { label: 'Generated', cls: 'pi-status-generated' } };
+
+  if (piCollections.length === 0) {
+    return `
+      <div class="pi-header">
+        <div class="pi-header-left">
+          <div class="pi-header-title"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M5 8H10M5 10.5H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><h1>Organization Policy Ingestion</h1></div>
+          <p class="pi-header-subtitle">Upload your organizational policy documents and automatically convert them into a system-compliant policy library</p>
+        </div>
+        <button class="btn-admin-primary" onclick="piCreateNew()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> New Collection</button>
+      </div>
+      <div class="pi-empty">
+        <div class="pi-empty-icon"><svg width="32" height="32" viewBox="0 0 16 16" fill="none"><path d="M2 5V12C2 12.6 2.4 13 3 13H13C13.6 13 14 12.6 14 12V7C14 6.4 13.6 6 13 6H8L6.5 4H3C2.4 4 2 4.4 2 5Z" stroke="currentColor" stroke-width="1.5"/></svg></div>
+        <h3>No collections created yet</h3>
+        <p>Create a new collection and upload your policy documents</p>
+        <button class="btn-admin-primary" onclick="piCreateNew()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> New Collection</button>
+      </div>`;
+  }
+
+  const rows = piCollections.map(c => {
+    const sc = statusCfg[c.status] || statusCfg.empty;
+    const genCount = c.generatedPoliciesCount != null ? ` (${c.generatedPoliciesCount} policies)` : '';
+    return `<tr>
+      <td><div class="pi-coll-name"><div class="pi-coll-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M5 8H10M5 10.5H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div><div class="pi-coll-info"><div class="pi-coll-title">${esc(c.name)}</div>${c.description ? `<div class="pi-coll-desc">${esc(c.description)}</div>` : ''}</div></div></td>
+      <td class="center"><span class="pi-files-count">${c.files.length} ${c.files.length === 1 ? 'file' : 'files'}</span></td>
+      <td class="center"><span class="pi-status ${sc.cls}">${c.status === 'generated' ? '<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> ' : ''}${sc.label}${genCount}</span></td>
+      <td class="center"><span class="pi-date">${esc(c.lastUpdated)}</span></td>
+      <td class="right"><div class="pi-actions">
+        <button class="pi-btn pi-btn-view" onclick="piOpenCollection('${c.id}')"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M1 6C1 6 3 2 6 2C9 2 11 6 11 6C11 6 9 10 6 10C3 10 1 6 1 6Z" stroke="currentColor" stroke-width="1.2"/></svg> View</button>
+        ${c.status === 'ready' ? `<button class="pi-btn pi-btn-generate" onclick="piStartGeneration('${c.id}')"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1L7.5 4L11 4.5L8.5 7L9 10.5L6 9L3 10.5L3.5 7L1 4.5L4.5 4L6 1Z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg> Generate Policies</button>` : ''}
+        ${c.status === 'generated' ? `<button class="pi-btn pi-btn-library"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg> View Library</button>` : ''}
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="pi-header">
+      <div class="pi-header-left">
+        <div class="pi-header-title"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M5 8H10M5 10.5H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><h1>Organization Policy Ingestion</h1></div>
+        <p class="pi-header-subtitle">Upload your organizational policy documents and automatically convert them into a system-compliant policy library</p>
+      </div>
+      <button class="btn-admin-primary" onclick="piCreateNew()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> New Collection</button>
+    </div>
+    <div class="pi-table-card"><table class="pi-table"><thead><tr>
+      <th>Collection Name</th><th class="center">Files</th><th class="center">Status</th><th class="center">Last Updated</th><th class="right">Actions</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function piCreateNew() {
+  const newId = 'pc-' + Date.now();
+  piCollections.push({ id: newId, name: 'New Collection', description: '', files: [], status: 'empty', lastUpdated: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) });
+  piSelectedCollectionId = newId;
+  piSelectedFileIds = [];
+  piPhase = 'collection-detail';
+  piRender();
+}
+window.piCreateNew = piCreateNew;
+
+function piOpenCollection(id) {
+  piSelectedCollectionId = id;
+  piSelectedFileIds = [];
+  piPhase = 'collection-detail';
+  piRender();
+}
+window.piOpenCollection = piOpenCollection;
+
+function piStartGeneration(id) {
+  piSelectedCollectionId = id;
+  piSelectedFileIds = [];
+  piPhase = 'config-modal';
+  piRender();
+}
+window.piStartGeneration = piStartGeneration;
+
+function piBackToCollections() {
+  piPhase = 'collections';
+  piSelectedCollectionId = null;
+  piSelectedFileIds = [];
+  piRender();
+}
+window.piBackToCollections = piBackToCollections;
+
+// ─── Collection Detail ─────────────────────────────────
+function piRenderCollectionDetail(coll) {
+  const fileTypeIcons = { pdf: 'pi-file-icon-pdf', docx: 'pi-file-icon-docx', pptx: 'pi-file-icon-pptx', txt: 'pi-file-icon-txt', png: 'pi-file-icon-png', jpg: 'pi-file-icon-jpg' };
+  const allSelected = piSelectedFileIds.length === coll.files.length && coll.files.length > 0;
+  const genLabel = piSelectedFileIds.length > 0 ? `Generate Policies from ${piSelectedFileIds.length} Files` : 'Generate Organization Policies';
+
+  let filesHtml = '';
+  if (coll.files.length > 0) {
+    const selectAll = `<div class="pi-select-all">
+      <label><input type="checkbox" ${allSelected ? 'checked' : ''} onchange="piToggleAllFiles()"><span>Select All</span></label>
+      ${piSelectedFileIds.length > 0 ? `<span class="pi-selected-count">(${piSelectedFileIds.length} selected)</span>` : ''}
+    </div>`;
+
+    const cards = coll.files.map(f => {
+      const sel = piSelectedFileIds.includes(f.id);
+      return `<div class="pi-file-card${sel ? ' selected' : ''}">
+        <input type="checkbox" ${sel ? 'checked' : ''} onchange="piToggleFile('${f.id}')">
+        <div class="pi-file-icon ${fileTypeIcons[f.type] || 'pi-file-icon-txt'}"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg></div>
+        <div class="pi-file-info"><div class="pi-file-name">${esc(f.name)}</div><div class="pi-file-meta">${esc(f.size)} · ${esc(f.uploadedAt)}</div></div>
+        <div class="pi-file-actions">
+          <button class="pi-file-action-btn" title="Preview"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg></button>
+          <button class="pi-file-action-btn delete" title="Delete" onclick="piDeleteFile('${f.id}')"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M4 4V3C4 2.4 4.4 2 5 2H9C9.6 2 10 2.4 10 3V4M5 6.5V10.5M7 6.5V10.5M9 6.5V10.5M3 4L4 12H10L11 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+        ${sel ? '<div class="pi-file-selected-check"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' : ''}
+      </div>`;
+    }).join('');
+
+    filesHtml = selectAll + `<div class="pi-files-grid">${cards}</div>`;
+  } else {
+    filesHtml = `<div class="pi-files-empty"><div class="pi-files-empty-icon"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M14 10V13C14 13.6 13.6 14 13 14H3C2.4 14 2 13.6 2 13V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11 5L8 2L5 5M8 2V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><p>No files in this collection</p></div>`;
+  }
+
+  return `
+    <div class="pi-detail-header">
+      <button class="pi-back-btn" onclick="piBackToCollections()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div style="flex:1">
+        <div class="pi-detail-breadcrumb">Admin &gt; Organization Policy Ingestion</div>
+        <div class="pi-detail-title" onclick="piStartEditName()" id="pi-name-display">${esc(coll.name)} <svg class="pi-edit-icon" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10.5 2.5L11.5 3.5L4 11H2.5V9.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></div>
+        <input type="text" class="pi-detail-title-input" id="pi-name-input" value="${esc(coll.name)}" style="display:none" onblur="piCommitName()" onkeydown="piNameKeydown(event)">
+      </div>
+    </div>
+    <div class="pi-detail-card">
+      <div class="pi-detail-card-header">
+        <div>
+          <div class="pi-detail-desc" onclick="piStartEditDesc()" id="pi-desc-display">${coll.description || 'Add a description...'} <svg class="pi-edit-icon" width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M10.5 2.5L11.5 3.5L4 11H2.5V9.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></div>
+          <input type="text" class="pi-detail-desc-input" id="pi-desc-input" value="${esc(coll.description)}" style="display:none" placeholder="Add a description..." onblur="piCommitDesc()" onkeydown="piDescKeydown(event)">
+          <div class="pi-detail-file-count">${coll.files.length} ${coll.files.length === 1 ? 'file' : 'files'}</div>
+        </div>
+        <div class="pi-detail-actions">
+          <button class="pi-btn pi-btn-view" onclick="piTriggerUpload()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 8V11C12 11.6 11.6 12 11 12H3C2.4 12 2 11.6 2 11V8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M9.5 4L7 1.5L4.5 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 1.5V8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Upload Files</button>
+          <button class="btn-admin-primary" onclick="piGenerateFromDetail()" ${coll.files.length === 0 ? 'disabled' : ''} title="${coll.files.length === 0 ? 'Upload files first' : ''}"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L8.5 4L12 4.5L9.5 7L10 10.5L7 9L4 10.5L4.5 7L2 4.5L5.5 4L7 1Z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg> ${genLabel}</button>
+        </div>
+      </div>
+      ${filesHtml}
+      <div class="pi-dropzone" onclick="piTriggerUpload()">
+        <svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M14 10V13C14 13.6 13.6 14 13 14H3C2.4 14 2 13.6 2 13V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11 5L8 2L5 5M8 2V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <p>Drag files here or click to browse</p>
+        <p class="pi-dropzone-hint">PDF, DOCX, PPTX, TXT, PNG, JPG — Max 50 MB per file</p>
+      </div>
+      <input type="file" id="pi-file-input" style="display:none" multiple accept=".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg" onchange="piHandleFileUpload(event)">
+    </div>`;
+}
+
+function piStartEditName() {
+  document.getElementById('pi-name-display').style.display = 'none';
+  const inp = document.getElementById('pi-name-input');
+  inp.style.display = '';
+  inp.focus();
+  inp.select();
+}
+window.piStartEditName = piStartEditName;
+
+function piCommitName() {
+  const inp = document.getElementById('pi-name-input');
+  const coll = piCollections.find(c => c.id === piSelectedCollectionId);
+  if (coll && inp.value.trim()) coll.name = inp.value.trim();
+  piRender();
+}
+window.piCommitName = piCommitName;
+
+function piNameKeydown(e) { if (e.key === 'Enter') piCommitName(); if (e.key === 'Escape') piRender(); }
+window.piNameKeydown = piNameKeydown;
+
+function piStartEditDesc() {
+  document.getElementById('pi-desc-display').style.display = 'none';
+  const inp = document.getElementById('pi-desc-input');
+  inp.style.display = '';
+  inp.focus();
+  inp.select();
+}
+window.piStartEditDesc = piStartEditDesc;
+
+function piCommitDesc() {
+  const inp = document.getElementById('pi-desc-input');
+  const coll = piCollections.find(c => c.id === piSelectedCollectionId);
+  if (coll) coll.description = inp.value.trim();
+  piRender();
+}
+window.piCommitDesc = piCommitDesc;
+
+function piDescKeydown(e) { if (e.key === 'Enter') piCommitDesc(); if (e.key === 'Escape') piRender(); }
+window.piDescKeydown = piDescKeydown;
+
+function piToggleFile(id) {
+  const idx = piSelectedFileIds.indexOf(id);
+  if (idx === -1) piSelectedFileIds.push(id); else piSelectedFileIds.splice(idx, 1);
+  piRender();
+}
+window.piToggleFile = piToggleFile;
+
+function piToggleAllFiles() {
+  const coll = piCollections.find(c => c.id === piSelectedCollectionId);
+  if (!coll) return;
+  if (piSelectedFileIds.length === coll.files.length) piSelectedFileIds = [];
+  else piSelectedFileIds = coll.files.map(f => f.id);
+  piRender();
+}
+window.piToggleAllFiles = piToggleAllFiles;
+
+function piDeleteFile(fileId) {
+  const coll = piCollections.find(c => c.id === piSelectedCollectionId);
+  if (!coll) return;
+  coll.files = coll.files.filter(f => f.id !== fileId);
+  piSelectedFileIds = piSelectedFileIds.filter(id => id !== fileId);
+  coll.status = coll.files.length > 0 ? 'ready' : 'empty';
+  piRender();
+}
+window.piDeleteFile = piDeleteFile;
+
+function piTriggerUpload() {
+  document.getElementById('pi-file-input')?.click();
+}
+window.piTriggerUpload = piTriggerUpload;
+
+function piHandleFileUpload(event) {
+  const coll = piCollections.find(c => c.id === piSelectedCollectionId);
+  if (!coll) return;
+  const uploadedFiles = Array.from(event.target.files);
+  uploadedFiles.forEach(f => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const size = f.size > 1024 * 1024 ? (f.size / (1024 * 1024)).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
+    coll.files.push({
+      id: 'pf-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+      name: f.name,
+      type: ext,
+      size,
+      uploadedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    });
+  });
+  coll.status = coll.files.length > 0 ? 'ready' : 'empty';
+  coll.lastUpdated = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  event.target.value = '';
+  piRender();
+}
+window.piHandleFileUpload = piHandleFileUpload;
+
+function piGenerateFromDetail() {
+  piPhase = 'config-modal';
+  piRender();
+}
+window.piGenerateFromDetail = piGenerateFromDetail;
+
+// ─── Config Modal ──────────────────────────────────────
+function piRenderConfigModal(coll) {
+  const files = piSelectedFileIds.length > 0 ? coll.files.filter(f => piSelectedFileIds.includes(f.id)) : coll.files;
+  const fwList = PI_MOCK_FRAMEWORKS.map(fw => `
+    <div class="pi-fw-item"><input type="checkbox" id="pi-fw-${fw.id}" value="${fw.id}"><label for="pi-fw-${fw.id}">${esc(fw.name)}</label><span class="pi-fw-req-count">${fw.requirementCount} req</span></div>
+  `).join('');
+
+  const filesList = files.map(f => `
+    <div class="pi-included-file"><span>${esc(f.name)}</span><button onclick="piRemoveIncludedFile('${f.id}')"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M9 3L3 9M3 3L9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></div>
+  `).join('');
+
+  return `
+    <div class="pi-modal-overlay" onclick="piCloseConfigModal(event)">
+      <div class="pi-modal" onclick="event.stopPropagation()">
+        <div class="pi-modal-header">
+          <div><h2>Policy Generation Settings</h2><p>Configure generation settings before starting</p></div>
+          <button class="pi-modal-close" onclick="piCloseConfig()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        </div>
+        <div class="pi-modal-body">
+          <div><label class="pi-form-label">Policy Library Name</label><input type="text" class="pi-form-input" id="pi-cfg-lib-name" value="${esc(coll.name)} — FinTech Test" placeholder="e.g., Information Security Policies — FinTech Test"></div>
+          <div><label class="pi-form-label">Provider</label><input type="text" class="pi-form-input" id="pi-cfg-provider" value="FinTech Test" placeholder="Organization name"></div>
+          <div><label class="pi-form-label">Language</label><select class="pi-form-select" id="pi-cfg-lang"><option value="en">English</option><option value="ar">Arabic</option><option value="ar+en">Arabic + English</option></select></div>
+          <div>
+            <label class="pi-form-label">Detail Level</label>
+            <div class="pi-detail-radio-group">
+              <label class="pi-radio-option active" id="pi-radio-comprehensive" onclick="piSetDetailLevel('comprehensive')"><input type="radio" name="pi-detail" checked><div><div class="pi-radio-title">Comprehensive</div><div class="pi-radio-desc">Extract all policies and sub-procedures</div></div></label>
+              <label class="pi-radio-option" id="pi-radio-summary" onclick="piSetDetailLevel('summary')"><input type="radio" name="pi-detail"><div><div class="pi-radio-title">Summary</div><div class="pi-radio-desc">Main policies only</div></div></label>
+            </div>
+          </div>
+          <div><label class="pi-form-label">Link to Frameworks <span>(optional)</span></label><p class="pi-form-hint">Select frameworks to automatically link generated policies to</p><div class="pi-fw-list">${fwList}</div></div>
+          <div><label class="pi-form-label">Included Files</label><div class="pi-included-files" id="pi-cfg-files">${filesList || '<div style="text-align:center;padding:8px"><span style="font-size:10px;color:#9ca3af">No files selected</span></div>'}</div></div>
+        </div>
+        <div class="pi-modal-footer">
+          <button class="pi-btn pi-btn-view" onclick="piCloseConfig()">Cancel</button>
+          <button class="btn-admin-primary" onclick="piStartGenerate()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L8.5 4L12 4.5L9.5 7L10 10.5L7 9L4 10.5L4.5 7L2 4.5L5.5 4L7 1Z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg> Start Generation</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function piCloseConfigModal(e) { if (e.target === e.currentTarget) piCloseConfig(); }
+window.piCloseConfigModal = piCloseConfigModal;
+
+function piCloseConfig() { piPhase = 'collection-detail'; piRender(); }
+window.piCloseConfig = piCloseConfig;
+
+function piSetDetailLevel(level) {
+  document.getElementById('pi-radio-comprehensive')?.classList.toggle('active', level === 'comprehensive');
+  document.getElementById('pi-radio-summary')?.classList.toggle('active', level === 'summary');
+}
+window.piSetDetailLevel = piSetDetailLevel;
+
+function piRemoveIncludedFile(fileId) {
+  const el = document.getElementById('pi-cfg-files');
+  if (el) {
+    const item = el.querySelector(`[onclick*="${fileId}"]`)?.closest('.pi-included-file');
+    if (item) item.remove();
+  }
+}
+window.piRemoveIncludedFile = piRemoveIncludedFile;
+
+function piStartGenerate() {
+  piPhase = 'generating';
+  piRender();
+}
+window.piStartGenerate = piStartGenerate;
+
+// ─── Generation Progress ───────────────────────────────
+const PI_STEPS = [
+  { label: 'Reading Documents', icon: 'search' },
+  { label: 'Analyzing Content & Extracting Policies', icon: 'sparkles' },
+  { label: 'Building Library Structure', icon: 'network' },
+  { label: 'Linking Policies to Frameworks', icon: 'link' },
+  { label: 'Quality Review', icon: 'shield' },
+];
+
+function piRenderProgress() {
+  const stepsHtml = PI_STEPS.map((s, i) => `
+    <div class="pi-step" id="pi-step-${i}">
+      <div class="pi-step-icon pending" id="pi-step-icon-${i}"><svg width="14" height="14" class="${i === 0 ? 'pi-spinner' : ''}" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.3"/><path d="M7 2C10 2 12 4.7 12 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <span class="pi-step-label pending" id="pi-step-label-${i}">${s.label}</span>
+    </div>
+  `).join('');
+
+  return `
+    <div class="pi-header">
+      <div class="pi-header-left">
+        <div class="pi-header-title"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M5 8H10M5 10.5H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><h1>Organization Policy Ingestion</h1></div>
+      </div>
+    </div>
+    <div class="pi-progress-card">
+      <div class="pi-progress-inner">
+        <div class="pi-progress-icon"><svg width="36" height="36" viewBox="0 0 14 14" fill="none"><path d="M7 1L8.5 4L12 4.5L9.5 7L10 10.5L7 9L4 10.5L4.5 7L2 4.5L5.5 4L7 1Z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></div>
+        <h3 class="pi-progress-title">Analyzing documents and generating policies...</h3>
+        <p class="pi-progress-desc">You can navigate away and come back later — generation will continue in the background</p>
+        <div class="pi-steps">${stepsHtml}</div>
+        <div class="pi-progress-bar"><div class="pi-progress-fill" id="pi-progress-fill" style="width:0%"></div></div>
+        <div class="pi-progress-stats"><span id="pi-progress-pct">0%</span><span id="pi-progress-remaining">Remaining: ~6s</span></div>
+      </div>
+    </div>`;
+}
+
+function piStartProgressAnimation() {
+  let currentStep = 0;
+  let progress = 0;
+  const totalDuration = 6000;
+  const stepDuration = totalDuration / PI_STEPS.length;
+
+  // Activate first step
+  piUpdateStepUI(0, 'active');
+
+  const progressInterval = setInterval(() => {
+    progress = Math.min(progress + 2, 100);
+    const fillEl = document.getElementById('pi-progress-fill');
+    const pctEl = document.getElementById('pi-progress-pct');
+    const remEl = document.getElementById('pi-progress-remaining');
+    if (fillEl) fillEl.style.width = progress + '%';
+    if (pctEl) pctEl.textContent = progress + '%';
+    const secs = Math.max(0, Math.round(((100 - progress) / 100) * 6));
+    if (remEl) remEl.textContent = `Remaining: ~${secs}s`;
+    if (progress >= 100) clearInterval(progressInterval);
+  }, totalDuration / 50);
+
+  const stepInterval = setInterval(() => {
+    if (currentStep < PI_STEPS.length) piUpdateStepUI(currentStep, 'done');
+    currentStep++;
+    if (currentStep >= PI_STEPS.length) {
+      clearInterval(stepInterval);
+      setTimeout(() => {
+        piGenerationResult = { ...PI_MOCK_GENERATION_RESULT };
+        piReviewPolicies = [...PI_MOCK_GENERATED_POLICIES];
+        piPhase = 'review';
+        piRender();
+      }, 600);
+    } else {
+      piUpdateStepUI(currentStep, 'active');
+    }
+  }, stepDuration);
+}
+
+function piUpdateStepUI(idx, state) {
+  const iconEl = document.getElementById(`pi-step-icon-${idx}`);
+  const labelEl = document.getElementById(`pi-step-label-${idx}`);
+  if (!iconEl || !labelEl) return;
+
+  iconEl.className = 'pi-step-icon ' + state;
+  labelEl.className = 'pi-step-label ' + state;
+
+  if (state === 'done') {
+    iconEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  } else if (state === 'active') {
+    iconEl.innerHTML = '<svg width="14" height="14" class="pi-spinner" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.3"/><path d="M7 2C10 2 12 4.7 12 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  }
+}
+
+// ─── Policy Review ─────────────────────────────────────
+function piRenderReview() {
+  if (!piGenerationResult) return '';
+  const r = piGenerationResult;
+  const confClass = r.confidenceScore >= 80 ? 'pi-confidence-high' : r.confidenceScore >= 60 ? 'pi-confidence-mid' : 'pi-confidence-low';
+  const confBarClass = r.confidenceScore >= 80 ? 'background:#059669' : r.confidenceScore >= 60 ? 'background:#d97706' : 'background:#dc2626';
+
+  const catLabels = { policy: { label: 'Policy', cls: 'pi-tag-policy' }, process: { label: 'Process', cls: 'pi-tag-process' }, technical: { label: 'Technical', cls: 'pi-tag-technical' }, physical: { label: 'Physical', cls: 'pi-tag-physical' } };
+  const csfLabels = { govern: { label: 'Govern', cls: 'pi-tag-govern' }, protect: { label: 'Protect', cls: 'pi-tag-protect' }, detect: { label: 'Detect', cls: 'pi-tag-detect' }, respond: { label: 'Respond', cls: 'pi-tag-respond' }, recover: { label: 'Recover', cls: 'pi-tag-recover' }, identify: { label: 'Identify', cls: 'pi-tag-identify' } };
+
+  const policiesHtml = piReviewPolicies.map((p, idx) => {
+    const cat = catLabels[p.category] || catLabels.policy;
+    const csf = csfLabels[p.csfFunction] || csfLabels.govern;
+    const expanded = idx === 0;
+
+    return `
+      <div class="pi-policy-item">
+        <div class="pi-policy-item-header" onclick="piTogglePolicy('${p.id}')">
+          <div class="pi-policy-toggle"><svg width="14" height="14" viewBox="0 0 12 12" fill="none"><path d="${expanded ? 'M3 5L6 8L9 5' : 'M5 3L8 6L5 9'}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <span class="pi-policy-code">${esc(p.code)}</span>
+          <span class="pi-policy-name">${esc(p.name)}</span>
+          <div class="pi-policy-tags">
+            <span class="pi-policy-tag ${cat.cls}">${cat.label}</span>
+            <span class="pi-policy-tag ${csf.cls}">${csf.label}</span>
+            <button class="pi-policy-edit-btn" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M10.5 2.5L11.5 3.5L4 11H2.5V9.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></button>
+            <button class="pi-policy-delete-btn" onclick="event.stopPropagation();piDeletePolicy('${p.id}')"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M4 4V3C4 2.4 4.4 2 5 2H9C9.6 2 10 2.4 10 3V4M5 6.5V10.5M7 6.5V10.5M9 6.5V10.5M3 4L4 12H10L11 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+        </div>
+        <div class="pi-policy-detail${expanded ? ' open' : ''}" id="pi-policy-detail-${p.id}">
+          <div class="pi-policy-detail-section"><div class="pi-policy-detail-label">Description</div><p class="pi-policy-detail-text">${esc(p.description)}</p></div>
+          <div class="pi-policy-detail-section"><div class="pi-policy-detail-label">Source</div><div class="pi-policy-detail-source"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg><span>${esc(p.sourceFile)}</span><span class="pages">(${esc(p.sourcePages)})</span></div></div>
+          <div class="pi-policy-detail-section">
+            <div class="pi-policy-detail-label">Linked Requirements</div>
+            <div class="pi-policy-reqs">${p.linkedRequirements.map(r2 => `<span class="pi-policy-req-pill">${esc(r2)}</span>`).join('')}</div>
+            <div class="pi-policy-reqs" style="margin-top:6px">${p.linkedFrameworks.map(fw => `<span class="pi-policy-fw-pill">${esc(fw)}</span>`).join('')}</div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="pi-review-header"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M5 8H10M5 10.5H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><h1>Review Generated Policies</h1></div>
+    <p class="pi-review-subtitle">Review the policies extracted from your documents before adding them to the system</p>
+
+    <div class="pi-review-stats"><div class="pi-review-stats-grid">
+      <div><div class="pi-review-stat-label">Library Name</div><div class="pi-review-stat-value">${esc(r.libraryName)}</div></div>
+      <div><div class="pi-review-stat-label">Source Files</div><div class="pi-review-stat-value">${r.sourceFileCount} files</div></div>
+      <div><div class="pi-review-stat-label">Extracted Policies</div><div class="pi-review-stat-value">${piReviewPolicies.length} policies</div></div>
+      <div><div class="pi-review-stat-label">Linked Frameworks</div><div class="pi-review-stat-value">${r.linkedFrameworks.length} frameworks</div></div>
+      <div><div class="pi-review-stat-label">Confidence Score</div><div class="pi-confidence"><span class="pi-confidence-badge ${confClass}">${r.confidenceScore}%</span><div class="pi-confidence-bar"><div class="pi-confidence-bar-fill" style="width:${r.confidenceScore}%;${confBarClass}"></div></div></div></div>
+      <div><div class="pi-review-stat-label">Generation Time</div><div class="pi-review-stat-value">${esc(r.generationTime)}</div></div>
+    </div></div>
+
+    <div class="pi-policy-panel">
+      <div class="pi-policy-panel-header">
+        <h3><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L12 5V11L8 14L4 11V5L8 2Z" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg> ${esc(r.libraryName)}</h3>
+        <p>${piReviewPolicies.length} extracted policies — click to view details or edit</p>
+      </div>
+      <div class="pi-policy-list">
+        ${policiesHtml}
+        <button class="pi-add-policy-btn"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Add Policy Manually</button>
+      </div>
+    </div>
+
+    <div class="pi-review-footer">
+      <button class="pi-btn pi-btn-discard" onclick="piDiscard()">Discard & Delete</button>
+      <div style="display:flex;gap:8px">
+        <button class="pi-btn pi-btn-regenerate" onclick="piRegenerate()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 6C1 3.2 3.2 1 6 1C8.8 1 11 3.2 11 6C11 8.8 8.8 11 6 11" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M4 6L1 6L1 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Regenerate</button>
+        <button class="pi-btn pi-btn-approve" onclick="piApprove()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Approve & Create Library</button>
+      </div>
+    </div>`;
+}
+
+function piTogglePolicy(id) {
+  const detail = document.getElementById(`pi-policy-detail-${id}`);
+  if (detail) detail.classList.toggle('open');
+  // Update toggle arrow
+  const item = detail?.closest('.pi-policy-item');
+  if (item) {
+    const toggle = item.querySelector('.pi-policy-toggle svg path');
+    if (toggle) {
+      const isOpen = detail.classList.contains('open');
+      toggle.setAttribute('d', isOpen ? 'M3 5L6 8L9 5' : 'M5 3L8 6L5 9');
+    }
+  }
+}
+window.piTogglePolicy = piTogglePolicy;
+
+function piDeletePolicy(id) {
+  piReviewPolicies = piReviewPolicies.filter(p => p.id !== id);
+  piRender();
+}
+window.piDeletePolicy = piDeletePolicy;
+
+function piDiscard() { piBackToCollections(); }
+window.piDiscard = piDiscard;
+
+function piRegenerate() { piPhase = 'generating'; piRender(); }
+window.piRegenerate = piRegenerate;
+
+function piApprove() {
+  if (piSelectedCollectionId) {
+    const coll = piCollections.find(c => c.id === piSelectedCollectionId);
+    if (coll) {
+      coll.status = 'generated';
+      coll.generatedPoliciesCount = piReviewPolicies.length;
+      coll.lastUpdated = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+  }
+  piPhase = 'success';
+  piRender();
+}
+window.piApprove = piApprove;
+
+// ─── Success Screen ────────────────────────────────────
+function piRenderSuccess() {
+  if (!piGenerationResult) return '';
+  const r = piGenerationResult;
+
+  return `
+    <div class="pi-header">
+      <div class="pi-header-left">
+        <div class="pi-header-title"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M5 8H10M5 10.5H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><h1>Organization Policy Ingestion</h1></div>
+      </div>
+    </div>
+    <div class="pi-success-card">
+      <div class="pi-success-banner">
+        <h3><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="white" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Policy library created successfully!</h3>
+        <p>Your documents have been converted into a system-compliant policy library</p>
+      </div>
+      <div class="pi-success-body" style="text-align:center">
+        <div class="pi-success-icon"><svg width="32" height="32" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#059669" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="#059669" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+        <div class="pi-success-stats">
+          <div class="pi-success-stat pi-success-stat-green"><div class="pi-success-stat-val">${piReviewPolicies.length}</div><div class="pi-success-stat-label">Policies Generated</div></div>
+          <div class="pi-success-stat pi-success-stat-blue"><div class="pi-success-stat-val">${r.linkedFrameworks.length}</div><div class="pi-success-stat-label">Frameworks Linked</div></div>
+          <div class="pi-success-stat pi-success-stat-gray"><div class="pi-success-stat-val">${r.sourceFileCount}</div><div class="pi-success-stat-label">Source Files</div></div>
+        </div>
+
+        <div class="pi-success-details">
+          <div class="pi-success-detail-row"><span class="label">Library Name</span><span class="value">${esc(r.libraryName)}</span></div>
+          <div class="pi-success-detail-row"><span class="label">Policies Generated</span><span class="value">${piReviewPolicies.length} policies</span></div>
+          <div class="pi-success-detail-row"><span class="label">Linked Frameworks</span><span class="value">${r.linkedFrameworks.join(', ')}</span></div>
+          <div class="pi-success-detail-row"><span class="label">Confidence Score</span><span class="value" style="color:#059669">${r.confidenceScore}%</span></div>
+        </div>
+
+        <div class="pi-success-info"><p>The library has been created under Governance → Libraries, and ${piReviewPolicies.length} policies have been generated under Governance → Policies. You can now audit these policies and link them to requirement assessments.</p></div>
+
+        <div class="pi-success-actions">
+          <button class="btn-admin-primary"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg> View Library in Governance</button>
+          <button class="pi-btn pi-btn-view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg> View Policies</button>
+          <button class="pi-btn pi-btn-view" onclick="piBackToCollections()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Generate More Policies</button>
+        </div>
+
+        <button class="pi-success-back" onclick="piBackToCollections()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L3 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Back to Admin</button>
+      </div>
+    </div>`;
 }
 
 // ─── Init ─────────────────────────────────────────────────────
