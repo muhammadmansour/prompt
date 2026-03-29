@@ -2785,9 +2785,9 @@ const server = http.createServer(async (req, res) => {
           });
         }
 
-        // ── Step 1: Store the full library via the library import pipeline
-        // The AI output already has the correct top-level structure (urn, name, version, objects, etc.)
-        // We just ensure the required fields are present, falling back to config if needed
+        // ── Step 1: Upload library via the existing YAML upload API
+        // Build the full library structure, convert to JSON string, and upload as a file
+        // Uses the same endpoint the CISO Assistant frontend uses: POST /api/stored-libraries/upload/
         const libraryPayload = {
           urn: extractedLibrary.urn || `urn:${(config.provider || 'org').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}:risk:library:${(config.libraryName || row.name || 'policy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`,
           locale: extractedLibrary.locale || config.language || 'en',
@@ -2801,35 +2801,38 @@ const server = http.createServer(async (req, res) => {
           objects: libObjects,
         };
 
-        console.log(`[Policy Approve] Step 1: Storing library "${libraryPayload.name}" (${libraryPayload.urn})`);
+        const libSlug = libraryPayload.ref_id || 'ai-policy-library';
+        const filename = `${libSlug}.yaml`;
+
+        console.log(`[Policy Approve] Step 1: Uploading library "${libraryPayload.name}" (${libraryPayload.urn}) as ${filename}`);
 
         let libraryCreated = false;
         let libraryError = null;
         let storedLibraryData = null;
 
         try {
-          const libBuf = Buffer.from(JSON.stringify(libraryPayload), 'utf-8');
-          const libRes = await grcFetch(`${GRC_API_URL}/api/stored-libraries/store-policy/`, {
+          const libBody = Buffer.from(JSON.stringify(libraryPayload, null, 2), 'utf-8');
+          const libRes = await grcFetch(`${GRC_API_URL}/api/stored-libraries/upload/`, {
             method: 'POST',
             headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Content-Length': String(libBuf.length),
+              'Content-Disposition': `attachment; filename=${filename}`,
+              'Content-Length': String(libBody.length),
             },
-            body: libBuf,
+            body: libBody,
           }, reqToken);
 
           if (libRes.ok) {
             storedLibraryData = await libRes.json();
             libraryCreated = true;
-            console.log(`[Policy Approve] ✅ Library created/loaded: ${storedLibraryData.id || storedLibraryData.status}`);
+            console.log(`[Policy Approve] ✅ Library uploaded & loaded: ${storedLibraryData.id || storedLibraryData.status}`);
           } else {
             const errText = await libRes.text();
-            libraryError = `Library creation failed (${libRes.status}): ${errText}`;
-            console.warn(`[Policy Approve] ⚠ Library creation failed: ${libRes.status} ${errText}`);
+            libraryError = `Library upload failed (${libRes.status}): ${errText}`;
+            console.warn(`[Policy Approve] ⚠ Library upload failed: ${libRes.status} ${errText}`);
           }
         } catch (libErr) {
           libraryError = libErr.message;
-          console.error(`[Policy Approve] ⚠ Library creation exception: ${libErr.message}`);
+          console.error(`[Policy Approve] ⚠ Library upload exception: ${libErr.message}`);
         }
 
         // ── Step 2: Create Policy (AppliedControl) objects in the target folder, linked to ReferenceControls
