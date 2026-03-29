@@ -2920,6 +2920,8 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
+        const DELAY_BETWEEN_MS = 300; // Pause between each policy creation to avoid overwhelming the server
+
         for (let i = 0; i < updatedRefControls.length; i++) {
           const rc = updatedRefControls[i];
           let lastResult = null;
@@ -2957,6 +2959,11 @@ const server = http.createServer(async (req, res) => {
           if (lastResult && !lastResult.success) {
             console.error(`[Policy Approve] ❌ Failed "${lastResult.name}" after ${MAX_RETRIES} attempts: ${lastResult.error || lastResult.status}`);
             grcErrors.push({ name: lastResult.name, status: lastResult.status, error: lastResult.error });
+          }
+
+          // Small delay between requests to prevent server overload
+          if (i < updatedRefControls.length - 1) {
+            await new Promise(r => setTimeout(r, DELAY_BETWEEN_MS));
           }
         }
 
