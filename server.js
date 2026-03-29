@@ -2786,8 +2786,11 @@ const server = http.createServer(async (req, res) => {
         }
 
         // ── Step 1: Upload library via the existing YAML upload API
-        // Build the full library structure, convert to JSON string, and upload as a file
+        // Build the library with reference_controls only (no framework — we don't create frameworks)
         // Uses the same endpoint the CISO Assistant frontend uses: POST /api/stored-libraries/upload/
+        const uploadObjects = { reference_controls: libObjects.reference_controls || [] };
+        // Deliberately exclude framework/requirement_nodes — only reference controls go into the library
+
         const libraryPayload = {
           urn: extractedLibrary.urn || `urn:${(config.provider || 'org').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}:risk:library:${(config.libraryName || row.name || 'policy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`,
           locale: extractedLibrary.locale || config.language || 'en',
@@ -2798,7 +2801,7 @@ const server = http.createServer(async (req, res) => {
           version: extractedLibrary.version || 1,
           provider: extractedLibrary.provider || config.provider || '',
           packager: extractedLibrary.packager || 'wathba',
-          objects: libObjects,
+          objects: uploadObjects,
         };
 
         const libSlug = libraryPayload.ref_id || 'ai-policy-library';
