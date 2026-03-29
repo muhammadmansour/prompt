@@ -2923,7 +2923,14 @@ const server = http.createServer(async (req, res) => {
                 console.log(`[Policy Approve] ✅ Created policy "${lastResult.name}" → id=${lastResult.id}`);
                 grcResults.push({ id: lastResult.id, name: lastResult.name, success: true });
                 break;
-              } else if (attempt < MAX_RETRIES) {
+              }
+              // Only retry on server errors (5xx) or rate limits (429); skip for client errors (4xx)
+              const isRetryable = lastResult.status >= 500 || lastResult.status === 429;
+              if (!isRetryable) {
+                console.warn(`[Policy Approve] ❌ Non-retryable error for "${lastResult.name}": ${lastResult.status} ${lastResult.error}`);
+                break;
+              }
+              if (attempt < MAX_RETRIES) {
                 const delay = 1000 * Math.pow(2, attempt - 1); // 1s, 2s, 4s
                 console.warn(`[Policy Approve] ⚠ Attempt ${attempt} failed for "${lastResult.name}": ${lastResult.status} — retrying in ${delay}ms...`);
                 await new Promise(r => setTimeout(r, delay));
