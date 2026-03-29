@@ -2552,7 +2552,7 @@ const server = http.createServer(async (req, res) => {
         const body = await parseBody(req);
         const config = {
           libraryName: body.libraryName || row.name,
-          provider: body.provider || '',
+          provider: body.provider || row.name || 'Organization',
           language: body.language || 'en',
           detailLevel: body.detailLevel || 'comprehensive',
           linkedFrameworkIds: body.linkedFrameworkIds || [],
