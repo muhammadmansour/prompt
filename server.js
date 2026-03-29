@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { GoogleGenAI } = require('@google/genai');
 const Database = require('better-sqlite3');
 
-const PORT = 5555;
+const PORT = 5555; // Wathbah server port
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const GEMINI_UPLOAD_URL = 'https://generativelanguage.googleapis.com/upload/v1beta';
@@ -161,6 +161,32 @@ db.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS policy_collections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    store_id TEXT DEFAULT '',
+    status TEXT DEFAULT 'empty',
+    config TEXT DEFAULT '{}',
+    extraction_result TEXT DEFAULT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS policy_files (
+    id TEXT PRIMARY KEY,
+    collection_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mime_type TEXT DEFAULT 'application/octet-stream',
+    size INTEGER DEFAULT 0,
+    local_path TEXT DEFAULT '',
+    store_doc_name TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (collection_id) REFERENCES policy_collections(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_policy_files_collection ON policy_files(collection_id);
 `);
 
 // Migrate cs_sessions: add exported_control_ids if missing
@@ -292,6 +318,56 @@ function csSessionToJSON(row) {
   };
 }
 
+// Policy collections DB helpers
+const dbListPolicyCollections = db.prepare(`SELECT * FROM policy_collections ORDER BY updated_at DESC`);
+const dbGetPolicyCollection = db.prepare(`SELECT * FROM policy_collections WHERE id = ?`);
+const dbInsertPolicyCollection = db.prepare(`
+  INSERT INTO policy_collections (id, name, description, store_id, status, config, extraction_result, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const dbUpdatePolicyCollection = db.prepare(`
+  UPDATE policy_collections SET name = ?, description = ?, status = ?, config = ?, extraction_result = ?, updated_at = ? WHERE id = ?
+`);
+const dbDeletePolicyCollection = db.prepare(`DELETE FROM policy_collections WHERE id = ?`);
+
+// Policy files DB helpers
+const dbListPolicyFiles = db.prepare(`SELECT * FROM policy_files WHERE collection_id = ? ORDER BY created_at ASC`);
+const dbGetPolicyFile = db.prepare(`SELECT * FROM policy_files WHERE id = ?`);
+const dbInsertPolicyFile = db.prepare(`
+  INSERT INTO policy_files (id, collection_id, name, mime_type, size, local_path, store_doc_name, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const dbDeletePolicyFile = db.prepare(`DELETE FROM policy_files WHERE id = ?`);
+const dbDeletePolicyFilesForCollection = db.prepare(`DELETE FROM policy_files WHERE collection_id = ?`);
+
+function policyCollectionToJSON(row) {
+  const files = dbListPolicyFiles.all(row.id);
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || '',
+    storeId: row.store_id || '',
+    status: row.status || 'empty',
+    config: JSON.parse(row.config || '{}'),
+    extractionResult: row.extraction_result ? JSON.parse(row.extraction_result) : null,
+    files: files.map(f => ({
+      id: f.id,
+      name: f.name,
+      type: f.name.split('.').pop().toLowerCase(),
+      mimeType: f.mime_type,
+      size: f.size > 1024 * 1024 ? (f.size / (1024 * 1024)).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB',
+      uploadedAt: new Date(f.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    })),
+    lastUpdated: new Date(row.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+// Ensure policy-uploads directory exists
+const POLICY_UPLOADS_DIR = path.join(__dirname, 'policy-uploads');
+if (!fs.existsSync(POLICY_UPLOADS_DIR)) fs.mkdirSync(POLICY_UPLOADS_DIR, { recursive: true });
+
 // Gemini SDK client + in-memory chat sessions (SDK ChatSession objects)
 let genai = null;
 const chatSessions = {};  // sessionId -> { chat: SDK ChatSession, systemPrompt: string }
@@ -325,6 +401,15 @@ try {
   console.warn('Controls generator prompt template not found.');
 }
 
+const policyExtractorPath = path.join(__dirname, 'prompts', 'policy-extractor.txt');
+let policyExtractorPrompt = '';
+
+try {
+  policyExtractorPrompt = fs.readFileSync(policyExtractorPath, 'utf-8');
+} catch (error) {
+  console.warn('Policy extractor prompt template not found.');
+}
+
 // Seed the chat-auditor prompt into the DB if not already present
 const CHAT_AUDITOR_PROMPT_ID = 'local-chat-auditor';
 const now = new Date().toISOString();
@@ -352,6 +437,26 @@ if (controlsPromptTemplate) {
   dbUpdateLocalPrompt.run('Controls Generator (Applied Controls Studio)', controlsPromptTemplate, now, CONTROLS_GENERATOR_PROMPT_ID);
 }
 
+// Seed the policy-extractor prompt into the DB
+const POLICY_EXTRACTOR_PROMPT_ID = 'local-policy-extractor';
+dbInsertLocalPrompt.run(
+  POLICY_EXTRACTOR_PROMPT_ID,
+  'policy_extractor',
+  'Policy Extractor (Policy Ingestion)',
+  policyExtractorPrompt || 'You are a GRC policy extraction engine for the CISO Assistant platform.',
+  now,
+  now
+);
+if (policyExtractorPrompt) {
+  dbUpdateLocalPrompt.run('Policy Extractor (Policy Ingestion)', policyExtractorPrompt, now, POLICY_EXTRACTOR_PROMPT_ID);
+}
+
+// Helper: get the current policy extractor prompt from DB
+function getPolicyExtractorPrompt() {
+  const row = dbGetLocalPromptByKey.get('policy_extractor');
+  return row ? row.content : policyExtractorPrompt || 'You are a GRC policy extraction engine for the CISO Assistant platform.';
+}
+
 // Helper: get the current chat auditor prompt from DB (always use DB as source of truth)
 function getChatAuditorPrompt() {
   const row = dbGetLocalPromptByKey.get('chat_auditor');
@@ -375,6 +480,17 @@ const mimeTypes = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon'
 };
+
+// Safe JSON response helper — handles Unicode (Arabic, etc.) without ByteString errors
+function sendJSON(res, statusCode, data) {
+  const jsonStr = JSON.stringify(data);
+  const buf = Buffer.from(jsonStr, 'utf-8');
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': buf.length,
+  });
+  res.end(buf);
+}
 
 // Parse JSON body from request
 function parseBody(req) {
@@ -2283,6 +2399,557 @@ const server = http.createServer(async (req, res) => {
       console.error('Delete org context error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Policy Collections API ----
+  const policyCollMatch = url.pathname.match(/^\/api\/policy-collections(?:\/([^\/]+))?(?:\/(files|extract|approve)(?:\/([^\/]+))?)?$/);
+  if (policyCollMatch) {
+    const collId = policyCollMatch[1];
+    const subResource = policyCollMatch[2]; // 'files' | 'extract' | 'approve'
+    const fileId = policyCollMatch[3];
+    const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+
+    try {
+      // GET /api/policy-collections — List all
+      if (!collId && req.method === 'GET') {
+        const rows = dbListPolicyCollections.all();
+        const collections = rows.map(policyCollectionToJSON);
+        sendJSON(res, 200, { success: true, data: collections });
+        return;
+      }
+
+      // POST /api/policy-collections — Create new
+      if (!collId && req.method === 'POST') {
+        const body = await parseBody(req);
+        const newId = 'pc-' + crypto.randomUUID();
+        const now2 = new Date().toISOString();
+        dbInsertPolicyCollection.run(
+          newId,
+          body.name || 'New Collection',
+          body.description || '',
+          '', // store_id — will be set if FileSearchStore is created later
+          'empty',
+          '{}',
+          null,
+          now2,
+          now2
+        );
+        const newRow = dbGetPolicyCollection.get(newId);
+        sendJSON(res, 201, { success: true, data: policyCollectionToJSON(newRow) });
+        return;
+      }
+
+      // DELETE /api/policy-collections/:id — Delete collection + files
+      if (collId && !subResource && req.method === 'DELETE') {
+        // Delete local files
+        const collDir = path.join(POLICY_UPLOADS_DIR, collId);
+        if (fs.existsSync(collDir)) fs.rmSync(collDir, { recursive: true, force: true });
+        dbDeletePolicyFilesForCollection.run(collId);
+        dbDeletePolicyCollection.run(collId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      // PUT /api/policy-collections/:id — Update name/description
+      if (collId && !subResource && req.method === 'PUT') {
+        const body = await parseBody(req);
+        const row = dbGetPolicyCollection.get(collId);
+        if (!row) { sendJSON(res, 404, { error: 'Not found' }); return; }
+        const now2 = new Date().toISOString();
+        dbUpdatePolicyCollection.run(
+          body.name !== undefined ? body.name : row.name,
+          body.description !== undefined ? body.description : row.description,
+          row.status,
+          row.config,
+          row.extraction_result,
+          now2,
+          collId
+        );
+        const updated = dbGetPolicyCollection.get(collId);
+        sendJSON(res, 200, { success: true, data: policyCollectionToJSON(updated) });
+        return;
+      }
+
+      // GET /api/policy-collections/:id — Get single collection
+      if (collId && !subResource && req.method === 'GET') {
+        const row = dbGetPolicyCollection.get(collId);
+        if (!row) { sendJSON(res, 404, { error: 'Not found' }); return; }
+        sendJSON(res, 200, { success: true, data: policyCollectionToJSON(row) });
+        return;
+      }
+
+      // POST /api/policy-collections/:id/files — Upload file
+      if (collId && subResource === 'files' && !fileId && req.method === 'POST') {
+        const row = dbGetPolicyCollection.get(collId);
+        if (!row) { sendJSON(res, 404, { error: 'Collection not found' }); return; }
+
+        const body = await parseBody(req);
+        const { fileName, mimeType, data } = body;
+        if (!fileName || !data) {
+          sendJSON(res, 400, { error: 'fileName and data (base64) are required.' });
+          return;
+        }
+
+        // Save to disk
+        const collDir = path.join(POLICY_UPLOADS_DIR, collId);
+        if (!fs.existsSync(collDir)) fs.mkdirSync(collDir, { recursive: true });
+        const fileBuffer = Buffer.from(data, 'base64');
+        const fId = 'pf-' + crypto.randomUUID();
+        const safeName = fileName.replace(/[^a-zA-Z0-9._\- ]/g, '_'); // Strip non-ASCII for local filename
+        const localPath = path.join(collDir, fId + '_' + safeName);
+        fs.writeFileSync(localPath, fileBuffer);
+
+        const now2 = new Date().toISOString();
+        dbInsertPolicyFile.run(fId, collId, fileName, mimeType || 'application/octet-stream', fileBuffer.length, localPath, '', now2);
+
+        // Update collection status
+        const fileCount = dbListPolicyFiles.all(collId).length;
+        dbUpdatePolicyCollection.run(row.name, row.description, fileCount > 0 ? 'ready' : 'empty', row.config, row.extraction_result, now2, collId);
+
+        console.log(`[Policy] Uploaded file (${fileBuffer.length} bytes) to collection ${collId}`);
+        sendJSON(res, 200, { success: true, data: { id: fId, name: fileName, size: fileBuffer.length } });
+        return;
+      }
+
+      // GET /api/policy-collections/:id/files — List files
+      if (collId && subResource === 'files' && !fileId && req.method === 'GET') {
+        const files = dbListPolicyFiles.all(collId);
+        sendJSON(res, 200, { success: true, data: files.map(f => ({
+          id: f.id, name: f.name, mimeType: f.mime_type, size: f.size,
+          uploadedAt: new Date(f.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        })) });
+        return;
+      }
+
+      // DELETE /api/policy-collections/:id/files/:fileId — Delete file
+      if (collId && subResource === 'files' && fileId && req.method === 'DELETE') {
+        const file = dbGetPolicyFile.get(fileId);
+        if (file && file.local_path && fs.existsSync(file.local_path)) fs.unlinkSync(file.local_path);
+        dbDeletePolicyFile.run(fileId);
+        // Update collection status
+        const now2 = new Date().toISOString();
+        const row = dbGetPolicyCollection.get(collId);
+        if (row) {
+          const fileCount = dbListPolicyFiles.all(collId).length;
+          dbUpdatePolicyCollection.run(row.name, row.description, fileCount > 0 ? 'ready' : 'empty', row.config, row.extraction_result, now2, collId);
+        }
+        sendJSON(res, 200, { success: true });
+        return;
+      }
+
+      // POST /api/policy-collections/:id/extract — Run Gemini extraction
+      if (collId && subResource === 'extract' && req.method === 'POST') {
+        if (!apiKey) {
+          sendJSON(res, 401, { error: 'Gemini API key not configured.' });
+          return;
+        }
+        const row = dbGetPolicyCollection.get(collId);
+        if (!row) { sendJSON(res, 404, { error: 'Collection not found' }); return; }
+
+        const body = await parseBody(req);
+        const config = {
+          libraryName: body.libraryName || row.name,
+          provider: body.provider || '',
+          language: body.language || 'en',
+          detailLevel: body.detailLevel || 'comprehensive',
+          linkedFrameworkIds: body.linkedFrameworkIds || [],
+        };
+
+        // Save config
+        const now2 = new Date().toISOString();
+        dbUpdatePolicyCollection.run(row.name, row.description, 'generating', JSON.stringify(config), null, now2, collId);
+
+        // Get files for this collection (optionally filter by selectedFileIds)
+        let files = dbListPolicyFiles.all(collId);
+        if (body.selectedFileIds && body.selectedFileIds.length > 0) {
+          files = files.filter(f => body.selectedFileIds.includes(f.id));
+        }
+
+        if (files.length === 0) {
+          sendJSON(res, 400, { error: 'No files to extract from.' });
+          return;
+        }
+
+        console.log(`[Policy Extraction] Starting for collection "${row.name}" with ${files.length} file(s)...`);
+
+        try {
+          // Initialize Gemini SDK
+          if (!genai) genai = new GoogleGenAI({ apiKey });
+
+          // Upload files to Gemini Files API
+          const uploadedFiles = [];
+          for (const f of files) {
+            if (!f.local_path || !fs.existsSync(f.local_path)) {
+              console.warn(`[Policy Extraction] File not found on disk: ${f.name}`);
+              continue;
+            }
+            // displayName must be ASCII-safe for HTTP headers (Gemini SDK sends it as a header)
+            const safeDisplayName = f.name.replace(/[^\x20-\x7E]/g, '_');
+            console.log(`[Policy Extraction] Uploading "${safeDisplayName}" to Gemini Files API...`);
+            const uploaded = await genai.files.upload({
+              file: f.local_path,
+              config: { mimeType: f.mime_type, displayName: safeDisplayName },
+            });
+            console.log(`[Policy Extraction] Uploaded: ${uploaded.name} (${uploaded.uri})`);
+            uploadedFiles.push(uploaded);
+          }
+
+          if (uploadedFiles.length === 0) {
+            throw new Error('No files could be uploaded to Gemini');
+          }
+
+          // Wait for files to be processed (ACTIVE state)
+          for (const uf of uploadedFiles) {
+            let fileState = uf;
+            let attempts = 0;
+            while (fileState.state === 'PROCESSING' && attempts < 30) {
+              await new Promise(r => setTimeout(r, 2000));
+              fileState = await genai.files.get({ name: fileState.name });
+              attempts++;
+            }
+            if (fileState.state !== 'ACTIVE') {
+              console.warn(`[Policy Extraction] File ${uf.name} state: ${fileState.state}`);
+            }
+          }
+
+          // Build the extraction prompt with config context
+          const systemPrompt = getPolicyExtractorPrompt();
+
+          // Compute slugs for URN generation
+          const orgSlug = (config.provider || 'org').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+          const libSlug = (config.libraryName || row.name || 'policy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+          let userPrompt = `Extract all policies from the uploaded document(s) into a CISO Assistant library.\n\n`;
+          userPrompt += `Use these EXACT values in the output JSON:\n`;
+          userPrompt += `- urn: "urn:${orgSlug}:risk:library:${libSlug}"\n`;
+          userPrompt += `- locale: "${config.language || 'en'}"\n`;
+          userPrompt += `- ref_id: "${libSlug}"\n`;
+          userPrompt += `- name: "${config.libraryName}"\n`;
+          userPrompt += `- provider: "${config.provider || ''}"\n`;
+          userPrompt += `- copyright: "© ${config.provider || 'Organization'} ${new Date().getFullYear()}"\n`;
+          userPrompt += `- <org-slug>: "${orgSlug}"\n`;
+          userPrompt += `- <lib-slug>: "${libSlug}"\n\n`;
+          userPrompt += `Configuration:\n`;
+          userPrompt += `- Detail Level: ${config.detailLevel}\n`;
+          if (config.linkedFrameworkIds.length > 0) {
+            userPrompt += `- Link to Framework IDs: ${config.linkedFrameworkIds.join(', ')}\n`;
+          }
+          userPrompt += `\nPlease analyze ALL the uploaded documents and extract every policy statement into the full CISO Assistant library JSON structure.`;
+
+          // Build parts: file references + text prompt
+          const parts = [];
+          for (const uf of uploadedFiles) {
+            parts.push({ fileData: { fileUri: uf.uri, mimeType: uf.mimeType } });
+          }
+          parts.push({ text: userPrompt });
+
+          console.log(`[Policy Extraction] Calling Gemini with ${uploadedFiles.length} files + prompt...`);
+          const startTime = Date.now();
+
+          const response = await genai.models.generateContent({
+            model: 'gemini-2.5-pro',
+            contents: [{ role: 'user', parts }],
+            config: {
+              systemInstruction: systemPrompt,
+              temperature: 0.2,
+              maxOutputTokens: 65536,
+            },
+          });
+
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          console.log(`[Policy Extraction] Gemini responded in ${elapsed}s`);
+
+          const textResponse = response.text || '';
+          if (!textResponse) throw new Error('No response from Gemini');
+
+          // Parse JSON from response
+          let jsonStr = textResponse.trim();
+          const jsonMatch = textResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (jsonMatch) jsonStr = jsonMatch[1].trim();
+          if (!jsonStr.startsWith('{')) {
+            const obj = jsonStr.match(/\{[\s\S]*\}/);
+            if (obj) jsonStr = obj[0];
+          }
+
+          const extractedLibrary = JSON.parse(jsonStr);
+
+          // The AI now returns the full library structure (with top-level urn, name, objects, etc.)
+          // Extract the objects part for metadata computation
+          const libObjects = extractedLibrary.objects || extractedLibrary;
+          const refControls = libObjects.reference_controls || [];
+          const framework = libObjects.framework || {};
+          const reqNodes = framework.requirement_nodes || [];
+          const assessableNodes = reqNodes.filter(n => n.assessable);
+          const csfFunctions = [...new Set(refControls.map(rc => rc.csf_function).filter(Boolean))];
+          const categories = [...new Set(refControls.map(rc => rc.category).filter(Boolean))];
+
+          // Compute confidence from annotations
+          let totalConfidence = 0;
+          let confCount = 0;
+          assessableNodes.forEach(n => {
+            try {
+              const ann = JSON.parse(n.annotation || '{}');
+              if (ann.confidence) { totalConfidence += ann.confidence; confCount++; }
+            } catch (e) { /* ignore */ }
+          });
+          const avgConfidence = confCount > 0 ? Math.round((totalConfidence / confCount) * 100) : 85;
+
+          const result = {
+            id: 'pg-' + crypto.randomUUID(),
+            collectionId: collId,
+            libraryName: config.libraryName,
+            provider: config.provider,
+            language: config.language,
+            confidenceScore: avgConfidence,
+            generationTime: elapsed + 's',
+            sourceFileCount: files.length,
+            extractedLibrary,
+            policies: refControls.map((rc, i) => ({
+              id: 'gp-' + (i + 1),
+              code: rc.ref_id || `RC-${i + 1}`,
+              name: rc.name || 'Unnamed Control',
+              description: rc.description || '',
+              category: rc.category || 'policy',
+              csfFunction: rc.csf_function || 'govern',
+              sourceFile: files.length === 1 ? files[0].name : 'Multiple files',
+              sourcePages: '',
+              linkedRequirements: assessableNodes.filter(n => (n.reference_controls || []).includes(rc.urn)).map(n => n.ref_id || n.name).slice(0, 5),
+              linkedFrameworks: config.linkedFrameworkIds,
+            })),
+            linkedFrameworks: config.linkedFrameworkIds,
+            csfDistribution: csfFunctions,
+            categoryDistribution: categories,
+          };
+
+          // Save to DB
+          const now3 = new Date().toISOString();
+          dbUpdatePolicyCollection.run(row.name, row.description, 'generated', JSON.stringify(config), JSON.stringify(result), now3, collId);
+
+          console.log(`[Policy Extraction] ✅ Extracted ${refControls.length} reference controls, ${assessableNodes.length} assessable requirements`);
+
+          sendJSON(res, 200, { success: true, data: result });
+
+          // Cleanup: delete uploaded files from Gemini (optional, they expire automatically)
+          for (const uf of uploadedFiles) {
+            try { await genai.files.delete({ name: uf.name }); } catch (e) { /* ignore */ }
+          }
+
+        } catch (extractErr) {
+          console.error('[Policy Extraction] Error:', extractErr.message);
+          const now3 = new Date().toISOString();
+          dbUpdatePolicyCollection.run(row.name, row.description, 'ready', JSON.stringify(config), null, now3, collId);
+          sendJSON(res, 500, { error: extractErr.message });
+        }
+        return;
+      }
+
+      // POST /api/policy-collections/:id/approve — Push full library + policies to GRC
+      if (collId && subResource === 'approve' && req.method === 'POST') {
+        const row = dbGetPolicyCollection.get(collId);
+        if (!row) { sendJSON(res, 404, { error: 'Not found' }); return; }
+        if (!row.extraction_result) { sendJSON(res, 400, { error: 'No extraction result to approve.' }); return; }
+
+        const body = await parseBody(req);
+        const folder = body.folder; // Required — GRC folder UUID
+        if (!folder) {
+          sendJSON(res, 400, { error: 'folder (GRC folder UUID) is required.' });
+          return;
+        }
+
+        const result = JSON.parse(row.extraction_result);
+        const config = JSON.parse(row.config || '{}');
+
+        // The AI now returns the full library structure including urn, name, objects, etc.
+        const extractedLibrary = result.extractedLibrary || {};
+        const libObjects = extractedLibrary.objects || extractedLibrary;
+
+        // Use edited policies from frontend to sync edits back into the library's reference_controls
+        const editedPolicies = body.policies && body.policies.length ? body.policies : null;
+        const refControls = libObjects.reference_controls || [];
+
+        if (editedPolicies && refControls.length) {
+          libObjects.reference_controls = refControls.map(rc => {
+            const edited = editedPolicies.find(p =>
+              (p.code || p.ref_id) === rc.ref_id || p.name === rc.name
+            );
+            if (edited) {
+              rc.name = edited.name || rc.name;
+              rc.description = edited.description || rc.description;
+              rc.category = edited.category || rc.category;
+              rc.csf_function = edited.csfFunction || edited.csf_function || rc.csf_function;
+            }
+            return rc;
+          });
+        }
+
+        // ── Step 1: Store the full library via the library import pipeline
+        // The AI output already has the correct top-level structure (urn, name, version, objects, etc.)
+        // We just ensure the required fields are present, falling back to config if needed
+        const libraryPayload = {
+          urn: extractedLibrary.urn || `urn:${(config.provider || 'org').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}:risk:library:${(config.libraryName || row.name || 'policy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`,
+          locale: extractedLibrary.locale || config.language || 'en',
+          ref_id: extractedLibrary.ref_id || (config.libraryName || row.name || 'policy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+          name: extractedLibrary.name || config.libraryName || row.name,
+          description: extractedLibrary.description || row.description || `AI-extracted policy library from ${result.sourceFileCount || 0} document(s).`,
+          copyright: extractedLibrary.copyright || `© ${config.provider || 'Organization'} ${new Date().getFullYear()}`,
+          version: extractedLibrary.version || 1,
+          provider: extractedLibrary.provider || config.provider || '',
+          packager: extractedLibrary.packager || 'wathba',
+          objects: libObjects,
+        };
+
+        console.log(`[Policy Approve] Step 1: Storing library "${libraryPayload.name}" (${libraryPayload.urn})`);
+
+        let libraryCreated = false;
+        let libraryError = null;
+        let storedLibraryData = null;
+
+        try {
+          const libBuf = Buffer.from(JSON.stringify(libraryPayload), 'utf-8');
+          const libRes = await grcFetch(`${GRC_API_URL}/api/stored-libraries/store-policy/`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Content-Length': String(libBuf.length),
+            },
+            body: libBuf,
+          }, reqToken);
+
+          if (libRes.ok) {
+            storedLibraryData = await libRes.json();
+            libraryCreated = true;
+            console.log(`[Policy Approve] ✅ Library created/loaded: ${storedLibraryData.id || storedLibraryData.status}`);
+          } else {
+            const errText = await libRes.text();
+            libraryError = `Library creation failed (${libRes.status}): ${errText}`;
+            console.warn(`[Policy Approve] ⚠ Library creation failed: ${libRes.status} ${errText}`);
+          }
+        } catch (libErr) {
+          libraryError = libErr.message;
+          console.error(`[Policy Approve] ⚠ Library creation exception: ${libErr.message}`);
+        }
+
+        // ── Step 2: Create Policy (AppliedControl) objects in the target folder, linked to ReferenceControls
+        const grcResults = [];
+        const grcErrors = [];
+
+        const VALID_CSF = new Set(['govern', 'identify', 'protect', 'detect', 'respond', 'recover']);
+        const VALID_CATEGORY = new Set(['policy', 'process', 'technical', 'physical', 'procedure']);
+
+        // If library was created, fetch the ReferenceControl IDs so we can link policies
+        let rcUrnToId = {};
+        if (libraryCreated && storedLibraryData && storedLibraryData.id) {
+          try {
+            // Fetch reference controls from the loaded library
+            const rcRes = await grcFetch(
+              `${GRC_API_URL}/api/reference-controls/?library=${storedLibraryData.loaded_library || ''}&page_size=500`,
+              {}, reqToken
+            );
+            if (rcRes.ok) {
+              const rcData = await rcRes.json();
+              const rcList = rcData.results || rcData || [];
+              rcList.forEach(rc => {
+                if (rc.urn) rcUrnToId[rc.urn.toLowerCase()] = rc.id;
+              });
+              console.log(`[Policy Approve] Fetched ${Object.keys(rcUrnToId).length} reference control IDs for linking`);
+            }
+          } catch (e) {
+            console.warn(`[Policy Approve] Could not fetch reference controls for linking: ${e.message}`);
+          }
+        }
+
+        // Create a Policy for each ReferenceControl, linked via reference_control FK
+        const updatedRefControls = libObjects.reference_controls || [];
+        for (let i = 0; i < updatedRefControls.length; i++) {
+          const rc = updatedRefControls[i];
+          try {
+            const rawCsf = (rc.csf_function || '').toLowerCase().trim();
+            const rawCat = (rc.category || '').toLowerCase().trim();
+
+            const grcBody = {
+              name: rc.name || 'Untitled Policy',
+              folder,
+              description: rc.description || '',
+              ref_id: rc.ref_id || '',
+              category: VALID_CATEGORY.has(rawCat) ? rawCat : 'policy',
+              status: '--',
+              priority: 3,
+              effort: 'M',
+            };
+
+            if (VALID_CSF.has(rawCsf)) grcBody.csf_function = rawCsf;
+            if (!grcBody.ref_id) delete grcBody.ref_id;
+
+            // Link to ReferenceControl if we have the mapping
+            const rcId = rcUrnToId[(rc.urn || '').toLowerCase()];
+            if (rcId) grcBody.reference_control = rcId;
+
+            console.log(`[Policy Approve] ${i + 1}/${updatedRefControls.length}: POST "${grcBody.name}" (ref_control=${rcId || 'none'})`);
+
+            const bodyBuf = Buffer.from(JSON.stringify(grcBody), 'utf-8');
+            const grcRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Length': String(bodyBuf.length),
+              },
+              body: bodyBuf,
+            }, reqToken);
+
+            if (grcRes.ok) {
+              const created = await grcRes.json();
+              console.log(`[Policy Approve] ✅ Created policy "${grcBody.name}" → id=${created.id}`);
+              grcResults.push({ id: created.id, name: grcBody.name, success: true });
+            } else {
+              const errText = await grcRes.text();
+              console.warn(`[Policy Approve] ❌ Failed "${grcBody.name}": ${grcRes.status} ${errText}`);
+              grcErrors.push({ name: grcBody.name, status: grcRes.status, error: errText });
+            }
+          } catch (pushErr) {
+            console.error(`[Policy Approve] ❌ Exception for "${rc.name}": ${pushErr.message}`);
+            grcErrors.push({ name: rc.name || 'Unknown', error: pushErr.message });
+          }
+        }
+
+        // ── Step 3: Save approved state
+        const now2 = new Date().toISOString();
+        result.approved = true;
+        result.approvedAt = now2;
+        result.libraryCreated = libraryCreated;
+        result.libraryUrn = libraryPayload.urn;
+        result.libraryError = libraryError;
+        result.grcResults = grcResults;
+        result.grcErrors = grcErrors;
+        dbUpdatePolicyCollection.run(row.name, row.description, 'approved', row.config, JSON.stringify(result), now2, collId);
+
+        console.log(`[Policy Approve] ✅ Done: library=${libraryCreated ? 'created' : 'failed'}, ${grcResults.length}/${updatedRefControls.length} policies pushed (${grcErrors.length} errors)`);
+
+        sendJSON(res, 200, {
+          success: true,
+          data: {
+            approved: true,
+            libraryCreated,
+            libraryUrn: libraryPayload.urn,
+            libraryError,
+            created: grcResults.length,
+            errors: grcErrors.length,
+            total: updatedRefControls.length,
+            grcResults,
+            grcErrors,
+          }
+        });
+        return;
+      }
+
+      // Fallback
+      sendJSON(res, 405, { error: 'Method not allowed' });
+
+    } catch (error) {
+      console.error('Policy Collections API Error:', error.message);
+      sendJSON(res, 500, { error: error.message });
     }
     return;
   }
