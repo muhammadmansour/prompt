@@ -2865,55 +2865,83 @@ const server = http.createServer(async (req, res) => {
         }
 
         // Create a Policy for each ReferenceControl, linked via reference_control FK
+        // Includes retry logic: up to 3 attempts per policy with exponential backoff
+        const MAX_RETRIES = 3;
         const updatedRefControls = libObjects.reference_controls || [];
+
+        async function createPolicy(rc, index, attempt) {
+          const rawCsf = (rc.csf_function || '').toLowerCase().trim();
+          const rawCat = (rc.category || '').toLowerCase().trim();
+
+          const grcBody = {
+            name: rc.name || 'Untitled Policy',
+            folder,
+            description: rc.description || '',
+            ref_id: rc.ref_id || '',
+            category: VALID_CATEGORY.has(rawCat) ? rawCat : 'policy',
+            status: '--',
+            priority: 3,
+            effort: 'M',
+          };
+
+          if (VALID_CSF.has(rawCsf)) grcBody.csf_function = rawCsf;
+          if (!grcBody.ref_id) delete grcBody.ref_id;
+
+          const rcId = rcUrnToId[(rc.urn || '').toLowerCase()];
+          if (rcId) grcBody.reference_control = rcId;
+
+          const attemptLabel = attempt > 1 ? ` (retry ${attempt - 1}/${MAX_RETRIES - 1})` : '';
+          console.log(`[Policy Approve] ${index + 1}/${updatedRefControls.length}: POST "${grcBody.name}" (ref_control=${rcId || 'none'})${attemptLabel}`);
+
+          const bodyBuf = Buffer.from(JSON.stringify(grcBody), 'utf-8');
+          const grcRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Content-Length': String(bodyBuf.length),
+            },
+            body: bodyBuf,
+          }, reqToken);
+
+          if (grcRes.ok) {
+            const created = await grcRes.json();
+            return { success: true, id: created.id, name: grcBody.name };
+          } else {
+            const errText = await grcRes.text();
+            return { success: false, name: grcBody.name, status: grcRes.status, error: errText };
+          }
+        }
+
         for (let i = 0; i < updatedRefControls.length; i++) {
           const rc = updatedRefControls[i];
-          try {
-            const rawCsf = (rc.csf_function || '').toLowerCase().trim();
-            const rawCat = (rc.category || '').toLowerCase().trim();
+          let lastResult = null;
 
-            const grcBody = {
-              name: rc.name || 'Untitled Policy',
-              folder,
-              description: rc.description || '',
-              ref_id: rc.ref_id || '',
-              category: VALID_CATEGORY.has(rawCat) ? rawCat : 'policy',
-              status: '--',
-              priority: 3,
-              effort: 'M',
-            };
-
-            if (VALID_CSF.has(rawCsf)) grcBody.csf_function = rawCsf;
-            if (!grcBody.ref_id) delete grcBody.ref_id;
-
-            // Link to ReferenceControl if we have the mapping
-            const rcId = rcUrnToId[(rc.urn || '').toLowerCase()];
-            if (rcId) grcBody.reference_control = rcId;
-
-            console.log(`[Policy Approve] ${i + 1}/${updatedRefControls.length}: POST "${grcBody.name}" (ref_control=${rcId || 'none'})`);
-
-            const bodyBuf = Buffer.from(JSON.stringify(grcBody), 'utf-8');
-            const grcRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json; charset=utf-8',
-                'Content-Length': String(bodyBuf.length),
-              },
-              body: bodyBuf,
-            }, reqToken);
-
-            if (grcRes.ok) {
-              const created = await grcRes.json();
-              console.log(`[Policy Approve] ✅ Created policy "${grcBody.name}" → id=${created.id}`);
-              grcResults.push({ id: created.id, name: grcBody.name, success: true });
-            } else {
-              const errText = await grcRes.text();
-              console.warn(`[Policy Approve] ❌ Failed "${grcBody.name}": ${grcRes.status} ${errText}`);
-              grcErrors.push({ name: grcBody.name, status: grcRes.status, error: errText });
+          for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+              lastResult = await createPolicy(rc, i, attempt);
+              if (lastResult.success) {
+                console.log(`[Policy Approve] ✅ Created policy "${lastResult.name}" → id=${lastResult.id}`);
+                grcResults.push({ id: lastResult.id, name: lastResult.name, success: true });
+                break;
+              } else if (attempt < MAX_RETRIES) {
+                const delay = 1000 * Math.pow(2, attempt - 1); // 1s, 2s, 4s
+                console.warn(`[Policy Approve] ⚠ Attempt ${attempt} failed for "${lastResult.name}": ${lastResult.status} — retrying in ${delay}ms...`);
+                await new Promise(r => setTimeout(r, delay));
+              }
+            } catch (pushErr) {
+              lastResult = { success: false, name: rc.name || 'Unknown', error: pushErr.message };
+              if (attempt < MAX_RETRIES) {
+                const delay = 1000 * Math.pow(2, attempt - 1);
+                console.warn(`[Policy Approve] ⚠ Attempt ${attempt} exception for "${rc.name}": ${pushErr.message} — retrying in ${delay}ms...`);
+                await new Promise(r => setTimeout(r, delay));
+              }
             }
-          } catch (pushErr) {
-            console.error(`[Policy Approve] ❌ Exception for "${rc.name}": ${pushErr.message}`);
-            grcErrors.push({ name: rc.name || 'Unknown', error: pushErr.message });
+          }
+
+          // After all retries exhausted, record failure
+          if (lastResult && !lastResult.success) {
+            console.error(`[Policy Approve] ❌ Failed "${lastResult.name}" after ${MAX_RETRIES} attempts: ${lastResult.error || lastResult.status}`);
+            grcErrors.push({ name: lastResult.name, status: lastResult.status, error: lastResult.error });
           }
         }
 
