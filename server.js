@@ -2873,11 +2873,15 @@ const server = http.createServer(async (req, res) => {
           const rawCsf = (rc.csf_function || '').toLowerCase().trim();
           const rawCat = (rc.category || '').toLowerCase().trim();
 
+          // Truncate fields to Django model max_length limits
+          const policyName = (rc.name || 'Untitled Policy').substring(0, 200);
+          const policyRefId = (rc.ref_id || '').substring(0, 100);
+
           const grcBody = {
-            name: rc.name || 'Untitled Policy',
+            name: policyName,
             folder,
             description: rc.description || '',
-            ref_id: rc.ref_id || '',
+            ref_id: policyRefId,
             category: VALID_CATEGORY.has(rawCat) ? rawCat : 'policy',
             status: '--',
             priority: 3,
@@ -2908,6 +2912,7 @@ const server = http.createServer(async (req, res) => {
             return { success: true, id: created.id, name: grcBody.name };
           } else {
             const errText = await grcRes.text();
+            console.error(`[Policy Approve] API error detail for "${grcBody.name}": status=${grcRes.status}, body=${errText}, sent=${JSON.stringify(grcBody).substring(0, 500)}`);
             return { success: false, name: grcBody.name, status: grcRes.status, error: errText };
           }
         }
