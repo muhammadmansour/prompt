@@ -410,6 +410,24 @@ try {
   console.warn('Policy extractor prompt template not found.');
 }
 
+// Load the framework-extractor prompt (framework + requirement_nodes only)
+const frameworkExtractorPath = path.join(__dirname, 'prompts', 'framework-extractor.txt');
+let frameworkExtractorPrompt = '';
+try {
+  frameworkExtractorPrompt = fs.readFileSync(frameworkExtractorPath, 'utf-8');
+} catch (error) {
+  console.warn('Framework extractor prompt template not found.');
+}
+
+// Load the reference-controls-extractor prompt (controls only)
+const refControlsExtractorPath = path.join(__dirname, 'prompts', 'reference-controls-extractor.txt');
+let refControlsExtractorPrompt = '';
+try {
+  refControlsExtractorPrompt = fs.readFileSync(refControlsExtractorPath, 'utf-8');
+} catch (error) {
+  console.warn('Reference controls extractor prompt template not found.');
+}
+
 // Seed the chat-auditor prompt into the DB if not already present
 const CHAT_AUDITOR_PROMPT_ID = 'local-chat-auditor';
 const now = new Date().toISOString();
@@ -451,10 +469,50 @@ if (policyExtractorPrompt) {
   dbUpdateLocalPrompt.run('Policy Extractor (Policy Ingestion)', policyExtractorPrompt, now, POLICY_EXTRACTOR_PROMPT_ID);
 }
 
+// Seed the framework-extractor prompt into the DB
+const FRAMEWORK_EXTRACTOR_PROMPT_ID = 'local-framework-extractor';
+dbInsertLocalPrompt.run(
+  FRAMEWORK_EXTRACTOR_PROMPT_ID,
+  'framework_extractor',
+  'Framework Extractor (Policy Ingestion — Framework)',
+  frameworkExtractorPrompt || 'You are a GRC framework extraction engine for the CISO Assistant platform.',
+  now,
+  now
+);
+if (frameworkExtractorPrompt) {
+  dbUpdateLocalPrompt.run('Framework Extractor (Policy Ingestion — Framework)', frameworkExtractorPrompt, now, FRAMEWORK_EXTRACTOR_PROMPT_ID);
+}
+
+// Seed the reference-controls-extractor prompt into the DB
+const REF_CONTROLS_EXTRACTOR_PROMPT_ID = 'local-ref-controls-extractor';
+dbInsertLocalPrompt.run(
+  REF_CONTROLS_EXTRACTOR_PROMPT_ID,
+  'ref_controls_extractor',
+  'Reference Controls Extractor (Policy Ingestion — Controls)',
+  refControlsExtractorPrompt || 'You are a GRC reference controls extraction engine for the CISO Assistant platform.',
+  now,
+  now
+);
+if (refControlsExtractorPrompt) {
+  dbUpdateLocalPrompt.run('Reference Controls Extractor (Policy Ingestion — Controls)', refControlsExtractorPrompt, now, REF_CONTROLS_EXTRACTOR_PROMPT_ID);
+}
+
 // Helper: get the current policy extractor prompt from DB
 function getPolicyExtractorPrompt() {
   const row = dbGetLocalPromptByKey.get('policy_extractor');
   return row ? row.content : policyExtractorPrompt || 'You are a GRC policy extraction engine for the CISO Assistant platform.';
+}
+
+// Helper: get the framework extractor prompt from DB
+function getFrameworkExtractorPrompt() {
+  const row = dbGetLocalPromptByKey.get('framework_extractor');
+  return row ? row.content : frameworkExtractorPrompt || 'You are a GRC framework extraction engine for the CISO Assistant platform.';
+}
+
+// Helper: get the reference controls extractor prompt from DB
+function getRefControlsExtractorPrompt() {
+  const row = dbGetLocalPromptByKey.get('ref_controls_extractor');
+  return row ? row.content : refControlsExtractorPrompt || 'You are a GRC reference controls extraction engine for the CISO Assistant platform.';
 }
 
 // Helper: get the current chat auditor prompt from DB (always use DB as source of truth)
@@ -2551,6 +2609,7 @@ const server = http.createServer(async (req, res) => {
 
         const body = await parseBody(req);
         const config = {
+          generationType: body.generationType || 'both',
           libraryName: body.libraryName || row.name,
           provider: body.provider || row.name || 'Organization',
           language: body.language || 'en',
@@ -2615,14 +2674,34 @@ const server = http.createServer(async (req, res) => {
             }
           }
 
-          // Build the extraction prompt with config context
-          const systemPrompt = getPolicyExtractorPrompt();
+          // Determine generation type: 'framework', 'controls', or 'both' (legacy)
+          const generationType = config.generationType || 'both';
+
+          // Pick the right system prompt based on generation type
+          let systemPrompt;
+          if (generationType === 'framework') {
+            systemPrompt = getFrameworkExtractorPrompt();
+          } else if (generationType === 'controls') {
+            systemPrompt = getRefControlsExtractorPrompt();
+          } else {
+            systemPrompt = getPolicyExtractorPrompt(); // Legacy: both framework + controls
+          }
 
           // Compute slugs for URN generation
           const orgSlug = (config.provider || 'org').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
           const libSlug = (config.libraryName || row.name || 'policy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-          let userPrompt = `Extract all policies from the uploaded document(s) into a CISO Assistant library.\n\n`;
+          // Build the task description based on generation type
+          let taskDesc;
+          if (generationType === 'framework') {
+            taskDesc = 'Extract the document structure into a CISO Assistant framework library (framework + requirement_nodes ONLY, no reference_controls).';
+          } else if (generationType === 'controls') {
+            taskDesc = 'Extract reusable reference controls (procedures, technical controls, processes) into a CISO Assistant controls library (reference_controls ONLY, no framework).';
+          } else {
+            taskDesc = 'Extract all policies from the uploaded document(s) into a full CISO Assistant library (framework + requirement_nodes + reference_controls).';
+          }
+
+          let userPrompt = `${taskDesc}\n\n`;
           userPrompt += `Use these EXACT values in the output JSON:\n`;
           userPrompt += `- urn: "urn:${orgSlug}:risk:library:${libSlug}"\n`;
           userPrompt += `- locale: "${config.language || 'en'}"\n`;
@@ -2633,11 +2712,12 @@ const server = http.createServer(async (req, res) => {
           userPrompt += `- <org-slug>: "${orgSlug}"\n`;
           userPrompt += `- <lib-slug>: "${libSlug}"\n\n`;
           userPrompt += `Configuration:\n`;
+          userPrompt += `- Generation Type: ${generationType}\n`;
           userPrompt += `- Detail Level: ${config.detailLevel}\n`;
-          if (config.linkedFrameworkIds.length > 0) {
+          if (config.linkedFrameworkIds && config.linkedFrameworkIds.length > 0) {
             userPrompt += `- Link to Framework IDs: ${config.linkedFrameworkIds.join(', ')}\n`;
           }
-          userPrompt += `\nPlease analyze ALL the uploaded documents and extract every policy statement into the full CISO Assistant library JSON structure.`;
+          userPrompt += `\nPlease analyze ALL the uploaded documents and extract into the JSON structure specified by your instructions.`;
 
           // Build parts: file references + text prompt
           const parts = [];
@@ -2676,7 +2756,7 @@ const server = http.createServer(async (req, res) => {
 
           const extractedLibrary = JSON.parse(jsonStr);
 
-          // The AI now returns the full library structure (with top-level urn, name, objects, etc.)
+          // The AI returns the full library structure (with top-level urn, name, objects, etc.)
           // Extract the objects part for metadata computation
           const libObjects = extractedLibrary.objects || extractedLibrary;
           const refControls = libObjects.reference_controls || [];
@@ -2689,17 +2769,27 @@ const server = http.createServer(async (req, res) => {
           // Compute confidence from annotations
           let totalConfidence = 0;
           let confCount = 0;
+          // For framework mode: parse annotations from assessable nodes
           assessableNodes.forEach(n => {
             try {
               const ann = JSON.parse(n.annotation || '{}');
               if (ann.confidence) { totalConfidence += ann.confidence; confCount++; }
             } catch (e) { /* ignore */ }
           });
+          // For controls mode: parse annotations from reference controls
+          refControls.forEach(rc => {
+            try {
+              const ann = JSON.parse(rc.annotation || '{}');
+              if (ann.confidence) { totalConfidence += ann.confidence; confCount++; }
+            } catch (e) { /* ignore */ }
+          });
           const avgConfidence = confCount > 0 ? Math.round((totalConfidence / confCount) * 100) : 85;
 
+          // Build result based on generation type
           const result = {
             id: 'pg-' + crypto.randomUUID(),
             collectionId: collId,
+            generationType, // 'framework', 'controls', or 'both'
             libraryName: config.libraryName,
             provider: config.provider,
             language: config.language,
@@ -2707,7 +2797,43 @@ const server = http.createServer(async (req, res) => {
             generationTime: elapsed + 's',
             sourceFileCount: files.length,
             extractedLibrary,
-            policies: refControls.map((rc, i) => ({
+            linkedFrameworks: config.linkedFrameworkIds || [],
+          };
+
+          if (generationType === 'framework') {
+            // Framework mode: expose requirement nodes for review
+            result.requirementNodes = reqNodes.map((rn, i) => ({
+              id: 'rn-' + (i + 1),
+              urn: rn.urn || '',
+              ref_id: rn.ref_id || '',
+              name: rn.name || 'Unnamed Node',
+              description: rn.description || '',
+              assessable: !!rn.assessable,
+              depth: rn.depth || 1,
+              parent_urn: rn.parent_urn || null,
+            }));
+            result.totalNodes = reqNodes.length;
+            result.assessableNodes = assessableNodes.length;
+            result.policies = []; // No policies in framework mode
+          } else if (generationType === 'controls') {
+            // Controls mode: expose reference controls for review (displayed as "policies")
+            result.policies = refControls.map((rc, i) => ({
+              id: 'gp-' + (i + 1),
+              code: rc.ref_id || `RC-${i + 1}`,
+              name: rc.name || 'Unnamed Control',
+              description: rc.description || '',
+              category: rc.category || 'policy',
+              csfFunction: rc.csf_function || 'govern',
+              sourceFile: files.length === 1 ? files[0].name : 'Multiple files',
+              sourcePages: '',
+              linkedRequirements: [],
+              linkedFrameworks: config.linkedFrameworkIds || [],
+            }));
+            result.csfDistribution = csfFunctions;
+            result.categoryDistribution = categories;
+          } else {
+            // Legacy "both" mode: full library with framework + controls
+            result.policies = refControls.map((rc, i) => ({
               id: 'gp-' + (i + 1),
               code: rc.ref_id || `RC-${i + 1}`,
               name: rc.name || 'Unnamed Control',
@@ -2717,18 +2843,17 @@ const server = http.createServer(async (req, res) => {
               sourceFile: files.length === 1 ? files[0].name : 'Multiple files',
               sourcePages: '',
               linkedRequirements: assessableNodes.filter(n => (n.reference_controls || []).includes(rc.urn)).map(n => n.ref_id || n.name).slice(0, 5),
-              linkedFrameworks: config.linkedFrameworkIds,
-            })),
-            linkedFrameworks: config.linkedFrameworkIds,
-            csfDistribution: csfFunctions,
-            categoryDistribution: categories,
-          };
+              linkedFrameworks: config.linkedFrameworkIds || [],
+            }));
+            result.csfDistribution = csfFunctions;
+            result.categoryDistribution = categories;
+          }
 
           // Save to DB
           const now3 = new Date().toISOString();
           dbUpdatePolicyCollection.run(row.name, row.description, 'generated', JSON.stringify(config), JSON.stringify(result), now3, collId);
 
-          console.log(`[Policy Extraction] ✅ Extracted ${refControls.length} reference controls, ${assessableNodes.length} assessable requirements`);
+          console.log(`[Policy Extraction] ✅ [${generationType}] Extracted ${refControls.length} reference controls, ${reqNodes.length} requirement nodes (${assessableNodes.length} assessable)`);
 
           sendJSON(res, 200, { success: true, data: result });
 
@@ -2761,42 +2886,67 @@ const server = http.createServer(async (req, res) => {
 
         const result = JSON.parse(row.extraction_result);
         const config = JSON.parse(row.config || '{}');
+        const generationType = result.generationType || config.generationType || 'both';
 
-        // The AI now returns the full library structure including urn, name, objects, etc.
+        // The AI returns the full library structure including urn, name, objects, etc.
         const extractedLibrary = result.extractedLibrary || {};
         const libObjects = extractedLibrary.objects || extractedLibrary;
 
-        // Use edited policies from frontend to sync edits back into the library's reference_controls
-        const editedPolicies = body.policies && body.policies.length ? body.policies : null;
-        const refControls = libObjects.reference_controls || [];
+        console.log(`[Policy Approve] Generation type: ${generationType}`);
 
-        if (editedPolicies && refControls.length) {
-          libObjects.reference_controls = refControls.map(rc => {
-            const edited = editedPolicies.find(p =>
-              (p.code || p.ref_id) === rc.ref_id || p.name === rc.name
-            );
-            if (edited) {
-              rc.name = edited.name || rc.name;
-              rc.description = edited.description || rc.description;
-              rc.category = edited.category || rc.category;
-              rc.csf_function = edited.csfFunction || edited.csf_function || rc.csf_function;
-            }
-            return rc;
-          });
+        // ── Build library payload based on generation type ──
+
+        let uploadObjects = {};
+        if (generationType === 'framework') {
+          // Framework-only: include framework, no reference_controls
+          uploadObjects = { framework: libObjects.framework || {} };
+        } else if (generationType === 'controls') {
+          // Controls-only: include reference_controls, no framework
+          // Apply edits from frontend to reference_controls
+          const editedPolicies = body.policies && body.policies.length ? body.policies : null;
+          const refControls = libObjects.reference_controls || [];
+          if (editedPolicies && refControls.length) {
+            libObjects.reference_controls = refControls.map(rc => {
+              const edited = editedPolicies.find(p =>
+                (p.code || p.ref_id) === rc.ref_id || p.name === rc.name
+              );
+              if (edited) {
+                rc.name = edited.name || rc.name;
+                rc.description = edited.description || rc.description;
+                rc.category = edited.category || rc.category;
+                rc.csf_function = edited.csfFunction || edited.csf_function || rc.csf_function;
+              }
+              return rc;
+            });
+          }
+          uploadObjects = { reference_controls: libObjects.reference_controls || [] };
+        } else {
+          // Legacy "both" mode: include reference_controls only (no framework as per previous user request)
+          const editedPolicies = body.policies && body.policies.length ? body.policies : null;
+          const refControls = libObjects.reference_controls || [];
+          if (editedPolicies && refControls.length) {
+            libObjects.reference_controls = refControls.map(rc => {
+              const edited = editedPolicies.find(p =>
+                (p.code || p.ref_id) === rc.ref_id || p.name === rc.name
+              );
+              if (edited) {
+                rc.name = edited.name || rc.name;
+                rc.description = edited.description || rc.description;
+                rc.category = edited.category || rc.category;
+                rc.csf_function = edited.csfFunction || edited.csf_function || rc.csf_function;
+              }
+              return rc;
+            });
+          }
+          uploadObjects = { reference_controls: libObjects.reference_controls || [] };
         }
-
-        // ── Step 1: Upload library via the existing YAML upload API
-        // Build the library with reference_controls only (no framework — we don't create frameworks)
-        // Uses the same endpoint the CISO Assistant frontend uses: POST /api/stored-libraries/upload/
-        const uploadObjects = { reference_controls: libObjects.reference_controls || [] };
-        // Deliberately exclude framework/requirement_nodes — only reference controls go into the library
 
         const libraryPayload = {
           urn: extractedLibrary.urn || `urn:${(config.provider || 'org').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}:risk:library:${(config.libraryName || row.name || 'policy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`,
           locale: extractedLibrary.locale || config.language || 'en',
           ref_id: extractedLibrary.ref_id || (config.libraryName || row.name || 'policy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
           name: extractedLibrary.name || config.libraryName || row.name,
-          description: extractedLibrary.description || row.description || `AI-extracted policy library from ${result.sourceFileCount || 0} document(s).`,
+          description: extractedLibrary.description || row.description || `AI-extracted ${generationType} library from ${result.sourceFileCount || 0} document(s).`,
           copyright: extractedLibrary.copyright || `© ${config.provider || 'Organization'} ${new Date().getFullYear()}`,
           version: extractedLibrary.version || 1,
           provider: extractedLibrary.provider || config.provider || '',
@@ -2807,8 +2957,9 @@ const server = http.createServer(async (req, res) => {
         const libSlug = libraryPayload.ref_id || 'ai-policy-library';
         const filename = `${libSlug}.yaml`;
 
-        console.log(`[Policy Approve] Step 1: Uploading library "${libraryPayload.name}" (${libraryPayload.urn}) as ${filename}`);
+        console.log(`[Policy Approve] Step 1: Uploading ${generationType} library "${libraryPayload.name}" (${libraryPayload.urn}) as ${filename}`);
 
+        // ── Step 1: Upload library via the existing YAML upload API ──
         let libraryCreated = false;
         let libraryError = null;
         let storedLibraryData = null;
@@ -2838,136 +2989,132 @@ const server = http.createServer(async (req, res) => {
           console.error(`[Policy Approve] ⚠ Library upload exception: ${libErr.message}`);
         }
 
-        // ── Step 2: Create Policy (AppliedControl) objects in the target folder, linked to ReferenceControls
+        // ── Step 2: For controls/both mode — create Policy (AppliedControl) objects ──
         const grcResults = [];
         const grcErrors = [];
 
-        const VALID_CSF = new Set(['govern', 'identify', 'protect', 'detect', 'respond', 'recover']);
-        const VALID_CATEGORY = new Set(['policy', 'process', 'technical', 'physical', 'procedure']);
+        if (generationType !== 'framework') {
+          // Only create applied controls when we have reference_controls
+          const VALID_CSF = new Set(['govern', 'identify', 'protect', 'detect', 'respond', 'recover']);
+          const VALID_CATEGORY = new Set(['policy', 'process', 'technical', 'physical', 'procedure']);
 
-        // If library was created, fetch the ReferenceControl IDs so we can link policies
-        let rcUrnToId = {};
-        if (libraryCreated && storedLibraryData && storedLibraryData.id) {
-          try {
-            // Fetch reference controls from the loaded library
-            const rcRes = await grcFetch(
-              `${GRC_API_URL}/api/reference-controls/?library=${storedLibraryData.loaded_library || ''}&page_size=500`,
-              {}, reqToken
-            );
-            if (rcRes.ok) {
-              const rcData = await rcRes.json();
-              const rcList = rcData.results || rcData || [];
-              rcList.forEach(rc => {
-                if (rc.urn) rcUrnToId[rc.urn.toLowerCase()] = rc.id;
-              });
-              console.log(`[Policy Approve] Fetched ${Object.keys(rcUrnToId).length} reference control IDs for linking`);
-            }
-          } catch (e) {
-            console.warn(`[Policy Approve] Could not fetch reference controls for linking: ${e.message}`);
-          }
-        }
-
-        // Create a Policy for each ReferenceControl, linked via reference_control FK
-        // Includes retry logic: up to 3 attempts per policy with exponential backoff
-        const MAX_RETRIES = 3;
-        const updatedRefControls = libObjects.reference_controls || [];
-
-        async function createPolicy(rc, index, attempt) {
-          const rawCsf = (rc.csf_function || '').toLowerCase().trim();
-          const rawCat = (rc.category || '').toLowerCase().trim();
-
-          // Truncate fields to Django model max_length limits
-          const policyName = (rc.name || 'Untitled Policy').substring(0, 200);
-          const policyRefId = (rc.ref_id || '').substring(0, 100);
-
-          const grcBody = {
-            name: policyName,
-            folder,
-            description: rc.description || '',
-            ref_id: policyRefId,
-            category: VALID_CATEGORY.has(rawCat) ? rawCat : 'policy',
-            status: '--',
-            priority: 3,
-            effort: 'M',
-          };
-
-          if (VALID_CSF.has(rawCsf)) grcBody.csf_function = rawCsf;
-          if (!grcBody.ref_id) delete grcBody.ref_id;
-
-          const rcId = rcUrnToId[(rc.urn || '').toLowerCase()];
-          if (rcId) grcBody.reference_control = rcId;
-
-          const attemptLabel = attempt > 1 ? ` (retry ${attempt - 1}/${MAX_RETRIES - 1})` : '';
-          console.log(`[Policy Approve] ${index + 1}/${updatedRefControls.length}: POST "${grcBody.name}" (ref_control=${rcId || 'none'})${attemptLabel}`);
-
-          const bodyBuf = Buffer.from(JSON.stringify(grcBody), 'utf-8');
-          const grcRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Content-Length': String(bodyBuf.length),
-            },
-            body: bodyBuf,
-          }, reqToken);
-
-          if (grcRes.ok) {
-            const created = await grcRes.json();
-            return { success: true, id: created.id, name: grcBody.name };
-          } else {
-            const errText = await grcRes.text();
-            console.error(`[Policy Approve] API error detail for "${grcBody.name}": status=${grcRes.status}, body=${errText}, sent=${JSON.stringify(grcBody).substring(0, 500)}`);
-            return { success: false, name: grcBody.name, status: grcRes.status, error: errText };
-          }
-        }
-
-        const DELAY_BETWEEN_MS = 300; // Pause between each policy creation to avoid overwhelming the server
-
-        for (let i = 0; i < updatedRefControls.length; i++) {
-          const rc = updatedRefControls[i];
-          let lastResult = null;
-
-          for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          // If library was created, fetch the ReferenceControl IDs so we can link policies
+          let rcUrnToId = {};
+          if (libraryCreated && storedLibraryData && storedLibraryData.id) {
             try {
-              lastResult = await createPolicy(rc, i, attempt);
-              if (lastResult.success) {
-                console.log(`[Policy Approve] ✅ Created policy "${lastResult.name}" → id=${lastResult.id}`);
-                grcResults.push({ id: lastResult.id, name: lastResult.name, success: true });
-                break;
+              const rcRes = await grcFetch(
+                `${GRC_API_URL}/api/reference-controls/?library=${storedLibraryData.loaded_library || ''}&page_size=500`,
+                {}, reqToken
+              );
+              if (rcRes.ok) {
+                const rcData = await rcRes.json();
+                const rcList = rcData.results || rcData || [];
+                rcList.forEach(rc => {
+                  if (rc.urn) rcUrnToId[rc.urn.toLowerCase()] = rc.id;
+                });
+                console.log(`[Policy Approve] Fetched ${Object.keys(rcUrnToId).length} reference control IDs for linking`);
               }
-              // Only retry on server errors (5xx) or rate limits (429); skip for client errors (4xx)
-              const isRetryable = lastResult.status >= 500 || lastResult.status === 429;
-              if (!isRetryable) {
-                console.warn(`[Policy Approve] ❌ Non-retryable error for "${lastResult.name}": ${lastResult.status} ${lastResult.error}`);
-                break;
-              }
-              if (attempt < MAX_RETRIES) {
-                const delay = 1000 * Math.pow(2, attempt - 1); // 1s, 2s, 4s
-                console.warn(`[Policy Approve] ⚠ Attempt ${attempt} failed for "${lastResult.name}": ${lastResult.status} — retrying in ${delay}ms...`);
-                await new Promise(r => setTimeout(r, delay));
-              }
-            } catch (pushErr) {
-              lastResult = { success: false, name: rc.name || 'Unknown', error: pushErr.message };
-              if (attempt < MAX_RETRIES) {
-                const delay = 1000 * Math.pow(2, attempt - 1);
-                console.warn(`[Policy Approve] ⚠ Attempt ${attempt} exception for "${rc.name}": ${pushErr.message} — retrying in ${delay}ms...`);
-                await new Promise(r => setTimeout(r, delay));
-              }
+            } catch (e) {
+              console.warn(`[Policy Approve] Could not fetch reference controls for linking: ${e.message}`);
             }
           }
 
-          // After all retries exhausted, record failure
-          if (lastResult && !lastResult.success) {
-            console.error(`[Policy Approve] ❌ Failed "${lastResult.name}" after ${MAX_RETRIES} attempts: ${lastResult.error || lastResult.status}`);
-            grcErrors.push({ name: lastResult.name, status: lastResult.status, error: lastResult.error });
+          const MAX_RETRIES = 3;
+          const updatedRefControls = uploadObjects.reference_controls || [];
+
+          async function createPolicy(rc, index, attempt) {
+            const rawCsf = (rc.csf_function || '').toLowerCase().trim();
+            const rawCat = (rc.category || '').toLowerCase().trim();
+
+            const policyName = (rc.name || 'Untitled Policy').substring(0, 200);
+            const policyRefId = (rc.ref_id || '').substring(0, 100);
+
+            const grcBody = {
+              name: policyName,
+              folder,
+              description: rc.description || '',
+              ref_id: policyRefId,
+              category: VALID_CATEGORY.has(rawCat) ? rawCat : 'policy',
+              status: '--',
+              priority: 3,
+              effort: 'M',
+            };
+
+            if (VALID_CSF.has(rawCsf)) grcBody.csf_function = rawCsf;
+            if (!grcBody.ref_id) delete grcBody.ref_id;
+
+            const rcId = rcUrnToId[(rc.urn || '').toLowerCase()];
+            if (rcId) grcBody.reference_control = rcId;
+
+            const attemptLabel = attempt > 1 ? ` (retry ${attempt - 1}/${MAX_RETRIES - 1})` : '';
+            console.log(`[Policy Approve] ${index + 1}/${updatedRefControls.length}: POST "${grcBody.name}" (ref_control=${rcId || 'none'})${attemptLabel}`);
+
+            const bodyBuf = Buffer.from(JSON.stringify(grcBody), 'utf-8');
+            const grcRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Length': String(bodyBuf.length),
+              },
+              body: bodyBuf,
+            }, reqToken);
+
+            if (grcRes.ok) {
+              const created = await grcRes.json();
+              return { success: true, id: created.id, name: grcBody.name };
+            } else {
+              const errText = await grcRes.text();
+              console.error(`[Policy Approve] API error detail for "${grcBody.name}": status=${grcRes.status}, body=${errText}, sent=${JSON.stringify(grcBody).substring(0, 500)}`);
+              return { success: false, name: grcBody.name, status: grcRes.status, error: errText };
+            }
           }
 
-          // Small delay between requests to prevent server overload
-          if (i < updatedRefControls.length - 1) {
-            await new Promise(r => setTimeout(r, DELAY_BETWEEN_MS));
+          const DELAY_BETWEEN_MS = 300;
+
+          for (let i = 0; i < updatedRefControls.length; i++) {
+            const rc = updatedRefControls[i];
+            let lastResult = null;
+
+            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+              try {
+                lastResult = await createPolicy(rc, i, attempt);
+                if (lastResult.success) {
+                  console.log(`[Policy Approve] ✅ Created policy "${lastResult.name}" → id=${lastResult.id}`);
+                  grcResults.push({ id: lastResult.id, name: lastResult.name, success: true });
+                  break;
+                }
+                const isRetryable = lastResult.status >= 500 || lastResult.status === 429;
+                if (!isRetryable) {
+                  console.warn(`[Policy Approve] ❌ Non-retryable error for "${lastResult.name}": ${lastResult.status} ${lastResult.error}`);
+                  break;
+                }
+                if (attempt < MAX_RETRIES) {
+                  const delay = 1000 * Math.pow(2, attempt - 1);
+                  console.warn(`[Policy Approve] ⚠ Attempt ${attempt} failed for "${lastResult.name}": ${lastResult.status} — retrying in ${delay}ms...`);
+                  await new Promise(r => setTimeout(r, delay));
+                }
+              } catch (pushErr) {
+                lastResult = { success: false, name: rc.name || 'Unknown', error: pushErr.message };
+                if (attempt < MAX_RETRIES) {
+                  const delay = 1000 * Math.pow(2, attempt - 1);
+                  console.warn(`[Policy Approve] ⚠ Attempt ${attempt} exception for "${rc.name}": ${pushErr.message} — retrying in ${delay}ms...`);
+                  await new Promise(r => setTimeout(r, delay));
+                }
+              }
+            }
+
+            if (lastResult && !lastResult.success) {
+              console.error(`[Policy Approve] ❌ Failed "${lastResult.name}" after ${MAX_RETRIES} attempts: ${lastResult.error || lastResult.status}`);
+              grcErrors.push({ name: lastResult.name, status: lastResult.status, error: lastResult.error });
+            }
+
+            if (i < updatedRefControls.length - 1) {
+              await new Promise(r => setTimeout(r, DELAY_BETWEEN_MS));
+            }
           }
         }
 
-        // ── Step 3: Save approved state
+        // ── Step 3: Save approved state ──
         const now2 = new Date().toISOString();
         result.approved = true;
         result.approvedAt = now2;
@@ -2978,18 +3125,22 @@ const server = http.createServer(async (req, res) => {
         result.grcErrors = grcErrors;
         dbUpdatePolicyCollection.run(row.name, row.description, 'approved', row.config, JSON.stringify(result), now2, collId);
 
-        console.log(`[Policy Approve] ✅ Done: library=${libraryCreated ? 'created' : 'failed'}, ${grcResults.length}/${updatedRefControls.length} policies pushed (${grcErrors.length} errors)`);
+        const totalItems = generationType === 'framework'
+          ? (libObjects.framework?.requirement_nodes?.length || 0)
+          : (uploadObjects.reference_controls?.length || 0);
+        console.log(`[Policy Approve] ✅ [${generationType}] Done: library=${libraryCreated ? 'created' : 'failed'}, ${grcResults.length}/${totalItems} items (${grcErrors.length} errors)`);
 
         sendJSON(res, 200, {
           success: true,
           data: {
             approved: true,
+            generationType,
             libraryCreated,
             libraryUrn: libraryPayload.urn,
             libraryError,
             created: grcResults.length,
             errors: grcErrors.length,
-            total: updatedRefControls.length,
+            total: totalItems,
             grcResults,
             grcErrors,
           }

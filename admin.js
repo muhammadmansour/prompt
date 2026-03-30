@@ -4555,6 +4555,7 @@ let piSelectedCollectionId = null;
 let piSelectedFileIds = [];
 let piGenerationResult = null;
 let piReviewPolicies = [];
+let piReviewNodes = [];
 let piGrcFrameworksCache = null;
 
 // API base for policy collections
@@ -4601,6 +4602,7 @@ async function loadPolicyIngestion() {
   piSelectedFileIds = [];
   piGenerationResult = null;
   piReviewPolicies = [];
+  piReviewNodes = [];
   // Show loading state
   const el = document.getElementById('pi-content');
   if (el) el.innerHTML = '<div style="text-align:center;padding:60px;color:#9ca3af"><div class="pi-spinner-icon" style="margin:0 auto 12px"><svg width="24" height="24" class="pi-spinner" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.3"/><path d="M7 2C10 2 12 4.7 12 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>Loading collections…</div>';
@@ -4978,18 +4980,44 @@ function piRenderConfigModal(coll) {
           <button class="pi-modal-close" onclick="piCloseConfig()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
         </div>
         <div class="pi-modal-body">
-          <div><label class="pi-form-label">Policy Library Name</label><input type="text" class="pi-form-input" id="pi-cfg-lib-name" value="${esc(coll.name)}" placeholder="e.g., Information Security Policies"></div>
+          <div>
+            <label class="pi-form-label">Generation Type <span style="color:#ef4444">*</span></label>
+            <p class="pi-form-hint" style="margin-bottom:8px">Choose what to extract from the documents</p>
+            <div class="pi-detail-radio-group">
+              <label class="pi-radio-option active" id="pi-radio-framework" onclick="piSetGenerationType('framework')">
+                <input type="radio" name="pi-gen-type" value="framework" checked>
+                <div>
+                  <div class="pi-radio-title" style="display:flex;align-items:center;gap:6px">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2L12 5V11L8 14L4 11V5L8 2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                    Generate Policy Framework
+                  </div>
+                  <div class="pi-radio-desc">Extract document structure as a compliance framework with requirement nodes for assessments</div>
+                </div>
+              </label>
+              <label class="pi-radio-option" id="pi-radio-controls" onclick="piSetGenerationType('controls')">
+                <input type="radio" name="pi-gen-type" value="controls">
+                <div>
+                  <div class="pi-radio-title" style="display:flex;align-items:center;gap:6px">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M5 8L7 10L11 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    Generate Reference Controls
+                  </div>
+                  <div class="pi-radio-desc">Extract reusable procedures and controls that become Applied Controls (Policies) in GRC</div>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div><label class="pi-form-label">Library Name</label><input type="text" class="pi-form-input" id="pi-cfg-lib-name" value="${esc(coll.name)}" placeholder="e.g., Information Security Policies"></div>
           <div><label class="pi-form-label">Provider / Organization</label><input type="text" class="pi-form-input" id="pi-cfg-provider" value="" placeholder="Organization name"></div>
-          <div><label class="pi-form-label">GRC Folder <span style="color:#ef4444">*</span></label><p class="pi-form-hint">Policies will be created in this GRC folder</p><select class="pi-form-select" id="pi-cfg-folder"><option value="">Loading folders…</option></select></div>
+          <div id="pi-cfg-folder-row" style="display:none"><label class="pi-form-label">GRC Folder <span style="color:#ef4444">*</span></label><p class="pi-form-hint">Policies will be created in this GRC folder</p><select class="pi-form-select" id="pi-cfg-folder"><option value="">Loading folders…</option></select></div>
           <div><label class="pi-form-label">Language</label><select class="pi-form-select" id="pi-cfg-lang"><option value="en">English</option><option value="ar">Arabic</option><option value="ar+en">Arabic + English</option></select></div>
           <div>
             <label class="pi-form-label">Detail Level</label>
             <div class="pi-detail-radio-group">
-              <label class="pi-radio-option active" id="pi-radio-comprehensive" onclick="piSetDetailLevel('comprehensive')"><input type="radio" name="pi-detail" checked><div><div class="pi-radio-title">Comprehensive</div><div class="pi-radio-desc">Extract all policies and sub-procedures</div></div></label>
-              <label class="pi-radio-option" id="pi-radio-summary" onclick="piSetDetailLevel('summary')"><input type="radio" name="pi-detail"><div><div class="pi-radio-title">Summary</div><div class="pi-radio-desc">Main policies only</div></div></label>
+              <label class="pi-radio-option active" id="pi-radio-comprehensive" onclick="piSetDetailLevel('comprehensive')"><input type="radio" name="pi-detail" checked><div><div class="pi-radio-title">Comprehensive</div><div class="pi-radio-desc">Extract all sections and sub-sections</div></div></label>
+              <label class="pi-radio-option" id="pi-radio-summary" onclick="piSetDetailLevel('summary')"><input type="radio" name="pi-detail"><div><div class="pi-radio-title">Summary</div><div class="pi-radio-desc">Main sections only</div></div></label>
             </div>
           </div>
-          <div><label class="pi-form-label">Link to Frameworks <span>(optional)</span></label><p class="pi-form-hint">Select frameworks to automatically link generated policies to</p><div class="pi-fw-list">${fwList}</div></div>
+          <div id="pi-cfg-fw-row" style="display:none"><label class="pi-form-label">Link to Frameworks <span>(optional)</span></label><p class="pi-form-hint">Select frameworks to automatically link generated items to</p><div class="pi-fw-list">${fwList}</div></div>
           <div><label class="pi-form-label">Included Files</label><div class="pi-included-files" id="pi-cfg-files">${filesList || '<div style="text-align:center;padding:8px"><span style="font-size:10px;color:#9ca3af">No files selected</span></div>'}</div></div>
         </div>
         <div class="pi-modal-footer">
@@ -5029,6 +5057,18 @@ window.piCloseConfigModal = piCloseConfigModal;
 function piCloseConfig() { piPhase = 'collection-detail'; piRender(); }
 window.piCloseConfig = piCloseConfig;
 
+function piSetGenerationType(type) {
+  document.getElementById('pi-radio-framework')?.classList.toggle('active', type === 'framework');
+  document.getElementById('pi-radio-controls')?.classList.toggle('active', type === 'controls');
+  // Show/hide folder selector: only needed for controls (policies are created in a folder)
+  const folderRow = document.getElementById('pi-cfg-folder-row');
+  if (folderRow) folderRow.style.display = type === 'framework' ? 'none' : '';
+  // Show/hide linked frameworks: only relevant for controls
+  const fwRow = document.getElementById('pi-cfg-fw-row');
+  if (fwRow) fwRow.style.display = type === 'framework' ? 'none' : '';
+}
+window.piSetGenerationType = piSetGenerationType;
+
 function piSetDetailLevel(level) {
   document.getElementById('pi-radio-comprehensive')?.classList.toggle('active', level === 'comprehensive');
   document.getElementById('pi-radio-summary')?.classList.toggle('active', level === 'summary');
@@ -5048,11 +5088,18 @@ let piCurrentConfig = {}; // Store config for approve step
 
 function piStartGenerate() {
   // Collect config values from the modal
+  const generationType = document.getElementById('pi-radio-framework')?.classList.contains('active') ? 'framework' : 'controls';
   const libraryName = document.getElementById('pi-cfg-lib-name')?.value?.trim() || 'Untitled Library';
   const provider = document.getElementById('pi-cfg-provider')?.value?.trim() || '';
   const folder = document.getElementById('pi-cfg-folder')?.value || '';
   const language = document.getElementById('pi-cfg-lang')?.value || 'en';
   const detailLevel = document.getElementById('pi-radio-comprehensive')?.classList.contains('active') ? 'comprehensive' : 'summary';
+
+  // For controls mode, folder is required
+  if (generationType === 'controls' && !folder) {
+    toast('error', 'Missing Folder', 'Please select a GRC folder for policy creation.');
+    return;
+  }
 
   // Collect selected framework IDs
   const linkedFrameworkIds = [];
@@ -5063,14 +5110,14 @@ function piStartGenerate() {
   // Collect selected file IDs from included files
   const selectedFileIds = piSelectedFileIds.length > 0 ? piSelectedFileIds : undefined;
 
-  piCurrentConfig = { libraryName, provider, folder, language, detailLevel, linkedFrameworkIds };
+  piCurrentConfig = { generationType, libraryName, provider, folder, language, detailLevel, linkedFrameworkIds };
 
   piPhase = 'generating';
   piRender();
 
-  // Call the extraction API
+  // Call the extraction API with generationType
   piRunExtraction(piSelectedCollectionId, {
-    libraryName, provider, language, detailLevel, linkedFrameworkIds, selectedFileIds,
+    generationType, libraryName, provider, language, detailLevel, linkedFrameworkIds, selectedFileIds,
   });
 }
 window.piStartGenerate = piStartGenerate;
@@ -5088,9 +5135,16 @@ async function piRunExtraction(collId, config) {
 
     piGenerationResult = data.data;
     piReviewPolicies = data.data.policies || [];
+    piReviewNodes = data.data.requirementNodes || [];
     piPhase = 'review';
     piRender();
-    toast('success', 'Extraction Complete', `${piReviewPolicies.length} policies extracted from ${data.data.sourceFileCount || 0} files.`);
+
+    const genType = data.data.generationType || 'both';
+    if (genType === 'framework') {
+      toast('success', 'Framework Extracted', `${piReviewNodes.length} requirement nodes (${data.data.assessableNodes || 0} assessable) extracted from ${data.data.sourceFileCount || 0} files.`);
+    } else {
+      toast('success', 'Controls Extracted', `${piReviewPolicies.length} reference controls extracted from ${data.data.sourceFileCount || 0} files.`);
+    }
   } catch (err) {
     piStopProgressAnimation();
     console.error('Policy extraction error:', err);
@@ -5187,10 +5241,84 @@ function piUpdateStepUI(idx, state) {
 function piRenderReview() {
   if (!piGenerationResult) return '';
   const r = piGenerationResult;
+  const genType = r.generationType || 'both';
   const confClass = r.confidenceScore >= 80 ? 'pi-confidence-high' : r.confidenceScore >= 60 ? 'pi-confidence-mid' : 'pi-confidence-low';
   const confBarClass = r.confidenceScore >= 80 ? 'background:#059669' : r.confidenceScore >= 60 ? 'background:#d97706' : 'background:#dc2626';
 
-  const catLabels = { policy: { label: 'Policy', cls: 'pi-tag-policy' }, process: { label: 'Process', cls: 'pi-tag-process' }, technical: { label: 'Technical', cls: 'pi-tag-technical' }, physical: { label: 'Physical', cls: 'pi-tag-physical' } };
+  // ── Framework mode: render requirement nodes tree ──
+  if (genType === 'framework') {
+    const nodes = piReviewNodes || [];
+    const totalNodes = nodes.length;
+    const assessableCount = nodes.filter(n => n.assessable).length;
+    const structuralCount = totalNodes - assessableCount;
+
+    // Build indented tree view of requirement nodes
+    const nodesHtml = nodes.map((n, idx) => {
+      const indent = Math.max(0, (n.depth || 1) - 1) * 20;
+      const isAssessable = !!n.assessable;
+      const depthLabel = n.depth === 1 ? 'Root' : n.depth === 2 ? 'Section' : n.depth === 3 ? 'Sub-section' : 'Requirement';
+      const assessBadge = isAssessable
+        ? '<span class="pi-policy-tag" style="background:#dcfce7;color:#166534;font-size:9px;padding:1px 6px;border-radius:4px">Assessable</span>'
+        : '<span class="pi-policy-tag" style="background:#f3f4f6;color:#6b7280;font-size:9px;padding:1px 6px;border-radius:4px">Structural</span>';
+
+      return `
+        <div class="pi-policy-item" style="margin-left:${indent}px">
+          <div class="pi-policy-item-header" onclick="piTogglePolicy('${n.id}')">
+            <div class="pi-policy-toggle"><svg width="14" height="14" viewBox="0 0 12 12" fill="none"><path d="${idx === 0 ? 'M3 5L6 8L9 5' : 'M5 3L8 6L5 9'}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <span class="pi-policy-code" style="min-width:40px">${esc(n.ref_id || '')}</span>
+            <span class="pi-policy-name">${esc(n.name)}</span>
+            <div class="pi-policy-tags">
+              ${assessBadge}
+              <span style="font-size:9px;color:#9ca3af">${depthLabel}</span>
+            </div>
+          </div>
+          <div class="pi-policy-detail${idx === 0 ? ' open' : ''}" id="pi-policy-detail-${n.id}">
+            ${n.description ? `<div class="pi-policy-detail-section"><div class="pi-policy-detail-label">Description</div><p class="pi-policy-detail-text">${esc(n.description)}</p></div>` : ''}
+            <div class="pi-policy-detail-section" style="display:flex;gap:16px;flex-wrap:wrap">
+              <div><span class="pi-policy-detail-label">Depth:</span> ${n.depth}</div>
+              <div><span class="pi-policy-detail-label">URN:</span> <span style="font-size:10px;color:#6b7280;font-family:monospace">${esc(n.urn || '')}</span></div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="pi-review-header">
+        <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M8 2L12 5V11L8 14L4 11V5L8 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        <h1>Review Generated Framework</h1>
+      </div>
+      <p class="pi-review-subtitle">Review the framework structure extracted from your documents before creating the library</p>
+
+      <div class="pi-review-stats"><div class="pi-review-stats-grid">
+        <div><div class="pi-review-stat-label">Library Name</div><div class="pi-review-stat-value">${esc(r.libraryName)}</div></div>
+        <div><div class="pi-review-stat-label">Source Files</div><div class="pi-review-stat-value">${r.sourceFileCount} files</div></div>
+        <div><div class="pi-review-stat-label">Total Nodes</div><div class="pi-review-stat-value">${totalNodes} nodes</div></div>
+        <div><div class="pi-review-stat-label">Assessable</div><div class="pi-review-stat-value">${assessableCount} requirements</div></div>
+        <div><div class="pi-review-stat-label">Confidence Score</div><div class="pi-confidence"><span class="pi-confidence-badge ${confClass}">${r.confidenceScore}%</span><div class="pi-confidence-bar"><div class="pi-confidence-bar-fill" style="width:${r.confidenceScore}%;${confBarClass}"></div></div></div></div>
+        <div><div class="pi-review-stat-label">Generation Time</div><div class="pi-review-stat-value">${esc(r.generationTime)}</div></div>
+      </div></div>
+
+      <div class="pi-policy-panel">
+        <div class="pi-policy-panel-header" style="background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%)">
+          <h3><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L12 5V11L8 14L4 11V5L8 2Z" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg> ${esc(r.libraryName)}</h3>
+          <p>${totalNodes} requirement nodes — ${assessableCount} assessable, ${structuralCount} structural</p>
+        </div>
+        <div class="pi-policy-list" style="max-height:500px;overflow-y:auto">
+          ${nodesHtml}
+        </div>
+      </div>
+
+      <div class="pi-review-footer">
+        <button class="pi-btn pi-btn-discard" onclick="piDiscard()">Discard & Delete</button>
+        <div style="display:flex;gap:8px">
+          <button class="pi-btn pi-btn-regenerate" onclick="piRegenerate()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 6C1 3.2 3.2 1 6 1C8.8 1 11 3.2 11 6C11 8.8 8.8 11 6 11" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M4 6L1 6L1 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Regenerate</button>
+          <button class="pi-btn pi-btn-approve" onclick="piApprove()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Approve & Create Framework Library</button>
+        </div>
+      </div>`;
+  }
+
+  // ── Controls mode (or legacy both): render reference controls / policies ──
+  const catLabels = { policy: { label: 'Policy', cls: 'pi-tag-policy' }, process: { label: 'Process', cls: 'pi-tag-process' }, technical: { label: 'Technical', cls: 'pi-tag-technical' }, physical: { label: 'Physical', cls: 'pi-tag-physical' }, procedure: { label: 'Procedure', cls: 'pi-tag-process' } };
   const csfLabels = { govern: { label: 'Govern', cls: 'pi-tag-govern' }, protect: { label: 'Protect', cls: 'pi-tag-protect' }, detect: { label: 'Detect', cls: 'pi-tag-detect' }, respond: { label: 'Respond', cls: 'pi-tag-respond' }, recover: { label: 'Recover', cls: 'pi-tag-recover' }, identify: { label: 'Identify', cls: 'pi-tag-identify' } };
 
   const policiesHtml = piReviewPolicies.map((p, idx) => {
@@ -5223,14 +5351,16 @@ function piRenderReview() {
       </div>`;
   }).join('');
 
+  const panelTitle = genType === 'controls' ? 'Reference Controls' : 'Policies & Controls';
+
   return `
-    <div class="pi-review-header"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M5 8H10M5 10.5H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><h1>Review Generated Policies</h1></div>
-    <p class="pi-review-subtitle">Review the policies extracted from your documents before adding them to the system</p>
+    <div class="pi-review-header"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><h1>Review Generated ${esc(panelTitle)}</h1></div>
+    <p class="pi-review-subtitle">Review the reference controls extracted from your documents before creating the library and policies</p>
 
     <div class="pi-review-stats"><div class="pi-review-stats-grid">
       <div><div class="pi-review-stat-label">Library Name</div><div class="pi-review-stat-value">${esc(r.libraryName)}</div></div>
       <div><div class="pi-review-stat-label">Source Files</div><div class="pi-review-stat-value">${r.sourceFileCount} files</div></div>
-      <div><div class="pi-review-stat-label">Extracted Policies</div><div class="pi-review-stat-value">${piReviewPolicies.length} policies</div></div>
+      <div><div class="pi-review-stat-label">Extracted Controls</div><div class="pi-review-stat-value">${piReviewPolicies.length} controls</div></div>
       <div><div class="pi-review-stat-label">Linked Frameworks</div><div class="pi-review-stat-value">${(r.linkedFrameworks || []).length} frameworks</div></div>
       <div><div class="pi-review-stat-label">Confidence Score</div><div class="pi-confidence"><span class="pi-confidence-badge ${confClass}">${r.confidenceScore}%</span><div class="pi-confidence-bar"><div class="pi-confidence-bar-fill" style="width:${r.confidenceScore}%;${confBarClass}"></div></div></div></div>
       <div><div class="pi-review-stat-label">Generation Time</div><div class="pi-review-stat-value">${esc(r.generationTime)}</div></div>
@@ -5238,12 +5368,12 @@ function piRenderReview() {
 
     <div class="pi-policy-panel">
       <div class="pi-policy-panel-header">
-        <h3><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L12 5V11L8 14L4 11V5L8 2Z" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg> ${esc(r.libraryName)}</h3>
-        <p>${piReviewPolicies.length} extracted policies — click to view details or edit</p>
+        <h3><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5" stroke="white" stroke-width="1.5"/><path d="M5.5 8L7 9.5L10.5 6.5" stroke="white" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> ${esc(r.libraryName)}</h3>
+        <p>${piReviewPolicies.length} extracted reference controls — click to view details or edit</p>
       </div>
       <div class="pi-policy-list">
         ${policiesHtml}
-        <button class="pi-add-policy-btn"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Add Policy Manually</button>
+        <button class="pi-add-policy-btn"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Add Control Manually</button>
       </div>
     </div>
 
@@ -5290,17 +5420,28 @@ window.piRegenerate = piRegenerate;
 
 async function piApprove() {
   if (!piSelectedCollectionId) return;
+  const genType = piGenerationResult?.generationType || piCurrentConfig?.generationType || 'both';
   const folder = piCurrentConfig.folder;
-  if (!folder) {
+
+  // Folder is only required for controls/both modes
+  if (genType !== 'framework' && !folder) {
     toast('error', 'Missing Folder', 'No GRC folder was selected. Please regenerate with a folder selected.');
     return;
   }
+
   try {
-    toast('info', 'Approving…', 'Pushing policies to GRC platform…');
+    const approveLabel = genType === 'framework' ? 'Creating framework library…' : 'Pushing controls & policies to GRC platform…';
+    toast('info', 'Approving…', approveLabel);
+
+    const approveBody = { folder };
+    if (genType !== 'framework') {
+      approveBody.policies = piReviewPolicies;
+    }
+
     const res = await fetch(`${PI_API}/${piSelectedCollectionId}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ policies: piReviewPolicies, folder }),
+      body: JSON.stringify(approveBody),
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'Approve failed');
@@ -5308,7 +5449,7 @@ async function piApprove() {
     const coll = piCollections.find(c => c.id === piSelectedCollectionId);
     if (coll) {
       coll.status = 'approved';
-      coll.generatedPoliciesCount = piReviewPolicies.length;
+      coll.generatedPoliciesCount = genType === 'framework' ? piReviewNodes.length : piReviewPolicies.length;
       coll.lastUpdated = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     }
 
@@ -5316,12 +5457,22 @@ async function piApprove() {
       ? `Library created (${data.data.libraryUrn}). `
       : (data.data.libraryError ? `Library warning: ${data.data.libraryError}. ` : '');
 
-    if (data.data.errors > 0) {
-      const errDetails = (data.data.grcErrors || []).map(e => `• ${e.name}: ${e.error}`).join('\n');
-      console.warn('GRC push errors:\n' + errDetails);
-      toast('error', 'Partial Success', `${libMsg}${data.data.created}/${data.data.total} policies pushed. ${data.data.errors} failed.`, 8000);
+    if (genType === 'framework') {
+      // Framework mode: just library creation, no policies
+      if (data.data.libraryCreated) {
+        toast('success', 'Framework Created!', `${libMsg}Framework library loaded successfully.`);
+      } else {
+        toast('error', 'Framework Error', data.data.libraryError || 'Failed to create framework library.');
+      }
     } else {
-      toast('success', 'Approved!', `${libMsg}All ${data.data.created} policies pushed to GRC successfully.`);
+      // Controls/both mode: library + policies
+      if (data.data.errors > 0) {
+        const errDetails = (data.data.grcErrors || []).map(e => `• ${e.name}: ${e.error}`).join('\n');
+        console.warn('GRC push errors:\n' + errDetails);
+        toast('error', 'Partial Success', `${libMsg}${data.data.created}/${data.data.total} controls pushed. ${data.data.errors} failed.`, 8000);
+      } else {
+        toast('success', 'Approved!', `${libMsg}All ${data.data.created} controls pushed to GRC successfully.`);
+      }
     }
     piPhase = 'success';
     piRender();
@@ -5335,6 +5486,19 @@ window.piApprove = piApprove;
 function piRenderSuccess() {
   if (!piGenerationResult) return '';
   const r = piGenerationResult;
+  const genType = r.generationType || 'both';
+  const isFramework = genType === 'framework';
+
+  const itemCount = isFramework ? piReviewNodes.length : piReviewPolicies.length;
+  const itemLabel = isFramework ? 'Requirement Nodes' : 'Reference Controls';
+  const successTitle = isFramework ? 'Framework library created successfully!' : 'Controls library created successfully!';
+  const successDesc = isFramework
+    ? 'Your documents have been converted into a compliance framework for assessments'
+    : 'Your documents have been converted into reference controls and applied policies';
+
+  const infoText = isFramework
+    ? `The framework library has been created under Governance → Libraries with ${itemCount} requirement nodes. You can now use this framework for compliance assessments.`
+    : `The library has been created under Governance → Libraries, and ${itemCount} reference controls have been generated as policies under Governance → Policies. You can now audit these policies and link them to requirement assessments.`;
 
   return `
     <div class="pi-header">
@@ -5343,32 +5507,32 @@ function piRenderSuccess() {
       </div>
     </div>
     <div class="pi-success-card">
-      <div class="pi-success-banner">
-        <h3><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="white" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Policy library created successfully!</h3>
-        <p>Your documents have been converted into a system-compliant policy library</p>
+      <div class="pi-success-banner" ${isFramework ? 'style="background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%)"' : ''}>
+        <h3><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="white" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> ${successTitle}</h3>
+        <p>${successDesc}</p>
       </div>
       <div class="pi-success-body" style="text-align:center">
         <div class="pi-success-icon"><svg width="32" height="32" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#059669" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="#059669" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
 
         <div class="pi-success-stats">
-          <div class="pi-success-stat pi-success-stat-green"><div class="pi-success-stat-val">${piReviewPolicies.length}</div><div class="pi-success-stat-label">Policies Generated</div></div>
-          <div class="pi-success-stat pi-success-stat-blue"><div class="pi-success-stat-val">${(r.linkedFrameworks || []).length}</div><div class="pi-success-stat-label">Frameworks Linked</div></div>
+          <div class="pi-success-stat pi-success-stat-green"><div class="pi-success-stat-val">${itemCount}</div><div class="pi-success-stat-label">${itemLabel}</div></div>
+          ${isFramework ? `<div class="pi-success-stat pi-success-stat-blue"><div class="pi-success-stat-val">${(r.requirementNodes || piReviewNodes || []).filter(n => n.assessable).length}</div><div class="pi-success-stat-label">Assessable Requirements</div></div>` : `<div class="pi-success-stat pi-success-stat-blue"><div class="pi-success-stat-val">${(r.linkedFrameworks || []).length}</div><div class="pi-success-stat-label">Frameworks Linked</div></div>`}
           <div class="pi-success-stat pi-success-stat-gray"><div class="pi-success-stat-val">${r.sourceFileCount}</div><div class="pi-success-stat-label">Source Files</div></div>
         </div>
 
         <div class="pi-success-details">
           <div class="pi-success-detail-row"><span class="label">Library Name</span><span class="value">${esc(r.libraryName)}</span></div>
-          <div class="pi-success-detail-row"><span class="label">Policies Generated</span><span class="value">${piReviewPolicies.length} policies</span></div>
-          <div class="pi-success-detail-row"><span class="label">Linked Frameworks</span><span class="value">${(r.linkedFrameworks || []).join(', ') || 'None'}</span></div>
+          <div class="pi-success-detail-row"><span class="label">Generation Type</span><span class="value">${isFramework ? 'Policy Framework' : 'Reference Controls'}</span></div>
+          <div class="pi-success-detail-row"><span class="label">${itemLabel}</span><span class="value">${itemCount}</span></div>
           <div class="pi-success-detail-row"><span class="label">Confidence Score</span><span class="value" style="color:#059669">${r.confidenceScore}%</span></div>
         </div>
 
-        <div class="pi-success-info"><p>The library has been created under Governance → Libraries, and ${piReviewPolicies.length} policies have been generated under Governance → Policies. You can now audit these policies and link them to requirement assessments.</p></div>
+        <div class="pi-success-info"><p>${infoText}</p></div>
 
         <div class="pi-success-actions">
           <button class="btn-admin-primary"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg> View Library in Governance</button>
-          <button class="pi-btn pi-btn-view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg> View Policies</button>
-          <button class="pi-btn pi-btn-view" onclick="piBackToCollections()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Generate More Policies</button>
+          ${!isFramework ? `<button class="pi-btn pi-btn-view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg> View Policies</button>` : ''}
+          <button class="pi-btn pi-btn-view" onclick="piBackToCollections()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Generate More</button>
         </div>
 
         <button class="pi-success-back" onclick="piBackToCollections()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L3 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Back to Admin</button>
