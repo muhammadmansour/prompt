@@ -63,17 +63,22 @@ const PAGE_NAMES = {
 };
 const VALID_PAGES = Object.keys(PAGE_NAMES);
 let currentPage = null;
+let currentSubId = null; // Sub-route ID (e.g. collection UUID)
 
-function navigateTo(page, pushState = true) {
+function navigateTo(page, pushState = true, subId = null) {
   if (!VALID_PAGES.includes(page)) page = 'dashboard';
-  if (page === currentPage) return; // Avoid re-loading the same page
+
+  const isSamePage = page === currentPage && subId === currentSubId;
+  if (isSamePage) return;
+
   currentPage = page;
+  currentSubId = subId;
 
   // Update URL path
   if (pushState) {
-    const newPath = '/' + page;
+    const newPath = subId ? `/${page}/${subId}` : `/${page}`;
     if (window.location.pathname !== newPath) {
-      history.pushState({ page }, '', newPath);
+      history.pushState({ page, subId }, '', newPath);
     }
   }
 
@@ -102,27 +107,36 @@ function navigateTo(page, pushState = true) {
   if (page === 'prompts') loadPrompts();
   if (page === 'controls-studio') loadControlsStudio();
   if (page === 'merge-optimizer') loadMergeOptimizer();
-  if (page === 'policy-ingestion') loadPolicyIngestion();
+  if (page === 'policy-ingestion') loadPolicyIngestion(subId);
 
   // Scroll to top
   window.scrollTo(0, 0);
 }
 window.navigateTo = navigateTo;
 
+// Update URL without full page reload (for sub-navigation within a page)
+function updateRoute(page, subId) {
+  currentSubId = subId;
+  const newPath = subId ? `/${page}/${subId}` : `/${page}`;
+  if (window.location.pathname !== newPath) {
+    history.pushState({ page, subId }, '', newPath);
+  }
+}
+
 // Handle browser back/forward
 window.addEventListener('popstate', (e) => {
-  const page = e.state?.page || getPageFromPath();
+  const { page, subId } = e.state || parseRoute();
   currentPage = null; // Reset so navigateTo doesn't skip
-  navigateTo(page, false);
+  currentSubId = null;
+  navigateTo(page, false, subId);
 });
 
-// Parse page from URL pathname
-function getPageFromPath() {
-  const pathname = window.location.pathname;
-  // Strip leading slash → "policy-ingestion"
-  const page = pathname.replace(/^\//, '').split('/')[0];
-  if (page && VALID_PAGES.includes(page)) return page;
-  return 'dashboard';
+// Parse page + optional sub-ID from URL pathname
+function parseRoute() {
+  const parts = window.location.pathname.replace(/^\//, '').split('/');
+  const page = (parts[0] && VALID_PAGES.includes(parts[0])) ? parts[0] : 'dashboard';
+  const subId = parts[1] || null;
+  return { page, subId };
 }
 
 // Sidebar nav click handlers
@@ -4698,7 +4712,7 @@ async function piFetchCollections() {
   }
 }
 
-async function loadPolicyIngestion() {
+async function loadPolicyIngestion(collectionId) {
   piPhase = 'collections';
   piSelectedCollectionId = null;
   piSelectedFileIds = [];
@@ -4711,6 +4725,16 @@ async function loadPolicyIngestion() {
   if (el) el.innerHTML = '<div style="text-align:center;padding:60px;color:#9ca3af"><div class="pi-spinner-icon" style="margin:0 auto 12px"><svg width="24" height="24" class="pi-spinner" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.3"/><path d="M7 2C10 2 12 4.7 12 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>Loading collections…</div>';
   await piFetchCollections();
   await piFetchFrameworks();
+
+  // If a collection ID was provided in the URL, open it directly
+  if (collectionId) {
+    const coll = piCollections.find(c => c.id === collectionId);
+    if (coll) {
+      await piOpenCollection(collectionId);
+      return; // piOpenCollection calls piRender()
+    }
+  }
+
   piRender();
 }
 
@@ -4818,6 +4842,9 @@ async function piOpenCollection(id) {
   piActiveTab = 'files';
   piPhase = 'collection-detail';
 
+  // Update URL to include collection ID
+  updateRoute('policy-ingestion', id);
+
   // Fetch files from API
   const coll = piCollections.find(c => c.id === id);
   if (coll && !coll._filesLoaded) {
@@ -4830,6 +4857,8 @@ async function piOpenCollection(id) {
           name: f.name,
           type: f.name.split('.').pop().toLowerCase(),
           size: f.size > 1024 * 1024 ? (f.size / (1024 * 1024)).toFixed(1) + ' MB' : f.size > 1024 ? Math.round(f.size / 1024) + ' KB' : f.size + ' B',
+          geminiFileName: f.geminiFileName || '',
+          geminiFileUri: f.geminiFileUri || '',
           uploadedAt: f.uploadedAt || '',
         }));
         coll._filesLoaded = true;
@@ -4856,6 +4885,8 @@ function piBackToCollections() {
   piSelectedCollectionId = null;
   piSelectedFileIds = [];
   piActiveTab = 'files';
+  // Remove collection ID from URL
+  updateRoute('policy-ingestion', null);
   piRender();
 }
 window.piBackToCollections = piBackToCollections;
@@ -4908,7 +4939,7 @@ function piRenderCollectionDetail(coll) {
       return `<div class="pi-file-card${sel ? ' selected' : ''}">
         <input type="checkbox" ${sel ? 'checked' : ''} onchange="piToggleFile('${f.id}')">
         <div class="pi-file-icon ${fileTypeIcons[f.type] || 'pi-file-icon-txt'}"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg></div>
-        <div class="pi-file-info"><div class="pi-file-name">${esc(f.name)}</div><div class="pi-file-meta">${esc(f.size)} · ${esc(f.uploadedAt)}</div></div>
+        <div class="pi-file-info"><div class="pi-file-name">${esc(f.name)}</div><div class="pi-file-meta">${esc(f.size)} · ${esc(f.uploadedAt)}${f.geminiFileName ? ' · <span class="pi-gemini-synced" title="Synced to Wathbah AI">☁ synced</span>' : ' · <span class="pi-gemini-pending" title="Not yet synced">⏳ local</span>'}</div></div>
         <div class="pi-file-actions">
           <button class="pi-file-action-btn" title="Open file" onclick="event.stopPropagation();piOpenFile('${f.id}','${esc(f.name)}','${f.type}')"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/></svg></button>
           <button class="pi-file-action-btn delete" title="Delete" onclick="piDeleteFile('${f.id}')"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M4 4V3C4 2.4 4.4 2 5 2H9C9.6 2 10 2.4 10 3V4M5 6.5V10.5M7 6.5V10.5M9 6.5V10.5M3 4L4 12H10L11 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -4924,6 +4955,7 @@ function piRenderCollectionDetail(coll) {
 
   const filesTabContent = `
     ${filesHtml}
+    <div id="pi-upload-progress-container"></div>
     <div class="pi-dropzone" onclick="piTriggerUpload()">
       <svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M14 10V13C14 13.6 13.6 14 13 14H3C2.4 14 2 13.6 2 13V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11 5L8 2L5 5M8 2V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <p>Drag files here or click to browse</p>
@@ -5427,10 +5459,36 @@ async function piHandleFileUpload(event) {
   const filesToUpload = Array.from(event.target.files);
   event.target.value = '';
 
+  const container = document.getElementById('pi-upload-progress-container');
+
   for (const file of filesToUpload) {
+    // Create a unique progress bar element for this file
+    const uid = 'up-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    const progressEl = document.createElement('div');
+    progressEl.className = 'pi-upload-progress';
+    progressEl.id = uid;
+    progressEl.innerHTML = `
+      <div class="pi-upload-progress-info">
+        <span class="pi-upload-progress-name" title="${esc(file.name)}">${esc(file.name)}</span>
+        <span class="pi-upload-progress-pct">0%</span>
+      </div>
+      <div class="pi-upload-progress-bar"><div class="pi-upload-progress-fill" style="width:0%"></div></div>
+      <div class="pi-upload-progress-status">Preparing file…</div>`;
+    if (container) container.prepend(progressEl);
+
+    const pctEl = progressEl.querySelector('.pi-upload-progress-pct');
+    const fillEl = progressEl.querySelector('.pi-upload-progress-fill');
+    const statusEl = progressEl.querySelector('.pi-upload-progress-status');
+
+    const setProgress = (pct, statusText) => {
+      if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+      if (fillEl) fillEl.style.width = pct + '%';
+      if (statusEl && statusText) statusEl.textContent = statusText;
+    };
+
     try {
-      toast('info', 'Uploading…', `Uploading "${file.name}"…`);
-      // Read as base64
+      // Step 1: Read file as base64
+      setProgress(10, 'Reading file…');
       const base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result.split(',')[1]);
@@ -5438,13 +5496,48 @@ async function piHandleFileUpload(event) {
         reader.readAsDataURL(file);
       });
 
-      const res = await fetch(`${PI_API}/${coll.id}/files`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileName: file.name, mimeType: file.type || 'application/octet-stream', data: base64 }),
+      // Step 2: Uploading to server + Wathbah AI
+      setProgress(30, 'Uploading to server…');
+
+      // Use XMLHttpRequest for real upload progress
+      const data = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${PI_API}/${coll.id}/files`);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+
+        let uploadDone = false;
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) {
+            const uploadPct = 30 + (e.loaded / e.total) * 40; // 30% → 70%
+            setProgress(uploadPct, 'Uploading…');
+          }
+        });
+        xhr.upload.addEventListener('load', () => {
+          uploadDone = true;
+          setProgress(75, 'Syncing to Wathbah AI… please wait');
+        });
+
+        xhr.onload = () => {
+          try {
+            const resp = JSON.parse(xhr.responseText);
+            if (xhr.status >= 200 && xhr.status < 300 && resp.success) {
+              resolve(resp);
+            } else {
+              reject(new Error(resp.error || `Upload failed (${xhr.status})`));
+            }
+          } catch (e) {
+            reject(new Error('Invalid server response'));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.ontimeout = () => reject(new Error('Upload timed out'));
+        xhr.timeout = 300000; // 5 min timeout
+
+        xhr.send(JSON.stringify({ fileName: file.name, mimeType: file.type || 'application/octet-stream', data: base64 }));
       });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Upload failed');
+
+      // Step 3: Processing response
+      setProgress(90, 'Processing…');
 
       const ext = file.name.split('.').pop().toLowerCase();
       const size = file.size > 1024 * 1024 ? (file.size / (1024 * 1024)).toFixed(1) + ' MB' : (file.size / 1024).toFixed(0) + ' KB';
@@ -5453,16 +5546,55 @@ async function piHandleFileUpload(event) {
         name: file.name,
         type: ext,
         size,
+        geminiFileName: data.data.geminiFileName || '',
+        geminiFileUri: data.data.geminiFileUri || '',
+        storeDocName: data.data.storeDocName || '',
         uploadedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       });
       coll.status = 'ready';
-      toast('success', 'Uploaded', `"${file.name}" uploaded successfully.`);
+
+      // Step 4: Done — show success
+      setProgress(100, 'Uploaded successfully ✓');
+      progressEl.classList.add('pi-upload-success');
+
+      // Auto-remove success indicator after 3 seconds
+      setTimeout(() => {
+        progressEl.style.transition = 'opacity 0.4s ease, max-height 0.4s ease, margin 0.4s ease, padding 0.4s ease';
+        progressEl.style.opacity = '0';
+        progressEl.style.maxHeight = '0';
+        progressEl.style.marginBottom = '0';
+        progressEl.style.padding = '0 14px';
+        setTimeout(() => progressEl.remove(), 450);
+      }, 3000);
+
     } catch (err) {
+      // Show error state — keep visible so user can see what failed
+      setProgress(100, `Failed: ${err.message}`);
+      progressEl.classList.add('pi-upload-error');
+
+      // Auto-remove error indicator after 6 seconds
+      setTimeout(() => {
+        progressEl.style.transition = 'opacity 0.4s ease, max-height 0.4s ease, margin 0.4s ease, padding 0.4s ease';
+        progressEl.style.opacity = '0';
+        progressEl.style.maxHeight = '0';
+        progressEl.style.marginBottom = '0';
+        progressEl.style.padding = '0 14px';
+        setTimeout(() => progressEl.remove(), 450);
+      }, 6000);
+
       toast('error', 'Upload Error', `"${file.name}": ${err.message}`);
     }
   }
   coll.lastUpdated = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  // Save any still-visible progress bars before re-render
+  const liveProgressBars = container ? Array.from(container.children) : [];
   piRender();
+  // Re-attach surviving progress bars
+  const newContainer = document.getElementById('pi-upload-progress-container');
+  if (newContainer) {
+    liveProgressBars.forEach(bar => newContainer.appendChild(bar));
+  }
 }
 window.piHandleFileUpload = piHandleFileUpload;
 
@@ -6155,9 +6287,9 @@ function piRenderSuccess() {
 console.log('[admin.js] Script loaded, readyState:', document.readyState);
 
 function initApp() {
-  const startPage = getPageFromPath();
-  console.log(`[admin.js] Initializing → route: /${startPage}`);
-  navigateTo(startPage, true);
+  const { page, subId } = parseRoute();
+  console.log(`[admin.js] Initializing → route: /${page}${subId ? '/' + subId : ''}`);
+  navigateTo(page, true, subId);
 }
 
 if (document.readyState === 'loading') {

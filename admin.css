@@ -4505,6 +4505,8 @@
 .pi-file-info { flex: 1; min-width: 0; }
 .pi-file-name { font-size: 12px; font-weight: 500; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pi-file-meta { font-size: 10px; color: #9ca3af; margin-top: 2px; }
+.pi-gemini-synced { color: #10b981; font-weight: 500; }
+.pi-gemini-pending { color: #f59e0b; font-weight: 500; }
 .pi-file-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .pi-file-action-btn { padding: 6px; color: #d1d5db; border: none; background: none; border-radius: 4px; cursor: pointer; transition: color 0.15s; }
 .pi-file-action-btn:hover { color: #6b7280; }
@@ -4555,7 +4557,8 @@
 .pi-dropzone .pi-dropzone-hint { font-size: 10px; color: #9ca3af; margin-top: 4px; }
 
 /* Upload progress bar */
-.pi-upload-progress { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; animation: pi-upload-fadein 0.25s ease; }
+.pi-upload-progress { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; max-height: 120px; overflow: hidden; animation: pi-upload-fadein 0.25s ease; }
+#pi-upload-progress-container { display: flex; flex-direction: column; gap: 0; }
 @keyframes pi-upload-fadein { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
 .pi-upload-progress-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .pi-upload-progress-name { font-size: 12px; font-weight: 500; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%; }

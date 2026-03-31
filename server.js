@@ -218,6 +218,19 @@ try {
   }
 } catch (migErr) { console.warn('policy_generation_history migration:', migErr.message); }
 
+// Migrate policy_files: add gemini_file_name and gemini_file_uri columns if missing
+try {
+  const pfCols = db.pragma('table_info(policy_files)').map(c => c.name);
+  if (!pfCols.includes('gemini_file_name')) {
+    db.exec(`ALTER TABLE policy_files ADD COLUMN gemini_file_name TEXT DEFAULT ''`);
+    console.log('[Migration] Added gemini_file_name column to policy_files');
+  }
+  if (!pfCols.includes('gemini_file_uri')) {
+    db.exec(`ALTER TABLE policy_files ADD COLUMN gemini_file_uri TEXT DEFAULT ''`);
+    console.log('[Migration] Added gemini_file_uri column to policy_files');
+  }
+} catch (migErr) { console.warn('policy_files migration:', migErr.message); }
+
 // Migrate cs_sessions: add exported_control_ids if missing
 try {
   const csCols = db.pragma('table_info(cs_sessions)').map(c => c.name);
@@ -363,9 +376,12 @@ const dbDeletePolicyCollection = db.prepare(`DELETE FROM policy_collections WHER
 const dbListPolicyFiles = db.prepare(`SELECT * FROM policy_files WHERE collection_id = ? ORDER BY created_at ASC`);
 const dbGetPolicyFile = db.prepare(`SELECT * FROM policy_files WHERE id = ?`);
 const dbInsertPolicyFile = db.prepare(`
-  INSERT INTO policy_files (id, collection_id, name, mime_type, size, local_path, store_doc_name, created_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO policy_files (id, collection_id, name, mime_type, size, local_path, store_doc_name, gemini_file_name, gemini_file_uri, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
+const dbUpdatePolicyFileGemini = db.prepare(`UPDATE policy_files SET gemini_file_name = ?, gemini_file_uri = ? WHERE id = ?`);
+const dbUpdatePolicyFileStoreDoc = db.prepare(`UPDATE policy_files SET store_doc_name = ? WHERE id = ?`);
+const dbUpdatePolicyCollectionStoreId = db.prepare(`UPDATE policy_collections SET store_id = ? WHERE id = ?`);
 const dbDeletePolicyFile = db.prepare(`DELETE FROM policy_files WHERE id = ?`);
 const dbDeletePolicyFilesForCollection = db.prepare(`DELETE FROM policy_files WHERE collection_id = ?`);
 
@@ -395,6 +411,9 @@ function policyCollectionToJSON(row) {
       type: f.name.split('.').pop().toLowerCase(),
       mimeType: f.mime_type,
       size: f.size > 1024 * 1024 ? (f.size / (1024 * 1024)).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB',
+      geminiFileName: f.gemini_file_name || '',
+      geminiFileUri: f.gemini_file_uri || '',
+      storeDocName: f.store_doc_name || '',
       uploadedAt: new Date(f.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
     })),
     lastUpdated: new Date(row.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
@@ -1253,8 +1272,9 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       // For page requests (HTML or SPA routes), redirect to login
-      const SPA_ROUTE_SET = new Set(['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections']);
-      if (SPA_ROUTE_SET.has(url.pathname) || url.pathname.endsWith('.html')) {
+      const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections'];
+      const isSpaRoute = SPA_PREFIXES.some(p => url.pathname === p || (p !== '/' && url.pathname.startsWith(p + '/')));
+      if (isSpaRoute || url.pathname.endsWith('.html')) {
         res.writeHead(302, { 'Location': '/login.html' });
         res.end();
         return;
@@ -2502,14 +2522,55 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Policy Collections API ----
-  const policyCollMatch = url.pathname.match(/^\/api\/policy-collections(?:\/([^\/]+))?(?:\/(files|extract|approve|history)(?:\/([^\/]+))?)?$/);
+  const policyCollMatch = url.pathname.match(/^\/api\/policy-collections(?:\/([^\/]+))?(?:\/(files|extract|approve|history|sync)(?:\/([^\/]+))?)?$/);
   if (policyCollMatch) {
     const collId = policyCollMatch[1];
-    const subResource = policyCollMatch[2]; // 'files' | 'extract' | 'approve' | 'history'
+    const subResource = policyCollMatch[2]; // 'files' | 'extract' | 'approve' | 'history' | 'sync'
     const fileId = policyCollMatch[3];
     const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
 
     try {
+      // GET /api/policy-collections/overview — Hierarchical view of all collections + files + Gemini status
+      if (collId === 'overview' && req.method === 'GET') {
+        const rows = dbListPolicyCollections.all();
+        const overview = rows.map(row => {
+          const files = dbListPolicyFiles.all(row.id);
+          return {
+            id: row.id,
+            name: row.name,
+            description: row.description || '',
+            storeId: row.store_id || '',
+            status: row.status || 'empty',
+            fileCount: files.length,
+            created: row.created_at,
+            files: files.map(f => ({
+              id: f.id,
+              name: f.name,
+              size: f.size,
+              mimeType: f.mime_type,
+              geminiFileName: f.gemini_file_name || '',
+              geminiFileUri: f.gemini_file_uri || '',
+              storeDocName: f.store_doc_name || '',
+              synced: !!(f.gemini_file_name && f.store_doc_name),
+              uploaded: f.created_at,
+            })),
+          };
+        });
+
+        const totalFiles = overview.reduce((sum, c) => sum + c.fileCount, 0);
+        const totalSynced = overview.reduce((sum, c) => sum + c.files.filter(f => f.synced).length, 0);
+
+        sendJSON(res, 200, {
+          success: true,
+          totalCollections: overview.length,
+          totalFiles,
+          totalSynced,
+          totalUnsynced: totalFiles - totalSynced,
+          data: overview,
+        });
+        return;
+      }
+
       // GET /api/policy-collections — List all
       if (!collId && req.method === 'GET') {
         const rows = dbListPolicyCollections.all();
@@ -2518,16 +2579,40 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // POST /api/policy-collections — Create new
+      // POST /api/policy-collections — Create new (+ File Search Store)
       if (!collId && req.method === 'POST') {
         const body = await parseBody(req);
         const newId = 'pc-' + crypto.randomUUID();
+        const collName = body.name || 'New Collection';
         const now2 = new Date().toISOString();
+
+        // Create a Gemini File Search Store for this collection
+        let storeId = '';
+        if (apiKey) {
+          try {
+            const safeName = collName.replace(/[^\x20-\x7E]/g, '_');
+            console.log(`[Policy] Creating File Search Store for new collection "${safeName}"...`);
+            const storeResult = await createFileSearchStore(safeName, apiKey);
+
+            let store = storeResult;
+            if (storeResult.name && !storeResult.done && !storeResult.name.startsWith('fileSearchStores/')) {
+              store = await pollOperation(storeResult.name, apiKey);
+              store = store.response || store;
+            }
+
+            const fullStoreName = store.name || '';
+            storeId = fullStoreName.replace('fileSearchStores/', '');
+            console.log(`[Policy] File Search Store created: ${storeId}`);
+          } catch (storeErr) {
+            console.error(`[Policy] Failed to create File Search Store:`, storeErr.message);
+          }
+        }
+
         dbInsertPolicyCollection.run(
           newId,
-          body.name || 'New Collection',
+          collName,
           body.description || '',
-          '', // store_id — will be set if FileSearchStore is created later
+          storeId,
           'empty',
           '{}',
           null,
@@ -2539,8 +2624,43 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // DELETE /api/policy-collections/:id — Delete collection + files
+      // DELETE /api/policy-collections/:id — Delete collection + files (Gemini + File Search + local)
       if (collId && !subResource && req.method === 'DELETE') {
+        const collRow = dbGetPolicyCollection.get(collId);
+        const collFiles = dbListPolicyFiles.all(collId);
+
+        // Delete Gemini files + File Search documents for this collection
+        for (const f of collFiles) {
+          if (f.gemini_file_name) {
+            try {
+              if (!genai && apiKey) genai = new GoogleGenAI({ apiKey });
+              if (genai) await genai.files.delete({ name: f.gemini_file_name });
+              console.log(`[Policy] Deleted Gemini file: ${f.gemini_file_name}`);
+            } catch (delErr) {
+              console.warn(`[Policy] Could not delete Gemini file ${f.gemini_file_name}:`, delErr.message);
+            }
+          }
+          if (f.store_doc_name) {
+            try {
+              await deleteDocument(f.store_doc_name, apiKey);
+              console.log(`[Policy] Deleted File Search document: ${f.store_doc_name}`);
+            } catch (delErr) {
+              console.warn(`[Policy] Could not delete File Search doc ${f.store_doc_name}:`, delErr.message);
+            }
+          }
+        }
+
+        // Delete the File Search Store itself
+        if (collRow && collRow.store_id) {
+          try {
+            const storeName = `fileSearchStores/${collRow.store_id}`;
+            await deleteFileSearchStore(storeName, apiKey);
+            console.log(`[Policy] Deleted File Search Store: ${storeName}`);
+          } catch (delErr) {
+            console.warn(`[Policy] Could not delete File Search Store:`, delErr.message);
+          }
+        }
+
         // Delete local files
         const collDir = path.join(POLICY_UPLOADS_DIR, collId);
         if (fs.existsSync(collDir)) fs.rmSync(collDir, { recursive: true, force: true });
@@ -2579,10 +2699,15 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // POST /api/policy-collections/:id/files — Upload file
+      // POST /api/policy-collections/:id/files — Upload file to Gemini + store metadata
       if (collId && subResource === 'files' && !fileId && req.method === 'POST') {
         const row = dbGetPolicyCollection.get(collId);
         if (!row) { sendJSON(res, 404, { error: 'Collection not found' }); return; }
+
+        if (!apiKey) {
+          sendJSON(res, 401, { error: 'Gemini API key not configured. Cannot upload files.' });
+          return;
+        }
 
         const body = await parseBody(req);
         const { fileName, mimeType, data } = body;
@@ -2591,34 +2716,123 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        // Save to disk
-        const collDir = path.join(POLICY_UPLOADS_DIR, collId);
-        if (!fs.existsSync(collDir)) fs.mkdirSync(collDir, { recursive: true });
         const fileBuffer = Buffer.from(data, 'base64');
         const fId = 'pf-' + crypto.randomUUID();
-        const safeName = fileName.replace(/[^a-zA-Z0-9._\- ]/g, '_'); // Strip non-ASCII for local filename
+        const mime = mimeType || 'application/octet-stream';
+        const now2 = new Date().toISOString();
+
+        // Save a local copy for preview/backup
+        const collDir = path.join(POLICY_UPLOADS_DIR, collId);
+        if (!fs.existsSync(collDir)) fs.mkdirSync(collDir, { recursive: true });
+        const safeName = fileName.replace(/[^a-zA-Z0-9._\- ]/g, '_');
         const localPath = path.join(collDir, fId + '_' + safeName);
         fs.writeFileSync(localPath, fileBuffer);
 
-        const now2 = new Date().toISOString();
-        dbInsertPolicyFile.run(fId, collId, fileName, mimeType || 'application/octet-stream', fileBuffer.length, localPath, '', now2);
+        // Upload to Gemini Files API (for AI generation)
+        let geminiFileName = '';
+        let geminiFileUri = '';
+        try {
+          if (!genai) genai = new GoogleGenAI({ apiKey });
+          const safeDisplayName = fileName.replace(/[^\x20-\x7E]/g, '_');
+          console.log(`[Policy] Uploading "${safeDisplayName}" (${fileBuffer.length} bytes) to Gemini Files API...`);
+
+          const uploaded = await genai.files.upload({
+            file: localPath,
+            config: { mimeType: mime, displayName: safeDisplayName },
+          });
+          geminiFileName = uploaded.name || '';
+          geminiFileUri = uploaded.uri || '';
+          console.log(`[Policy] Gemini file created: ${geminiFileName} → ${geminiFileUri}`);
+
+          // Wait for file to be ACTIVE (max 60s)
+          let fileState = uploaded;
+          let attempts = 0;
+          while (fileState.state === 'PROCESSING' && attempts < 30) {
+            await new Promise(r => setTimeout(r, 2000));
+            fileState = await genai.files.get({ name: fileState.name });
+            attempts++;
+          }
+          if (fileState.state !== 'ACTIVE') {
+            console.warn(`[Policy] Gemini file ${geminiFileName} state: ${fileState.state} (may not be ready yet)`);
+          } else {
+            console.log(`[Policy] Gemini file ${geminiFileName} is ACTIVE`);
+          }
+        } catch (geminiErr) {
+          console.error(`[Policy] Gemini Files API upload failed for "${fileName}":`, geminiErr.message);
+        }
+
+        // Upload to Gemini File Search Store (for search/retrieval)
+        let storeDocName = '';
+        let storeId = row.store_id || '';
+        try {
+          // Fallback: create store if collection was created before this feature
+          if (!storeId) {
+            const safeName = (row.name || 'Policy Collection').replace(/[^\x20-\x7E]/g, '_');
+            console.log(`[Policy] Creating File Search Store (retroactive) for "${safeName}"...`);
+            const storeResult = await createFileSearchStore(safeName, apiKey);
+            let store = storeResult;
+            if (storeResult.name && !storeResult.done && !storeResult.name.startsWith('fileSearchStores/')) {
+              store = await pollOperation(storeResult.name, apiKey);
+              store = store.response || store;
+            }
+            storeId = (store.name || '').replace('fileSearchStores/', '');
+            dbUpdatePolicyCollectionStoreId.run(storeId, collId);
+            console.log(`[Policy] File Search Store created: ${storeId}`);
+          }
+
+          // Upload file to the File Search Store
+          if (storeId) {
+            const storeName = `fileSearchStores/${storeId}`;
+            console.log(`[Policy] Uploading "${fileName}" to File Search Store ${storeName}...`);
+            const storeUploadResult = await uploadFileToStore(storeName, fileName, mime, fileBuffer, apiKey);
+            console.log(`[Policy] Store upload raw result:`, JSON.stringify(storeUploadResult).slice(0, 500));
+
+            // Poll if long-running operation
+            let finalResult = storeUploadResult;
+            if (storeUploadResult.name && !storeUploadResult.done) {
+              finalResult = await pollOperation(storeUploadResult.name, apiKey);
+              console.log(`[Policy] Store upload polled result:`, JSON.stringify(finalResult).slice(0, 500));
+            }
+
+            // Extract the document name — handle multiple response shapes
+            const docResponse = finalResult.response || finalResult.metadata || finalResult;
+            storeDocName = docResponse.document?.name || docResponse.name || '';
+            if (!storeDocName && finalResult.metadata?.document) {
+              storeDocName = finalResult.metadata.document.name || finalResult.metadata.document || '';
+            }
+            console.log(`[Policy] File Search document: ${storeDocName}`);
+          }
+        } catch (storeErr) {
+          console.error(`[Policy] File Search Store upload failed for "${fileName}":`, storeErr.message);
+        }
+
+        // Insert DB record with both Gemini file info + File Search doc name
+        dbInsertPolicyFile.run(fId, collId, fileName, mime, fileBuffer.length, localPath, storeDocName, geminiFileName, geminiFileUri, now2);
 
         // Update collection status
         const fileCount = dbListPolicyFiles.all(collId).length;
         dbUpdatePolicyCollection.run(row.name, row.description, fileCount > 0 ? 'ready' : 'empty', row.config, row.extraction_result, now2, collId);
 
-        console.log(`[Policy] Uploaded file (${fileBuffer.length} bytes) to collection ${collId}`);
-        sendJSON(res, 200, { success: true, data: { id: fId, name: fileName, size: fileBuffer.length } });
+        console.log(`[Policy] File "${fileName}" stored: local + Gemini Files (${geminiFileName || 'n/a'}) + File Search (${storeDocName || 'n/a'})`);
+        sendJSON(res, 200, { success: true, data: { id: fId, name: fileName, size: fileBuffer.length, geminiFileName, geminiFileUri, storeDocName } });
         return;
       }
 
-      // GET /api/policy-collections/:id/files — List files
+      // GET /api/policy-collections/:id/files — List files (includes collection storeId + per-file doc IDs)
       if (collId && subResource === 'files' && !fileId && req.method === 'GET') {
+        const collRow = dbGetPolicyCollection.get(collId);
         const files = dbListPolicyFiles.all(collId);
-        sendJSON(res, 200, { success: true, data: files.map(f => ({
-          id: f.id, name: f.name, mimeType: f.mime_type, size: f.size,
-          uploadedAt: new Date(f.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        })) });
+        sendJSON(res, 200, {
+          success: true,
+          storeId: collRow?.store_id || '',
+          data: files.map(f => ({
+            id: f.id, name: f.name, mimeType: f.mime_type, size: f.size,
+            geminiFileName: f.gemini_file_name || '',
+            geminiFileUri: f.gemini_file_uri || '',
+            storeDocName: f.store_doc_name || '',
+            uploadedAt: new Date(f.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          }))
+        });
         return;
       }
 
@@ -2645,9 +2859,29 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // DELETE /api/policy-collections/:id/files/:fileId — Delete file
+      // DELETE /api/policy-collections/:id/files/:fileId — Delete file from Gemini + File Search + local
       if (collId && subResource === 'files' && fileId && req.method === 'DELETE') {
         const file = dbGetPolicyFile.get(fileId);
+        // Delete from Gemini Files API
+        if (file && file.gemini_file_name) {
+          try {
+            if (!genai) genai = new GoogleGenAI({ apiKey });
+            await genai.files.delete({ name: file.gemini_file_name });
+            console.log(`[Policy] Deleted Gemini file: ${file.gemini_file_name}`);
+          } catch (delErr) {
+            console.warn(`[Policy] Could not delete Gemini file ${file.gemini_file_name}:`, delErr.message);
+          }
+        }
+        // Delete from File Search Store
+        if (file && file.store_doc_name) {
+          try {
+            await deleteDocument(file.store_doc_name, apiKey);
+            console.log(`[Policy] Deleted File Search document: ${file.store_doc_name}`);
+          } catch (delErr) {
+            console.warn(`[Policy] Could not delete File Search doc ${file.store_doc_name}:`, delErr.message);
+          }
+        }
+        // Delete local copy
         if (file && file.local_path && fs.existsSync(file.local_path)) fs.unlinkSync(file.local_path);
         dbDeletePolicyFile.run(fileId);
         // Update collection status
@@ -2658,6 +2892,116 @@ const server = http.createServer(async (req, res) => {
           dbUpdatePolicyCollection.run(row.name, row.description, fileCount > 0 ? 'ready' : 'empty', row.config, row.extraction_result, now2, collId);
         }
         sendJSON(res, 200, { success: true });
+        return;
+      }
+
+      // POST /api/policy-collections/:id/sync — Sync existing files to Gemini + File Search
+      if (collId && subResource === 'sync' && req.method === 'POST') {
+        if (!apiKey) {
+          sendJSON(res, 401, { error: 'Gemini API key not configured.' });
+          return;
+        }
+        const row = dbGetPolicyCollection.get(collId);
+        if (!row) { sendJSON(res, 404, { error: 'Collection not found' }); return; }
+
+        if (!genai) genai = new GoogleGenAI({ apiKey });
+
+        // Ensure collection has a File Search Store
+        let storeId = row.store_id || '';
+        if (!storeId) {
+          try {
+            const safeName = (row.name || 'Policy Collection').replace(/[^\x20-\x7E]/g, '_');
+            console.log(`[Sync] Creating File Search Store for "${safeName}"...`);
+            const storeResult = await createFileSearchStore(safeName, apiKey);
+            let store = storeResult;
+            if (storeResult.name && !storeResult.done && !storeResult.name.startsWith('fileSearchStores/')) {
+              store = await pollOperation(storeResult.name, apiKey);
+              store = store.response || store;
+            }
+            storeId = (store.name || '').replace('fileSearchStores/', '');
+            dbUpdatePolicyCollectionStoreId.run(storeId, collId);
+            console.log(`[Sync] File Search Store created: ${storeId}`);
+          } catch (err) {
+            sendJSON(res, 500, { error: `Failed to create File Search Store: ${err.message}` });
+            return;
+          }
+        }
+
+        // Find files that need syncing
+        const files = dbListPolicyFiles.all(collId);
+        const results = { synced: 0, skipped: 0, failed: 0, errors: [] };
+
+        for (const f of files) {
+          const needsGemini = !f.gemini_file_name;
+          const needsStore = !f.store_doc_name;
+
+          if (!needsGemini && !needsStore) {
+            results.skipped++;
+            continue;
+          }
+
+          // Need local file for upload
+          if (!f.local_path || !fs.existsSync(f.local_path)) {
+            results.failed++;
+            results.errors.push(`${f.name}: local file not found`);
+            continue;
+          }
+
+          try {
+            let geminiName = f.gemini_file_name || '';
+            let geminiUri = f.gemini_file_uri || '';
+            let storeDocName = f.store_doc_name || '';
+
+            // Upload to Gemini Files API if missing
+            if (needsGemini) {
+              const safeDisplayName = f.name.replace(/[^\x20-\x7E]/g, '_');
+              console.log(`[Sync] Uploading "${safeDisplayName}" to Gemini Files API...`);
+              const uploaded = await genai.files.upload({
+                file: f.local_path,
+                config: { mimeType: f.mime_type, displayName: safeDisplayName },
+              });
+              geminiName = uploaded.name || '';
+              geminiUri = uploaded.uri || '';
+
+              // Wait for ACTIVE
+              let fileState = uploaded;
+              let attempts = 0;
+              while (fileState.state === 'PROCESSING' && attempts < 30) {
+                await new Promise(r => setTimeout(r, 2000));
+                fileState = await genai.files.get({ name: fileState.name });
+                attempts++;
+              }
+              console.log(`[Sync] Gemini file: ${geminiName} (${fileState.state})`);
+              dbUpdatePolicyFileGemini.run(geminiName, geminiUri, f.id);
+            }
+
+            // Upload to File Search Store if missing
+            if (needsStore && storeId) {
+              const storeName = `fileSearchStores/${storeId}`;
+              const fileBuffer = fs.readFileSync(f.local_path);
+              console.log(`[Sync] Uploading "${f.name}" to File Search Store...`);
+              const storeUploadResult = await uploadFileToStore(storeName, f.name, f.mime_type, fileBuffer, apiKey);
+
+              let finalResult = storeUploadResult;
+              if (storeUploadResult.name && !storeUploadResult.done) {
+                finalResult = await pollOperation(storeUploadResult.name, apiKey);
+              }
+              const docResponse = finalResult.response || finalResult;
+              storeDocName = docResponse.name || '';
+              console.log(`[Sync] File Search document: ${storeDocName}`);
+              dbUpdatePolicyFileStoreDoc.run(storeDocName, f.id);
+            }
+
+            results.synced++;
+          } catch (err) {
+            results.failed++;
+            results.errors.push(`${f.name}: ${err.message}`);
+            console.error(`[Sync] Failed for "${f.name}":`, err.message);
+          }
+        }
+
+        console.log(`[Sync] Collection ${collId}: ${results.synced} synced, ${results.skipped} already synced, ${results.failed} failed`);
+        sendJSON(res, 200, { success: true, storeId, ...results });
         return;
       }
 
@@ -2701,14 +3045,38 @@ const server = http.createServer(async (req, res) => {
           // Initialize Gemini SDK
           if (!genai) genai = new GoogleGenAI({ apiKey });
 
-          // Upload files to Gemini Files API
+          // Resolve Gemini file references — use stored URIs or re-upload if expired/missing
           const uploadedFiles = [];
           for (const f of files) {
+            let geminiName = f.gemini_file_name || '';
+            let geminiUri = f.gemini_file_uri || '';
+            let geminiMime = f.mime_type;
+
+            // Check if stored Gemini file is still ACTIVE
+            if (geminiName) {
+              try {
+                const fileState = await genai.files.get({ name: geminiName });
+                if (fileState.state === 'ACTIVE') {
+                  console.log(`[Policy Extraction] Using stored Gemini file: ${geminiName} (ACTIVE)`);
+                  uploadedFiles.push({ name: geminiName, uri: geminiUri || fileState.uri, mimeType: geminiMime });
+                  continue;
+                } else {
+                  console.warn(`[Policy Extraction] Stored Gemini file ${geminiName} state: ${fileState.state} — re-uploading`);
+                  geminiName = '';
+                  geminiUri = '';
+                }
+              } catch (getErr) {
+                console.warn(`[Policy Extraction] Could not verify Gemini file ${geminiName}: ${getErr.message} — re-uploading`);
+                geminiName = '';
+                geminiUri = '';
+              }
+            }
+
+            // No valid Gemini file — re-upload from local copy
             if (!f.local_path || !fs.existsSync(f.local_path)) {
-              console.warn(`[Policy Extraction] File not found on disk: ${f.name}`);
+              console.warn(`[Policy Extraction] File not on disk and no Gemini ref: ${f.name} — skipping`);
               continue;
             }
-            // displayName must be ASCII-safe for HTTP headers (Gemini SDK sends it as a header)
             const safeDisplayName = f.name.replace(/[^\x20-\x7E]/g, '_');
             console.log(`[Policy Extraction] Uploading "${safeDisplayName}" to Gemini Files API...`);
             const uploaded = await genai.files.upload({
@@ -2716,16 +3084,9 @@ const server = http.createServer(async (req, res) => {
               config: { mimeType: f.mime_type, displayName: safeDisplayName },
             });
             console.log(`[Policy Extraction] Uploaded: ${uploaded.name} (${uploaded.uri})`);
-            uploadedFiles.push(uploaded);
-          }
 
-          if (uploadedFiles.length === 0) {
-            throw new Error('No files could be uploaded to Gemini');
-          }
-
-          // Wait for files to be processed (ACTIVE state)
-          for (const uf of uploadedFiles) {
-            let fileState = uf;
+            // Wait for ACTIVE state
+            let fileState = uploaded;
             let attempts = 0;
             while (fileState.state === 'PROCESSING' && attempts < 30) {
               await new Promise(r => setTimeout(r, 2000));
@@ -2733,8 +3094,16 @@ const server = http.createServer(async (req, res) => {
               attempts++;
             }
             if (fileState.state !== 'ACTIVE') {
-              console.warn(`[Policy Extraction] File ${uf.name} state: ${fileState.state}`);
+              console.warn(`[Policy Extraction] File ${uploaded.name} state: ${fileState.state}`);
             }
+
+            // Update DB with new Gemini file info
+            dbUpdatePolicyFileGemini.run(uploaded.name, uploaded.uri, f.id);
+            uploadedFiles.push({ name: uploaded.name, uri: uploaded.uri, mimeType: f.mime_type });
+          }
+
+          if (uploadedFiles.length === 0) {
+            throw new Error('No files could be uploaded to Wathbah AI');
           }
 
           // Determine generation type: 'framework', 'controls', or 'both' (legacy)
@@ -3352,8 +3721,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Client-side routes (serve admin.html for SPA pages) ----
-  const SPA_ROUTES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections'];
-  if (SPA_ROUTES.includes(url.pathname)) {
+  const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections'];
+  const isSpaRoute = SPA_PREFIXES.some(p => url.pathname === p || (p !== '/' && url.pathname.startsWith(p + '/')));
+  if (isSpaRoute) {
     serveStaticFile(res, path.join(__dirname, 'admin.html'));
     return;
   }
