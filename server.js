@@ -1252,8 +1252,9 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: 'Unauthorized. Please log in.' }));
         return;
       }
-      // For page requests, redirect to login
-      if (url.pathname === '/' || url.pathname.endsWith('.html')) {
+      // For page requests (HTML or SPA routes), redirect to login
+      const SPA_ROUTE_SET = new Set(['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections']);
+      if (SPA_ROUTE_SET.has(url.pathname) || url.pathname.endsWith('.html')) {
         res.writeHead(302, { 'Location': '/login.html' });
         res.end();
         return;
@@ -2621,6 +2622,29 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      // GET /api/policy-collections/:id/files/:fileId — Serve/download file
+      if (collId && subResource === 'files' && fileId && req.method === 'GET') {
+        const file = dbGetPolicyFile.get(fileId);
+        if (!file || !file.local_path || !fs.existsSync(file.local_path)) {
+          sendJSON(res, 404, { error: 'File not found' });
+          return;
+        }
+        const stat = fs.statSync(file.local_path);
+        const mimeType = file.mime_type || 'application/octet-stream';
+        // For PDFs and images, display inline; otherwise download
+        const isInline = mimeType.startsWith('application/pdf') || mimeType.startsWith('image/');
+        const disposition = isInline ? 'inline' : 'attachment';
+        const safeFilename = file.name.replace(/[^\x20-\x7E]/g, '_');
+        res.writeHead(200, {
+          'Content-Type': mimeType,
+          'Content-Length': stat.size,
+          'Content-Disposition': `${disposition}; filename="${safeFilename}"`,
+          'Cache-Control': 'private, max-age=3600',
+        });
+        fs.createReadStream(file.local_path).pipe(res);
+        return;
+      }
+
       // DELETE /api/policy-collections/:id/files/:fileId — Delete file
       if (collId && subResource === 'files' && fileId && req.method === 'DELETE') {
         const file = dbGetPolicyFile.get(fileId);
@@ -3327,8 +3351,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- Client-side routes (serve admin.html for SPA pages) ----
+  const SPA_ROUTES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections'];
+  if (SPA_ROUTES.includes(url.pathname)) {
+    serveStaticFile(res, path.join(__dirname, 'admin.html'));
+    return;
+  }
+
   // ---- Static Files ----
-  let filePath = path.join(__dirname, url.pathname === '/' ? 'admin.html' : url.pathname);
+  let filePath = path.join(__dirname, url.pathname);
   serveStaticFile(res, filePath);
 });
 

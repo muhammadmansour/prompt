@@ -50,7 +50,33 @@ const toastContainer = document.getElementById('toast-container');
 
 // ─── Navigation ───────────────────────────────────────────────
 
-function navigateTo(page) {
+const PAGE_NAMES = {
+  'dashboard': 'Dashboard',
+  'audit-sessions': 'Audit Sessions',
+  'audit-studio': 'Audit Studio',
+  'controls-studio': 'Applied Controls Studio',
+  'merge-optimizer': 'Control Merge Optimizer',
+  'policy-ingestion': 'Organization Policy Ingestion',
+  'org-contexts': 'Organization Contexts',
+  'prompts': 'Prompts',
+  'file-collections': 'File Collections',
+};
+const VALID_PAGES = Object.keys(PAGE_NAMES);
+let currentPage = null;
+
+function navigateTo(page, pushState = true) {
+  if (!VALID_PAGES.includes(page)) page = 'dashboard';
+  if (page === currentPage) return; // Avoid re-loading the same page
+  currentPage = page;
+
+  // Update URL path
+  if (pushState) {
+    const newPath = '/' + page;
+    if (window.location.pathname !== newPath) {
+      history.pushState({ page }, '', newPath);
+    }
+  }
+
   // Update sidebar
   document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
   const target = document.querySelector(`.sidebar-item[data-page="${page}"]`);
@@ -62,18 +88,10 @@ function navigateTo(page) {
   if (pageEl) pageEl.classList.add('active');
 
   // Update header
-  const names = {
-    'dashboard': 'Dashboard',
-    'audit-sessions': 'Audit Sessions',
-    'audit-studio': 'Audit Studio',
-    'controls-studio': 'Applied Controls Studio',
-    'merge-optimizer': 'Control Merge Optimizer',
-    'policy-ingestion': 'Organization Policy Ingestion',
-    'org-contexts': 'Organization Contexts',
-    'prompts': 'Prompts',
-    'file-collections': 'File Collections',
-  };
-  if (headerTitle) headerTitle.textContent = names[page] || page;
+  if (headerTitle) headerTitle.textContent = PAGE_NAMES[page] || page;
+
+  // Update document title
+  document.title = (PAGE_NAMES[page] || 'Admin') + ' — WathbaGRC';
 
   // Load data for the page
   if (page === 'dashboard') loadDashboard();
@@ -85,8 +103,27 @@ function navigateTo(page) {
   if (page === 'controls-studio') loadControlsStudio();
   if (page === 'merge-optimizer') loadMergeOptimizer();
   if (page === 'policy-ingestion') loadPolicyIngestion();
+
+  // Scroll to top
+  window.scrollTo(0, 0);
 }
 window.navigateTo = navigateTo;
+
+// Handle browser back/forward
+window.addEventListener('popstate', (e) => {
+  const page = e.state?.page || getPageFromPath();
+  currentPage = null; // Reset so navigateTo doesn't skip
+  navigateTo(page, false);
+});
+
+// Parse page from URL pathname
+function getPageFromPath() {
+  const pathname = window.location.pathname;
+  // Strip leading slash → "policy-ingestion"
+  const page = pathname.replace(/^\//, '').split('/')[0];
+  if (page && VALID_PAGES.includes(page)) return page;
+  return 'dashboard';
+}
 
 // Sidebar nav click handlers
 document.querySelectorAll('.sidebar-item[data-page]').forEach(btn => {
@@ -4873,7 +4910,7 @@ function piRenderCollectionDetail(coll) {
         <div class="pi-file-icon ${fileTypeIcons[f.type] || 'pi-file-icon-txt'}"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg></div>
         <div class="pi-file-info"><div class="pi-file-name">${esc(f.name)}</div><div class="pi-file-meta">${esc(f.size)} · ${esc(f.uploadedAt)}</div></div>
         <div class="pi-file-actions">
-          <button class="pi-file-action-btn" title="Preview"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg></button>
+          <button class="pi-file-action-btn" title="Open file" onclick="event.stopPropagation();piOpenFile('${f.id}','${esc(f.name)}','${f.type}')"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/></svg></button>
           <button class="pi-file-action-btn delete" title="Delete" onclick="piDeleteFile('${f.id}')"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M4 4V3C4 2.4 4.4 2 5 2H9C9.6 2 10 2.4 10 3V4M5 6.5V10.5M7 6.5V10.5M9 6.5V10.5M3 4L4 12H10L11 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         ${sel ? '<div class="pi-file-selected-check"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' : ''}
@@ -5314,6 +5351,55 @@ function piToggleAllFiles() {
   piRender();
 }
 window.piToggleAllFiles = piToggleAllFiles;
+
+function piOpenFile(fileId, fileName, fileType) {
+  const url = `${PI_API}/${piSelectedCollectionId}/files/${fileId}`;
+  const viewable = ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'txt'].includes((fileType || '').toLowerCase());
+
+  if (viewable) {
+    // Open in a modal viewer
+    const overlay = document.createElement('div');
+    overlay.className = 'pi-file-viewer-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+    const isPdf = fileType === 'pdf';
+    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(fileType);
+    const isTxt = fileType === 'txt';
+
+    let content = '';
+    if (isPdf) {
+      content = `<iframe src="${url}" class="pi-file-viewer-frame"></iframe>`;
+    } else if (isImage) {
+      content = `<img src="${url}" class="pi-file-viewer-image" alt="${esc(fileName)}">`;
+    } else if (isTxt) {
+      content = `<iframe src="${url}" class="pi-file-viewer-frame" style="background:#fff"></iframe>`;
+    }
+
+    overlay.innerHTML = `
+      <div class="pi-file-viewer">
+        <div class="pi-file-viewer-header">
+          <div class="pi-file-viewer-title">${esc(fileName)}</div>
+          <div class="pi-file-viewer-actions">
+            <a href="${url}" download="${esc(fileName)}" class="pi-file-viewer-btn" title="Download"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 11V13C2 13.6 2.4 14 3 14H13C13.6 14 14 13.6 14 13V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M5 7L8 10L11 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 2V10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></a>
+            <a href="${url}" target="_blank" class="pi-file-viewer-btn" title="Open in new tab"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M9 2H14V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2L7 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M12 9V13C12 13.6 11.6 14 11 14H3C2.4 14 2 13.6 2 13V5C2 4.4 2.4 4 3 4H7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></a>
+            <button class="pi-file-viewer-btn close" onclick="this.closest('.pi-file-viewer-overlay').remove()" title="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+          </div>
+        </div>
+        <div class="pi-file-viewer-body">${content}</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    // Allow escape key to close
+    const onKey = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); } };
+    document.addEventListener('keydown', onKey);
+  } else {
+    // Non-viewable files: just download
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+  }
+}
+window.piOpenFile = piOpenFile;
 
 async function piDeleteFile(fileId) {
   const coll = piCollections.find(c => c.id === piSelectedCollectionId);
@@ -5941,6 +6027,13 @@ async function piApprove() {
   const genType = piGenerationResult?.generationType || piCurrentConfig?.generationType || 'both';
   const folder = piCurrentConfig.folder || '';
 
+  // Set approve buttons to loading state
+  document.querySelectorAll('.pi-btn-approve').forEach(btn => {
+    btn.disabled = true;
+    btn.dataset.origHtml = btn.innerHTML;
+    btn.innerHTML = '<svg class="pi-spin" width="14" height="14" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="rgba(255,255,255,0.3)" stroke-width="2"/><path d="M10 2A8 8 0 0 1 18 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Uploading…';
+  });
+
   try {
     toast('info', 'Approving…', 'Uploading library to GRC platform…');
 
@@ -5981,6 +6074,11 @@ async function piApprove() {
     piRender();
   } catch (err) {
     toast('error', 'Approve Error', err.message);
+    // Restore approve buttons
+    document.querySelectorAll('.pi-btn-approve').forEach(btn => {
+      btn.disabled = false;
+      if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
+    });
   }
 }
 window.piApprove = piApprove;
@@ -6056,12 +6154,14 @@ function piRenderSuccess() {
 
 console.log('[admin.js] Script loaded, readyState:', document.readyState);
 
+function initApp() {
+  const startPage = getPageFromPath();
+  console.log(`[admin.js] Initializing → route: /${startPage}`);
+  navigateTo(startPage, true);
+}
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    console.log('[admin.js] DOMContentLoaded fired');
-    loadDashboard();
-  });
+  document.addEventListener('DOMContentLoaded', initApp);
 } else {
-  console.log('[admin.js] DOM already ready, calling loadDashboard');
-  loadDashboard();
+  initApp();
 }

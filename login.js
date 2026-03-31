@@ -16,7 +16,7 @@ const togglePw = document.getElementById('toggle-pw');
     const r = await fetch('/api/auth/check');
     const d = await r.json();
     if (d.authenticated) {
-      window.location.replace('/admin.html');
+      window.location.replace('/dashboard');
     } else {
       // Token invalid (e.g. server restarted) — clear stale cookie
       document.cookie = 'wathba_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
@@ -89,7 +89,7 @@ loginForm.addEventListener('submit', async (e) => {
     document.cookie = `wathba_token=${data.token}; path=/; expires=${expires}; SameSite=Lax`;
 
     // Redirect to admin dashboard
-    window.location.replace('/admin.html');
+    window.location.replace('/dashboard');
 
   } catch (err) {
     showError(err.message || 'Login failed. Please try again.');
