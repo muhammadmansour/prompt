@@ -187,7 +187,36 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_policy_files_collection ON policy_files(collection_id);
+
+  CREATE TABLE IF NOT EXISTS policy_generation_history (
+    id TEXT PRIMARY KEY,
+    collection_id TEXT NOT NULL,
+    generation_type TEXT DEFAULT 'both',
+    status TEXT DEFAULT 'generated',
+    config TEXT DEFAULT '{}',
+    summary TEXT DEFAULT '{}',
+    library_urn TEXT DEFAULT NULL,
+    controls_count INTEGER DEFAULT 0,
+    nodes_count INTEGER DEFAULT 0,
+    confidence_score INTEGER DEFAULT 0,
+    generation_time TEXT DEFAULT '',
+    source_file_count INTEGER DEFAULT 0,
+    error_message TEXT DEFAULT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (collection_id) REFERENCES policy_collections(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_policy_gen_history_collection ON policy_generation_history(collection_id);
 `);
+
+// Migrate policy_generation_history: add extraction_data column if missing
+try {
+  const histCols = db.pragma('table_info(policy_generation_history)').map(c => c.name);
+  if (!histCols.includes('extraction_data')) {
+    db.exec(`ALTER TABLE policy_generation_history ADD COLUMN extraction_data TEXT DEFAULT NULL`);
+    console.log('[Migration] Added extraction_data column to policy_generation_history');
+  }
+} catch (migErr) { console.warn('policy_generation_history migration:', migErr.message); }
 
 // Migrate cs_sessions: add exported_control_ids if missing
 try {
@@ -339,6 +368,16 @@ const dbInsertPolicyFile = db.prepare(`
 `);
 const dbDeletePolicyFile = db.prepare(`DELETE FROM policy_files WHERE id = ?`);
 const dbDeletePolicyFilesForCollection = db.prepare(`DELETE FROM policy_files WHERE collection_id = ?`);
+
+// Policy generation history DB helpers
+const dbInsertGenHistory = db.prepare(`
+  INSERT INTO policy_generation_history (id, collection_id, generation_type, status, config, summary, library_urn, controls_count, nodes_count, confidence_score, generation_time, source_file_count, error_message, extraction_data, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const dbUpdateGenHistoryStatus = db.prepare(`UPDATE policy_generation_history SET status = ?, library_urn = ?, error_message = ? WHERE id = ?`);
+const dbListGenHistory = db.prepare(`SELECT * FROM policy_generation_history WHERE collection_id = ? ORDER BY created_at DESC`);
+const dbGetLatestGenHistory = db.prepare(`SELECT * FROM policy_generation_history WHERE collection_id = ? ORDER BY created_at DESC LIMIT 1`);
+const dbGetGenHistoryById = db.prepare(`SELECT * FROM policy_generation_history WHERE id = ?`);
 
 function policyCollectionToJSON(row) {
   const files = dbListPolicyFiles.all(row.id);
@@ -2462,10 +2501,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Policy Collections API ----
-  const policyCollMatch = url.pathname.match(/^\/api\/policy-collections(?:\/([^\/]+))?(?:\/(files|extract|approve)(?:\/([^\/]+))?)?$/);
+  const policyCollMatch = url.pathname.match(/^\/api\/policy-collections(?:\/([^\/]+))?(?:\/(files|extract|approve|history)(?:\/([^\/]+))?)?$/);
   if (policyCollMatch) {
     const collId = policyCollMatch[1];
-    const subResource = policyCollMatch[2]; // 'files' | 'extract' | 'approve'
+    const subResource = policyCollMatch[2]; // 'files' | 'extract' | 'approve' | 'history'
     const fileId = policyCollMatch[3];
     const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
 
@@ -2832,7 +2871,19 @@ const server = http.createServer(async (req, res) => {
             result.csfDistribution = csfFunctions;
             result.categoryDistribution = categories;
           } else {
-            // Legacy "both" mode: full library with framework + controls
+            // "Both" mode: full library with framework + controls
+            result.requirementNodes = reqNodes.map((rn, i) => ({
+              id: 'rn-' + (i + 1),
+              urn: rn.urn || '',
+              ref_id: rn.ref_id || '',
+              name: rn.name || 'Unnamed Node',
+              description: rn.description || '',
+              assessable: !!rn.assessable,
+              depth: rn.depth || 1,
+              parent_urn: rn.parent_urn || null,
+            }));
+            result.totalNodes = reqNodes.length;
+            result.assessableNodes = assessableNodes.length;
             result.policies = refControls.map((rc, i) => ({
               id: 'gp-' + (i + 1),
               code: rc.ref_id || `RC-${i + 1}`,
@@ -2853,6 +2904,27 @@ const server = http.createServer(async (req, res) => {
           const now3 = new Date().toISOString();
           dbUpdatePolicyCollection.run(row.name, row.description, 'generated', JSON.stringify(config), JSON.stringify(result), now3, collId);
 
+          // Save to generation history
+          const historyId = 'gh-' + crypto.randomUUID();
+          const historySummary = {
+            libraryName: config.libraryName,
+            provider: config.provider,
+            language: config.language,
+            detailLevel: config.detailLevel,
+            csfDistribution: csfFunctions,
+            categoryDistribution: categories,
+          };
+          dbInsertGenHistory.run(
+            historyId, collId, generationType, 'generated',
+            JSON.stringify(config), JSON.stringify(historySummary),
+            null, // library_urn (not yet approved)
+            refControls.length, reqNodes.length, avgConfidence,
+            elapsed + 's', files.length, null,
+            JSON.stringify(result), // extraction_data — full generated result
+            now3
+          );
+          result.historyId = historyId;
+
           console.log(`[Policy Extraction] ✅ [${generationType}] Extracted ${refControls.length} reference controls, ${reqNodes.length} requirement nodes (${assessableNodes.length} assessable)`);
 
           sendJSON(res, 200, { success: true, data: result });
@@ -2866,6 +2938,15 @@ const server = http.createServer(async (req, res) => {
           console.error('[Policy Extraction] Error:', extractErr.message);
           const now3 = new Date().toISOString();
           dbUpdatePolicyCollection.run(row.name, row.description, 'ready', JSON.stringify(config), null, now3, collId);
+          // Save failed extraction to history
+          try {
+            const histErrId = 'gh-' + crypto.randomUUID();
+            dbInsertGenHistory.run(
+              histErrId, collId, config.generationType || 'both', 'failed',
+              JSON.stringify(config), '{}', null, 0, 0, 0, '', files.length,
+              extractErr.message, null, now3
+            );
+          } catch (e) { /* ignore history save error */ }
           sendJSON(res, 500, { error: extractErr.message });
         }
         return;
@@ -2878,15 +2959,13 @@ const server = http.createServer(async (req, res) => {
         if (!row.extraction_result) { sendJSON(res, 400, { error: 'No extraction result to approve.' }); return; }
 
         const body = await parseBody(req);
-        const folder = body.folder; // Required — GRC folder UUID
-        if (!folder) {
-          sendJSON(res, 400, { error: 'folder (GRC folder UUID) is required.' });
-          return;
-        }
+        const folder = body.folder; // Required for controls/both — GRC folder UUID
 
         const result = JSON.parse(row.extraction_result);
         const config = JSON.parse(row.config || '{}');
         const generationType = result.generationType || config.generationType || 'both';
+
+        // Folder is optional — used for organizational context only (applied controls are created manually by the user)
 
         // The AI returns the full library structure including urn, name, objects, etc.
         const extractedLibrary = result.extractedLibrary || {};
@@ -2921,7 +3000,7 @@ const server = http.createServer(async (req, res) => {
           }
           uploadObjects = { reference_controls: libObjects.reference_controls || [] };
         } else {
-          // Legacy "both" mode: include reference_controls only (no framework as per previous user request)
+          // "Both" mode: include framework AND reference_controls
           const editedPolicies = body.policies && body.policies.length ? body.policies : null;
           const refControls = libObjects.reference_controls || [];
           if (editedPolicies && refControls.length) {
@@ -2938,7 +3017,11 @@ const server = http.createServer(async (req, res) => {
               return rc;
             });
           }
-          uploadObjects = { reference_controls: libObjects.reference_controls || [] };
+          uploadObjects = {};
+          if (libObjects.framework) uploadObjects.framework = libObjects.framework;
+          if (libObjects.reference_controls && libObjects.reference_controls.length > 0) {
+            uploadObjects.reference_controls = libObjects.reference_controls;
+          }
         }
 
         const libraryPayload = {
@@ -2989,128 +3072,28 @@ const server = http.createServer(async (req, res) => {
           console.error(`[Policy Approve] ⚠ Library upload exception: ${libErr.message}`);
         }
 
-        // ── Step 2: For controls/both mode — create Policy (AppliedControl) objects ──
+        // Reference controls are created automatically when the library is uploaded.
+        // Applied controls are added manually by the user in the GRC platform.
         const grcResults = [];
         const grcErrors = [];
 
-        if (generationType !== 'framework') {
-          // Only create applied controls when we have reference_controls
-          const VALID_CSF = new Set(['govern', 'identify', 'protect', 'detect', 'respond', 'recover']);
-          const VALID_CATEGORY = new Set(['policy', 'process', 'technical', 'physical', 'procedure']);
-
-          // If library was created, fetch the ReferenceControl IDs so we can link policies
-          let rcUrnToId = {};
-          if (libraryCreated && storedLibraryData && storedLibraryData.id) {
-            try {
-              const rcRes = await grcFetch(
-                `${GRC_API_URL}/api/reference-controls/?library=${storedLibraryData.loaded_library || ''}&page_size=500`,
-                {}, reqToken
-              );
-              if (rcRes.ok) {
-                const rcData = await rcRes.json();
-                const rcList = rcData.results || rcData || [];
-                rcList.forEach(rc => {
-                  if (rc.urn) rcUrnToId[rc.urn.toLowerCase()] = rc.id;
-                });
-                console.log(`[Policy Approve] Fetched ${Object.keys(rcUrnToId).length} reference control IDs for linking`);
-              }
-            } catch (e) {
-              console.warn(`[Policy Approve] Could not fetch reference controls for linking: ${e.message}`);
+        // Verify reference controls were created in GRC after library upload
+        if (libraryCreated && storedLibraryData && generationType !== 'framework') {
+          try {
+            const rcRes = await grcFetch(
+              `${GRC_API_URL}/api/reference-controls/?library=${storedLibraryData.loaded_library || ''}&page_size=500`,
+              {}, reqToken
+            );
+            if (rcRes.ok) {
+              const rcData = await rcRes.json();
+              const rcList = rcData.results || rcData || [];
+              console.log(`[Policy Approve] ✅ Verified ${rcList.length} reference controls created in GRC from library upload`);
+              rcList.forEach(rc => {
+                grcResults.push({ id: rc.id, name: rc.name || rc.ref_id, success: true });
+              });
             }
-          }
-
-          const MAX_RETRIES = 3;
-          const updatedRefControls = uploadObjects.reference_controls || [];
-
-          async function createPolicy(rc, index, attempt) {
-            const rawCsf = (rc.csf_function || '').toLowerCase().trim();
-            const rawCat = (rc.category || '').toLowerCase().trim();
-
-            const policyName = (rc.name || 'Untitled Policy').substring(0, 200);
-            const policyRefId = (rc.ref_id || '').substring(0, 100);
-
-            const grcBody = {
-              name: policyName,
-              folder,
-              description: rc.description || '',
-              ref_id: policyRefId,
-              category: VALID_CATEGORY.has(rawCat) ? rawCat : 'policy',
-              status: '--',
-              priority: 3,
-              effort: 'M',
-            };
-
-            if (VALID_CSF.has(rawCsf)) grcBody.csf_function = rawCsf;
-            if (!grcBody.ref_id) delete grcBody.ref_id;
-
-            const rcId = rcUrnToId[(rc.urn || '').toLowerCase()];
-            if (rcId) grcBody.reference_control = rcId;
-
-            const attemptLabel = attempt > 1 ? ` (retry ${attempt - 1}/${MAX_RETRIES - 1})` : '';
-            console.log(`[Policy Approve] ${index + 1}/${updatedRefControls.length}: POST "${grcBody.name}" (ref_control=${rcId || 'none'})${attemptLabel}`);
-
-            const bodyBuf = Buffer.from(JSON.stringify(grcBody), 'utf-8');
-            const grcRes = await grcFetch(`${GRC_API_URL}/api/applied-controls/`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json; charset=utf-8',
-                'Content-Length': String(bodyBuf.length),
-              },
-              body: bodyBuf,
-            }, reqToken);
-
-            if (grcRes.ok) {
-              const created = await grcRes.json();
-              return { success: true, id: created.id, name: grcBody.name };
-            } else {
-              const errText = await grcRes.text();
-              console.error(`[Policy Approve] API error detail for "${grcBody.name}": status=${grcRes.status}, body=${errText}, sent=${JSON.stringify(grcBody).substring(0, 500)}`);
-              return { success: false, name: grcBody.name, status: grcRes.status, error: errText };
-            }
-          }
-
-          const DELAY_BETWEEN_MS = 300;
-
-          for (let i = 0; i < updatedRefControls.length; i++) {
-            const rc = updatedRefControls[i];
-            let lastResult = null;
-
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-              try {
-                lastResult = await createPolicy(rc, i, attempt);
-                if (lastResult.success) {
-                  console.log(`[Policy Approve] ✅ Created policy "${lastResult.name}" → id=${lastResult.id}`);
-                  grcResults.push({ id: lastResult.id, name: lastResult.name, success: true });
-                  break;
-                }
-                const isRetryable = lastResult.status >= 500 || lastResult.status === 429;
-                if (!isRetryable) {
-                  console.warn(`[Policy Approve] ❌ Non-retryable error for "${lastResult.name}": ${lastResult.status} ${lastResult.error}`);
-                  break;
-                }
-                if (attempt < MAX_RETRIES) {
-                  const delay = 1000 * Math.pow(2, attempt - 1);
-                  console.warn(`[Policy Approve] ⚠ Attempt ${attempt} failed for "${lastResult.name}": ${lastResult.status} — retrying in ${delay}ms...`);
-                  await new Promise(r => setTimeout(r, delay));
-                }
-              } catch (pushErr) {
-                lastResult = { success: false, name: rc.name || 'Unknown', error: pushErr.message };
-                if (attempt < MAX_RETRIES) {
-                  const delay = 1000 * Math.pow(2, attempt - 1);
-                  console.warn(`[Policy Approve] ⚠ Attempt ${attempt} exception for "${rc.name}": ${pushErr.message} — retrying in ${delay}ms...`);
-                  await new Promise(r => setTimeout(r, delay));
-                }
-              }
-            }
-
-            if (lastResult && !lastResult.success) {
-              console.error(`[Policy Approve] ❌ Failed "${lastResult.name}" after ${MAX_RETRIES} attempts: ${lastResult.error || lastResult.status}`);
-              grcErrors.push({ name: lastResult.name, status: lastResult.status, error: lastResult.error });
-            }
-
-            if (i < updatedRefControls.length - 1) {
-              await new Promise(r => setTimeout(r, DELAY_BETWEEN_MS));
-            }
+          } catch (e) {
+            console.warn(`[Policy Approve] Could not verify reference controls: ${e.message}`);
           }
         }
 
@@ -3125,10 +3108,17 @@ const server = http.createServer(async (req, res) => {
         result.grcErrors = grcErrors;
         dbUpdatePolicyCollection.run(row.name, row.description, 'approved', row.config, JSON.stringify(result), now2, collId);
 
+        // Update the generation history record with approve result
+        const historyId = result.historyId;
+        if (historyId) {
+          const approveStatus = grcErrors.length > 0 ? 'approved_with_errors' : 'approved';
+          dbUpdateGenHistoryStatus.run(approveStatus, libraryPayload.urn, grcErrors.length > 0 ? `${grcErrors.length} errors during push` : null, historyId);
+        }
+
         const totalItems = generationType === 'framework'
           ? (libObjects.framework?.requirement_nodes?.length || 0)
           : (uploadObjects.reference_controls?.length || 0);
-        console.log(`[Policy Approve] ✅ [${generationType}] Done: library=${libraryCreated ? 'created' : 'failed'}, ${grcResults.length}/${totalItems} items (${grcErrors.length} errors)`);
+        console.log(`[Policy Approve] ✅ [${generationType}] Done: library=${libraryCreated ? 'created' : 'failed'}, ${grcResults.length} reference controls verified (${grcErrors.length} errors)`);
 
         sendJSON(res, 200, {
           success: true,
@@ -3145,6 +3135,57 @@ const server = http.createServer(async (req, res) => {
             grcErrors,
           }
         });
+        return;
+      }
+
+      // GET /api/policy-collections/:id/history/:historyId — Single history entry with full data
+      if (collId && subResource === 'history' && fileId && req.method === 'GET') {
+        const r = dbGetGenHistoryById.get(fileId);
+        if (!r) { sendJSON(res, 404, { error: 'History entry not found' }); return; }
+        sendJSON(res, 200, {
+          success: true,
+          data: {
+            id: r.id,
+            collectionId: r.collection_id,
+            generationType: r.generation_type,
+            status: r.status,
+            config: JSON.parse(r.config || '{}'),
+            summary: JSON.parse(r.summary || '{}'),
+            libraryUrn: r.library_urn,
+            controlsCount: r.controls_count,
+            nodesCount: r.nodes_count,
+            confidenceScore: r.confidence_score,
+            generationTime: r.generation_time,
+            sourceFileCount: r.source_file_count,
+            errorMessage: r.error_message,
+            extractionData: r.extraction_data ? JSON.parse(r.extraction_data) : null,
+            createdAt: r.created_at,
+          },
+        });
+        return;
+      }
+
+      // GET /api/policy-collections/:id/history — List generation history
+      if (collId && subResource === 'history' && !fileId && req.method === 'GET') {
+        const rows = dbListGenHistory.all(collId);
+        const history = rows.map(r => ({
+          id: r.id,
+          collectionId: r.collection_id,
+          generationType: r.generation_type,
+          status: r.status,
+          config: JSON.parse(r.config || '{}'),
+          summary: JSON.parse(r.summary || '{}'),
+          libraryUrn: r.library_urn,
+          controlsCount: r.controls_count,
+          nodesCount: r.nodes_count,
+          confidenceScore: r.confidence_score,
+          generationTime: r.generation_time,
+          sourceFileCount: r.source_file_count,
+          errorMessage: r.error_message,
+          hasData: !!r.extraction_data,
+          createdAt: r.created_at,
+        }));
+        sendJSON(res, 200, { success: true, data: history });
         return;
       }
 

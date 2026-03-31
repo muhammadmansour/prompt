@@ -124,6 +124,69 @@ function toast(type, title, msg, dur) {
 
 function esc(t) { if (!t) return ''; const d = document.createElement('div'); d.textContent = String(t); return d.innerHTML; }
 
+/**
+ * Show a custom confirm dialog (replaces window.confirm).
+ * @param {Object} opts
+ * @param {string} opts.title - Dialog title
+ * @param {string} opts.message - Dialog body text
+ * @param {string} [opts.confirmText='Delete'] - Confirm button label
+ * @param {string} [opts.cancelText='Cancel'] - Cancel button label
+ * @param {string} [opts.type='danger'] - 'danger' | 'warning' | 'info'
+ * @returns {Promise<boolean>} true if confirmed, false if cancelled
+ */
+function showConfirm({ title = 'Are you sure?', message = '', confirmText = 'Delete', cancelText = 'Cancel', type = 'danger' } = {}) {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('confirm-dialog-overlay');
+    const iconEl = document.getElementById('confirm-dialog-icon');
+    const titleEl = document.getElementById('confirm-dialog-title');
+    const msgEl = document.getElementById('confirm-dialog-message');
+    const confirmBtn = document.getElementById('confirm-dialog-confirm');
+    const cancelBtn = document.getElementById('confirm-dialog-cancel');
+
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+    confirmBtn.textContent = confirmText;
+    cancelBtn.textContent = cancelText;
+
+    // Icon based on type
+    const icons = {
+      danger: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 6H21M8 6V4C8 3.4 8.4 3 9 3H15C15.6 3 16 3.4 16 4V6M10 11V17M14 11V17M5 6L6 20C6 20.6 6.4 21 7 21H17C17.6 21 18 20.6 18 20L19 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      warning: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 9V13M12 17H12.01M4.93 19H19.07C20.14 19 20.81 17.83 20.28 16.91L13.21 4.58C12.68 3.67 11.32 3.67 10.79 4.58L3.72 16.91C3.19 17.83 3.86 19 4.93 19Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      info: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8V12M12 16H12.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    };
+    iconEl.className = 'confirm-dialog-icon ' + type;
+    iconEl.innerHTML = icons[type] || icons.danger;
+
+    // Style confirm button
+    confirmBtn.className = 'confirm-dialog-btn confirm-dialog-confirm' + (type === 'info' ? ' primary' : '');
+
+    // Show
+    overlay.style.display = 'flex';
+    requestAnimationFrame(() => overlay.classList.add('active'));
+
+    function cleanup(result) {
+      overlay.classList.remove('active');
+      setTimeout(() => { overlay.style.display = 'none'; }, 200);
+      confirmBtn.removeEventListener('click', onConfirm);
+      cancelBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('click', onOverlay);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    }
+    function onConfirm() { cleanup(true); }
+    function onCancel() { cleanup(false); }
+    function onOverlay(e) { if (e.target === overlay) cleanup(false); }
+    function onKey(e) { if (e.key === 'Escape') cleanup(false); if (e.key === 'Enter') cleanup(true); }
+
+    confirmBtn.addEventListener('click', onConfirm);
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('click', onOverlay);
+    document.addEventListener('keydown', onKey);
+
+    cancelBtn.focus();
+  });
+}
+
 function fmtDate(s) {
   try {
     const d = new Date(s), now = new Date(), ms = now - d;
@@ -473,7 +536,7 @@ function goToSession(id) {
 window.goToSession = goToSession;
 
 async function deleteSession(id) {
-  if (!confirm('Delete this session?')) return;
+  if (!await showConfirm({ title: 'Delete Session', message: 'Are you sure you want to delete this session?', confirmText: 'Delete' })) return;
   try {
     const r = await fetch(API.sessions + '/' + id, { method: 'DELETE' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1296,7 +1359,7 @@ window.editOrgContext = editOrgContext;
 async function deleteOrgContext(idx) {
   const ctx = orgContexts[idx];
   if (!ctx) return;
-  if (!confirm('Delete profile "' + (ctx.nameEn || ctx.name) + '"? Any Controls Studio sessions using this profile will lose their org context.')) return;
+  if (!await showConfirm({ title: 'Delete Profile', message: `Delete "${ctx.nameEn || ctx.name}"? Any Controls Studio sessions using this profile will lose their org context.`, confirmText: 'Delete' })) return;
   try {
     const r = await fetch(API.orgContexts + '/' + ctx.id, { method: 'DELETE' });
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'HTTP ' + r.status); }
@@ -1546,7 +1609,7 @@ promptModalSave?.addEventListener('click', async () => {
 
 // Delete prompt
 async function adminDeletePrompt(id, nm) {
-  if (!confirm('Delete "' + nm + '"?')) return;
+  if (!await showConfirm({ title: 'Delete Prompt', message: `Delete "${nm}"?`, confirmText: 'Delete' })) return;
   try {
     const r = await fetch(PROMPTS_API_URL + '/' + id, { method: 'DELETE' });
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.message || e.error || 'HTTP ' + r.status); }
@@ -1831,7 +1894,7 @@ async function csOpenSession(id) {
 window.csOpenSession = csOpenSession;
 
 async function csDeleteSessionConfirm(id, name) {
-  if (!confirm(`Delete session "${name}"?`)) return;
+  if (!await showConfirm({ title: 'Delete Session', message: `Delete session "${name}"?`, confirmText: 'Delete' })) return;
   await csDeleteSession(id);
   toast('success', 'Deleted', 'Session deleted.');
   csCachedSessions = null; // Force refresh
@@ -2540,7 +2603,7 @@ async function csUploadToColl(storeId) {
 window.csUploadToColl = csUploadToColl;
 
 async function csDeleteColl(storeId, displayName) {
-  if (!confirm(`Delete collection "${displayName}"? This removes all files.`)) return;
+  if (!await showConfirm({ title: 'Delete Collection', message: `Delete "${displayName}"? This removes all files.`, confirmText: 'Delete' })) return;
   try {
     const res = await fetch(`/api/collections/${storeId}`, { method: 'DELETE' });
     const data = await res.json();
@@ -3254,10 +3317,10 @@ function csSaveControl(ctrlId) {
 }
 window.csSaveControl = csSaveControl;
 
-function csDeleteControl(ctrlId) {
+async function csDeleteControl(ctrlId) {
   const ctrl = (csSessionData.controls || []).find(c => c.id === ctrlId);
   const name = ctrl?.name || 'this control';
-  if (!confirm(`Remove "${name}"?`)) return;
+  if (!await showConfirm({ title: 'Remove Control', message: `Remove "${name}"?`, confirmText: 'Remove', type: 'warning' })) return;
   csSessionData.controls = (csSessionData.controls || []).filter(c => c.id !== ctrlId);
   csSaveStep();
   csRenderWizard();
@@ -4386,7 +4449,7 @@ window.studioUploadFile = studioUploadFile;
 
 // Delete collection
 async function studioDeleteColl(storeId, displayName) {
-  if (!confirm(`Delete collection "${displayName}"? This removes all files.`)) return;
+  if (!await showConfirm({ title: 'Delete Collection', message: `Delete "${displayName}"? This removes all files.`, confirmText: 'Delete' })) return;
   try {
     const res = await fetch(`/api/collections/${storeId}`, { method: 'DELETE' });
     const data = await res.json();
@@ -4557,6 +4620,8 @@ let piGenerationResult = null;
 let piReviewPolicies = [];
 let piReviewNodes = [];
 let piGrcFrameworksCache = null;
+let piActiveTab = 'files'; // 'files' | 'history'
+let piHistoryCache = {}; // collectionId -> history array
 
 // API base for policy collections
 const PI_API = '/api/policy-collections';
@@ -4603,6 +4668,7 @@ async function loadPolicyIngestion() {
   piGenerationResult = null;
   piReviewPolicies = [];
   piReviewNodes = [];
+  piActiveTab = 'files';
   // Show loading state
   const el = document.getElementById('pi-content');
   if (el) el.innerHTML = '<div style="text-align:center;padding:60px;color:#9ca3af"><div class="pi-spinner-icon" style="margin:0 auto 12px"><svg width="24" height="24" class="pi-spinner" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.3"/><path d="M7 2C10 2 12 4.7 12 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>Loading collections…</div>';
@@ -4631,6 +4697,8 @@ function piRender() {
     el.innerHTML = piRenderReview();
   } else if (piPhase === 'success') {
     el.innerHTML = piRenderSuccess();
+  } else if (piPhase === 'history-detail') {
+    // Rendered directly by piRenderHistoryDetail — do nothing here
   }
 }
 
@@ -4667,6 +4735,7 @@ function piRenderCollectionsList() {
         <button class="pi-btn pi-btn-view" onclick="piOpenCollection('${c.id}')"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M1 6C1 6 3 2 6 2C9 2 11 6 11 6C11 6 9 10 6 10C3 10 1 6 1 6Z" stroke="currentColor" stroke-width="1.2"/></svg> View</button>
         ${c.status === 'ready' ? `<button class="pi-btn pi-btn-generate" onclick="piStartGeneration('${c.id}')"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1L7.5 4L11 4.5L8.5 7L9 10.5L6 9L3 10.5L3.5 7L1 4.5L4.5 4L6 1Z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg> Generate Policies</button>` : ''}
         ${c.status === 'generated' ? `<button class="pi-btn pi-btn-library"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg> View Library</button>` : ''}
+        <button class="pi-btn pi-btn-delete" onclick="event.stopPropagation();piDeleteCollection('${c.id}')" title="Delete collection"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 4H13M5.5 4V3C5.5 2.4 5.9 2 6.5 2H9.5C10.1 2 10.5 2.4 10.5 3V4M6.5 7V11.5M9.5 7V11.5M4 4L4.5 13C4.5 13.6 4.9 14 5.5 14H10.5C11.1 14 11.5 13.6 11.5 13L12 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div></td>
     </tr>`;
   }).join('');
@@ -4709,6 +4778,7 @@ window.piCreateNew = piCreateNew;
 async function piOpenCollection(id) {
   piSelectedCollectionId = id;
   piSelectedFileIds = [];
+  piActiveTab = 'files';
   piPhase = 'collection-detail';
 
   // Fetch files from API
@@ -4748,16 +4818,47 @@ function piBackToCollections() {
   piPhase = 'collections';
   piSelectedCollectionId = null;
   piSelectedFileIds = [];
+  piActiveTab = 'files';
   piRender();
 }
 window.piBackToCollections = piBackToCollections;
+
+async function piDeleteCollection(id) {
+  const coll = piCollections.find(c => c.id === id);
+  const name = coll ? coll.name : 'this collection';
+  if (!await showConfirm({ title: 'Delete Collection', message: `Delete "${name}"? This will permanently remove the collection, all its files, and generation history. This action cannot be undone.`, confirmText: 'Delete' })) return;
+  try {
+    const res = await fetch(`${PI_API}/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      toast('success', 'Deleted', `Collection "${name}" has been deleted`);
+      piCollections = piCollections.filter(c => c.id !== id);
+      delete piHistoryCache[id];
+      delete piHistoryDetailCache[id];
+      if (piSelectedCollectionId === id) {
+        piSelectedCollectionId = null;
+        piPhase = 'collections';
+      }
+      piRender();
+    } else {
+      toast('error', 'Error', data.error || 'Failed to delete collection');
+    }
+  } catch (e) {
+    console.error('Delete collection error:', e);
+    toast('error', 'Error', 'Failed to delete collection');
+  }
+}
+window.piDeleteCollection = piDeleteCollection;
 
 // ─── Collection Detail ─────────────────────────────────
 function piRenderCollectionDetail(coll) {
   const fileTypeIcons = { pdf: 'pi-file-icon-pdf', docx: 'pi-file-icon-docx', pptx: 'pi-file-icon-pptx', txt: 'pi-file-icon-txt', png: 'pi-file-icon-png', jpg: 'pi-file-icon-jpg' };
   const allSelected = piSelectedFileIds.length === coll.files.length && coll.files.length > 0;
-  const genLabel = piSelectedFileIds.length > 0 ? `Generate Policies from ${piSelectedFileIds.length} Files` : 'Generate Organization Policies';
+  const hasSelectedFiles = piSelectedFileIds.length > 0;
+  const genLabel = hasSelectedFiles ? `Generate (${piSelectedFileIds.length} files)` : 'Generate';
+  const genDisabled = !hasSelectedFiles;
 
+  // ── Files Tab Content ──
   let filesHtml = '';
   if (coll.files.length > 0) {
     const selectAll = `<div class="pi-select-all">
@@ -4784,6 +4885,95 @@ function piRenderCollectionDetail(coll) {
     filesHtml = `<div class="pi-files-empty"><div class="pi-files-empty-icon"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M14 10V13C14 13.6 13.6 14 13 14H3C2.4 14 2 13.6 2 13V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11 5L8 2L5 5M8 2V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><p>No files in this collection</p></div>`;
   }
 
+  const filesTabContent = `
+    ${filesHtml}
+    <div class="pi-dropzone" onclick="piTriggerUpload()">
+      <svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M14 10V13C14 13.6 13.6 14 13 14H3C2.4 14 2 13.6 2 13V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11 5L8 2L5 5M8 2V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <p>Drag files here or click to browse</p>
+      <p class="pi-dropzone-hint">PDF, DOCX, PPTX, TXT, PNG, JPG — Max 50 MB per file</p>
+    </div>
+    <input type="file" id="pi-file-input" style="display:none" multiple accept=".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg" onchange="piHandleFileUpload(event)">`;
+
+  // ── History Tab Content ──
+  const history = piHistoryCache[coll.id] || [];
+  const historyLoading = !piHistoryCache.hasOwnProperty(coll.id);
+  let historyTabContent = '';
+  if (historyLoading) {
+    historyTabContent = `<div style="text-align:center;padding:32px 0;color:#9ca3af"><svg class="pi-spin" width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#e5e7eb" stroke-width="2"/><path d="M10 2A8 8 0 0 1 18 10" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/></svg><p style="margin-top:8px;font-size:12px">Loading history…</p></div>`;
+  } else if (history.length === 0) {
+    historyTabContent = `<div style="text-align:center;padding:40px 0;color:#9ca3af">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style="margin:0 auto 12px"><circle cx="12" cy="12" r="10" stroke="#d1d5db" stroke-width="1.5"/><path d="M12 6V12L16 14" stroke="#d1d5db" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <p style="font-size:13px;font-weight:500;color:#6b7280">No generation history yet</p>
+      <p style="font-size:11px;margin-top:4px">Run a policy generation to see results here</p>
+    </div>`;
+  } else {
+    const rows = history.map(h => {
+      const date = new Date(h.createdAt);
+      const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const genTypeLabels = { framework: 'Framework', controls: 'Controls', both: 'Both' };
+      const genTypeLabel = genTypeLabels[h.generationType] || h.generationType;
+      const genTypeClass = h.generationType === 'framework' ? 'pi-hist-type-framework' :
+                           h.generationType === 'controls' ? 'pi-hist-type-controls' : 'pi-hist-type-both';
+
+      const statusLabels = {
+        generated: { label: 'Generated', cls: 'pi-hist-status-generated' },
+        approved: { label: 'Approved', cls: 'pi-hist-status-approved' },
+        approved_with_errors: { label: 'Approved (errors)', cls: 'pi-hist-status-warning' },
+        failed: { label: 'Failed', cls: 'pi-hist-status-failed' },
+      };
+      const st = statusLabels[h.status] || { label: h.status, cls: '' };
+
+      const confClass = h.confidenceScore >= 80 ? 'pi-confidence-high' : h.confidenceScore >= 60 ? 'pi-confidence-mid' : 'pi-confidence-low';
+
+      let itemsLabel = '';
+      if (h.generationType === 'framework') {
+        itemsLabel = `${h.nodesCount} nodes`;
+      } else if (h.generationType === 'controls') {
+        itemsLabel = `${h.controlsCount} controls`;
+      } else {
+        itemsLabel = `${h.nodesCount} nodes · ${h.controlsCount} controls`;
+      }
+
+      const canView = h.hasData && h.status !== 'failed';
+      const viewBtn = canView
+        ? `<button class="pi-hist-view-btn" onclick="event.stopPropagation();piViewHistoryEntry('${esc(h.id)}')" title="View generated data"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/></svg></button>`
+        : '';
+
+      return `<div class="pi-hist-row ${canView ? 'pi-hist-row-clickable' : ''}" ${canView ? `onclick="piViewHistoryEntry('${esc(h.id)}')"` : ''}>
+        <div class="pi-hist-cell pi-hist-date">
+          <div class="pi-hist-date-main">${dateStr}</div>
+          <div class="pi-hist-date-time">${timeStr}</div>
+        </div>
+        <div class="pi-hist-cell"><span class="pi-hist-type-badge ${genTypeClass}">${genTypeLabel}</span></div>
+        <div class="pi-hist-cell"><span class="pi-hist-status-badge ${st.cls}">${st.label}</span></div>
+        <div class="pi-hist-cell pi-hist-items">${itemsLabel}</div>
+        <div class="pi-hist-cell"><span class="pi-confidence-badge ${confClass}" style="font-size:10px;padding:2px 8px">${h.confidenceScore}%</span></div>
+        <div class="pi-hist-cell pi-hist-time-cell">${esc(h.generationTime || '-')}</div>
+        <div class="pi-hist-cell pi-hist-files-cell">${h.sourceFileCount} file${h.sourceFileCount !== 1 ? 's' : ''}</div>
+        <div class="pi-hist-cell pi-hist-urn">${h.libraryUrn ? `<span class="pi-hist-urn-text" title="${esc(h.libraryUrn)}">${esc(h.libraryUrn)}</span>` : '<span style="color:#d1d5db">—</span>'}</div>
+        <div class="pi-hist-cell">${viewBtn}</div>
+        ${h.errorMessage ? `<div class="pi-hist-cell pi-hist-error" title="${esc(h.errorMessage)}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#ef4444" stroke-width="1.3"/><path d="M8 5V9M8 11V11.5" stroke="#ef4444" stroke-width="1.3" stroke-linecap="round"/></svg></div>` : ''}
+      </div>`;
+    }).join('');
+
+    historyTabContent = `
+      <div class="pi-hist-header-row">
+        <div class="pi-hist-hcell">Date</div>
+        <div class="pi-hist-hcell">Type</div>
+        <div class="pi-hist-hcell">Status</div>
+        <div class="pi-hist-hcell">Items</div>
+        <div class="pi-hist-hcell">Confidence</div>
+        <div class="pi-hist-hcell">Duration</div>
+        <div class="pi-hist-hcell">Files</div>
+        <div class="pi-hist-hcell">Library URN</div>
+        <div class="pi-hist-hcell"></div>
+      </div>
+      <div class="pi-hist-body">${rows}</div>`;
+  }
+
+  const historyCount = history.length;
+
   return `
     <div class="pi-detail-header">
       <button class="pi-back-btn" onclick="piBackToCollections()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -4792,6 +4982,7 @@ function piRenderCollectionDetail(coll) {
         <div class="pi-detail-title" onclick="piStartEditName()" id="pi-name-display">${esc(coll.name)} <svg class="pi-edit-icon" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10.5 2.5L11.5 3.5L4 11H2.5V9.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></div>
         <input type="text" class="pi-detail-title-input" id="pi-name-input" value="${esc(coll.name)}" style="display:none" onblur="piCommitName()" onkeydown="piNameKeydown(event)">
       </div>
+      <button class="pi-delete-collection-btn" onclick="piDeleteCollection('${coll.id}')" title="Delete collection"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4H13M5.5 4V3C5.5 2.4 5.9 2 6.5 2H9.5C10.1 2 10.5 2.4 10.5 3V4M6.5 7V11.5M9.5 7V11.5M4 4L4.5 13C4.5 13.6 4.9 14 5.5 14H10.5C11.1 14 11.5 13.6 11.5 13L12 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </div>
     <div class="pi-detail-card">
       <div class="pi-detail-card-header">
@@ -4802,16 +4993,22 @@ function piRenderCollectionDetail(coll) {
         </div>
         <div class="pi-detail-actions">
           <button class="pi-btn pi-btn-view" onclick="piTriggerUpload()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 8V11C12 11.6 11.6 12 11 12H3C2.4 12 2 11.6 2 11V8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M9.5 4L7 1.5L4.5 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 1.5V8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Upload Files</button>
-          <button class="btn-admin-primary" onclick="piGenerateFromDetail()" ${coll.files.length === 0 ? 'disabled' : ''} title="${coll.files.length === 0 ? 'Upload files first' : ''}"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L8.5 4L12 4.5L9.5 7L10 10.5L7 9L4 10.5L4.5 7L2 4.5L5.5 4L7 1Z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg> ${genLabel}</button>
+          <button class="btn-admin-primary" onclick="piGenerateFromDetail()" ${genDisabled ? 'disabled' : ''} title="${genDisabled ? 'Select files first' : ''}"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L8.5 4L12 4.5L9.5 7L10 10.5L7 9L4 10.5L4.5 7L2 4.5L5.5 4L7 1Z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg> ${genLabel}</button>
         </div>
       </div>
-      ${filesHtml}
-      <div class="pi-dropzone" onclick="piTriggerUpload()">
-        <svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M14 10V13C14 13.6 13.6 14 13 14H3C2.4 14 2 13.6 2 13V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11 5L8 2L5 5M8 2V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <p>Drag files here or click to browse</p>
-        <p class="pi-dropzone-hint">PDF, DOCX, PPTX, TXT, PNG, JPG — Max 50 MB per file</p>
+      <div class="pi-tabs">
+        <button class="pi-tab${piActiveTab === 'files' ? ' active' : ''}" onclick="piSwitchTab('files')">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg>
+          Files <span class="pi-tab-count">${coll.files.length}</span>
+        </button>
+        <button class="pi-tab${piActiveTab === 'history' ? ' active' : ''}" onclick="piSwitchTab('history')">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M8 5V8.5L10.5 10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          History ${historyCount > 0 ? `<span class="pi-tab-count">${historyCount}</span>` : ''}
+        </button>
       </div>
-      <input type="file" id="pi-file-input" style="display:none" multiple accept=".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg" onchange="piHandleFileUpload(event)">
+      <div class="pi-tab-content">
+        ${piActiveTab === 'files' ? filesTabContent : historyTabContent}
+      </div>
     </div>`;
 }
 
@@ -4872,6 +5069,235 @@ window.piCommitDesc = piCommitDesc;
 
 function piDescKeydown(e) { if (e.key === 'Enter') piCommitDesc(); if (e.key === 'Escape') piRender(); }
 window.piDescKeydown = piDescKeydown;
+
+function piSwitchTab(tab) {
+  piActiveTab = tab;
+  if (tab === 'history' && piSelectedCollectionId && !piHistoryCache.hasOwnProperty(piSelectedCollectionId)) {
+    piLoadHistory(piSelectedCollectionId);
+  }
+  piRender();
+}
+window.piSwitchTab = piSwitchTab;
+
+async function piLoadHistory(collId) {
+  try {
+    const res = await fetch(`${PI_API}/${collId}/history`);
+    const data = await res.json();
+    if (data.success) {
+      piHistoryCache[collId] = data.data || [];
+    } else {
+      piHistoryCache[collId] = [];
+    }
+  } catch (e) {
+    console.warn('Failed to load history:', e);
+    piHistoryCache[collId] = [];
+  }
+  piRender();
+}
+
+// ── History Detail Viewer ──
+let piHistoryDetailCache = {};
+
+async function piViewHistoryEntry(historyId) {
+  if (!piSelectedCollectionId) return;
+
+  // If we already have it cached, render immediately
+  if (piHistoryDetailCache[historyId]) {
+    piRenderHistoryDetail(piHistoryDetailCache[historyId]);
+    return;
+  }
+
+  // Show loading state
+  piPhase = 'history-detail';
+  const contentEl = document.getElementById('pi-content');
+  if (contentEl) contentEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;min-height:400px;flex-direction:column;gap:12px">
+    <svg class="pi-spin" width="28" height="28" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#e5e7eb" stroke-width="2"/><path d="M10 2A8 8 0 0 1 18 10" stroke="#0077cc" stroke-width="2" stroke-linecap="round"/></svg>
+    <p style="color:#6b7280;font-size:13px">Loading generation data…</p>
+  </div>`;
+
+  try {
+    const res = await fetch(`${PI_API}/${piSelectedCollectionId}/history/${historyId}`);
+    const data = await res.json();
+    if (data.success && data.data) {
+      piHistoryDetailCache[historyId] = data.data;
+      piRenderHistoryDetail(data.data);
+    } else {
+      toast('error', 'Error', data.error || 'Failed to load history detail');
+      piPhase = 'collection-detail';
+      piRender();
+    }
+  } catch (e) {
+    console.error('Failed to load history detail:', e);
+    toast('error', 'Error', 'Failed to load history entry');
+    piPhase = 'collection-detail';
+    piRender();
+  }
+}
+window.piViewHistoryEntry = piViewHistoryEntry;
+
+function piRenderHistoryDetail(entry) {
+  const pageEl = document.getElementById('pi-content');
+  if (!pageEl) return;
+  piPhase = 'history-detail';
+
+  const date = new Date(entry.createdAt);
+  const dateStr = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  const genTypeLabels = { framework: 'Framework', controls: 'Controls', both: 'Both' };
+  const genTypeLabel = genTypeLabels[entry.generationType] || entry.generationType;
+  const genTypeClass = entry.generationType === 'framework' ? 'pi-hist-type-framework' :
+                       entry.generationType === 'controls' ? 'pi-hist-type-controls' : 'pi-hist-type-both';
+  const statusLabels = {
+    generated: { label: 'Generated', cls: 'pi-hist-status-generated' },
+    approved: { label: 'Approved', cls: 'pi-hist-status-approved' },
+    approved_with_errors: { label: 'Approved (errors)', cls: 'pi-hist-status-warning' },
+    failed: { label: 'Failed', cls: 'pi-hist-status-failed' },
+  };
+  const st = statusLabels[entry.status] || { label: entry.status, cls: '' };
+
+  const exData = entry.extractionData || {};
+  const policies = exData.policies || [];
+  const reqNodes = exData.requirementNodes || [];
+  const csfDist = exData.csfDistribution || entry.summary?.csfDistribution || {};
+  const catDist = exData.categoryDistribution || entry.summary?.categoryDistribution || {};
+
+  // Build framework nodes section
+  let nodesSection = '';
+  if (reqNodes.length > 0) {
+    const nodesHtml = reqNodes.map((n, i) => {
+      const indent = Math.min((n.depth || 1) - 1, 4) * 20;
+      return `<div class="pi-hist-detail-node" style="padding-left:${indent}px">
+        <div class="pi-hist-detail-node-header">
+          <span class="pi-hist-detail-node-ref">${esc(n.ref_id || n.urn || `N-${i+1}`)}</span>
+          <span class="pi-hist-detail-node-name">${esc(n.name)}</span>
+          ${n.assessable ? '<span class="pi-hist-detail-badge pi-hist-detail-badge-assess">Assessable</span>' : ''}
+        </div>
+        ${n.description ? `<div class="pi-hist-detail-node-desc">${esc(n.description)}</div>` : ''}
+      </div>`;
+    }).join('');
+    nodesSection = `
+      <div class="pi-hist-detail-section">
+        <div class="pi-hist-detail-section-header">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L12 5V11L8 14L4 11V5L8 2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          Framework Nodes <span class="pi-tab-count">${reqNodes.length}</span>
+          <span style="color:#9ca3af;font-weight:400;margin-left:6px">(${(exData.assessableNodes || reqNodes.filter(n=>n.assessable).length)} assessable)</span>
+        </div>
+        <div class="pi-hist-detail-nodes-list">${nodesHtml}</div>
+      </div>`;
+  }
+
+  // Build controls/policies section
+  let controlsSection = '';
+  if (policies.length > 0) {
+    const controlsHtml = policies.map((p, i) => {
+      const csfColors = { govern:'#6366f1', protect:'#0ea5e9', detect:'#f59e0b', respond:'#ef4444', recover:'#10b981', identify:'#8b5cf6' };
+      const csfColor = csfColors[p.csfFunction] || '#6b7280';
+      return `<div class="pi-hist-detail-control">
+        <div class="pi-hist-detail-control-header">
+          <span class="pi-hist-detail-control-code">${esc(p.code || `RC-${i+1}`)}</span>
+          <span class="pi-hist-detail-control-name">${esc(p.name)}</span>
+          <span class="pi-hist-detail-badge" style="background:${csfColor}15;color:${csfColor};border:1px solid ${csfColor}30">${esc((p.csfFunction||'').charAt(0).toUpperCase()+(p.csfFunction||'').slice(1))}</span>
+          <span class="pi-hist-detail-badge" style="background:#f3f4f6;color:#374151">${esc((p.category||'').charAt(0).toUpperCase()+(p.category||'').slice(1))}</span>
+        </div>
+        ${p.description ? `<div class="pi-hist-detail-control-desc">${esc(p.description)}</div>` : ''}
+      </div>`;
+    }).join('');
+    controlsSection = `
+      <div class="pi-hist-detail-section">
+        <div class="pi-hist-detail-section-header">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M5 8L7 10L11 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Reference Controls <span class="pi-tab-count">${policies.length}</span>
+        </div>
+        <div class="pi-hist-detail-controls-list">${controlsHtml}</div>
+      </div>`;
+  }
+
+  // Distribution charts
+  let distSection = '';
+  const csfEntries = Object.entries(csfDist).filter(([,v]) => v > 0);
+  const catEntries = Object.entries(catDist).filter(([,v]) => v > 0);
+  if (csfEntries.length > 0 || catEntries.length > 0) {
+    const csfColors = { govern:'#6366f1', protect:'#0ea5e9', detect:'#f59e0b', respond:'#ef4444', recover:'#10b981', identify:'#8b5cf6' };
+    const csfBars = csfEntries.map(([fn, cnt]) => {
+      const total = csfEntries.reduce((s,[,v])=>s+v,0);
+      const pct = total > 0 ? Math.round(cnt/total*100) : 0;
+      const color = csfColors[fn] || '#6b7280';
+      return `<div class="pi-hist-dist-item"><div class="pi-hist-dist-label">${fn.charAt(0).toUpperCase()+fn.slice(1)}</div><div class="pi-hist-dist-bar"><div class="pi-hist-dist-fill" style="width:${pct}%;background:${color}"></div></div><div class="pi-hist-dist-val">${cnt}</div></div>`;
+    }).join('');
+    const catBars = catEntries.map(([cat, cnt]) => {
+      const total = catEntries.reduce((s,[,v])=>s+v,0);
+      const pct = total > 0 ? Math.round(cnt/total*100) : 0;
+      return `<div class="pi-hist-dist-item"><div class="pi-hist-dist-label">${cat.charAt(0).toUpperCase()+cat.slice(1)}</div><div class="pi-hist-dist-bar"><div class="pi-hist-dist-fill" style="width:${pct}%;background:#0077cc"></div></div><div class="pi-hist-dist-val">${cnt}</div></div>`;
+    }).join('');
+    distSection = `<div class="pi-hist-detail-section">
+      <div class="pi-hist-detail-section-header">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="9" width="3" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/><rect x="6.5" y="5" width="3" height="9" rx="0.5" stroke="currentColor" stroke-width="1.2"/><rect x="11" y="2" width="3" height="12" rx="0.5" stroke="currentColor" stroke-width="1.2"/></svg>
+        Distribution
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+        ${csfBars ? `<div><div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px">CSF Functions</div>${csfBars}</div>` : ''}
+        ${catBars ? `<div><div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px">Categories</div>${catBars}</div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // Config summary
+  const cfg = entry.config || {};
+  const cfgItems = [];
+  if (cfg.libraryName) cfgItems.push(['Library', cfg.libraryName]);
+  if (cfg.language) cfgItems.push(['Language', cfg.language]);
+  if (cfg.detailLevel) cfgItems.push(['Detail Level', cfg.detailLevel]);
+  if (cfg.provider) cfgItems.push(['Provider', cfg.provider]);
+  const cfgHtml = cfgItems.map(([k,v]) => `<div class="pi-hist-cfg-item"><span class="pi-hist-cfg-key">${esc(k)}</span><span class="pi-hist-cfg-val">${esc(v)}</span></div>`).join('');
+
+  // No data message
+  let noDataMsg = '';
+  if (policies.length === 0 && reqNodes.length === 0) {
+    noDataMsg = `<div style="text-align:center;padding:40px 0;color:#9ca3af">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style="margin:0 auto 12px"><path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#d1d5db" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17L12 22L22 17" stroke="#d1d5db" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 12L12 17L22 12" stroke="#d1d5db" stroke-width="1.5" stroke-linejoin="round"/></svg>
+      <p style="font-size:13px;font-weight:500;color:#6b7280">No extraction data available for this entry</p>
+      <p style="font-size:11px;margin-top:4px">This generation was recorded before data storage was enabled</p>
+    </div>`;
+  }
+
+  pageEl.innerHTML = `
+    <div class="pi-detail-header">
+      <button class="pi-back-btn" onclick="piBackFromHistoryDetail()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div style="flex:1">
+        <div class="pi-detail-breadcrumb">History &gt; Generation Detail</div>
+        <div class="pi-detail-title" style="font-size:18px">${dateStr} at ${timeStr}</div>
+      </div>
+    </div>
+    <div class="pi-detail-card">
+      <div style="padding:16px 20px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;border-bottom:1px solid #f3f4f6">
+        <span class="pi-hist-type-badge ${genTypeClass}" style="font-size:12px;padding:4px 12px">${genTypeLabel}</span>
+        <span class="pi-hist-status-badge ${st.cls}" style="font-size:12px;padding:4px 12px">${st.label}</span>
+        <div style="display:flex;gap:20px;margin-left:auto;font-size:12px;color:#6b7280">
+          <span>⏱ ${esc(entry.generationTime || '-')}</span>
+          <span>📄 ${entry.sourceFileCount} file${entry.sourceFileCount !== 1 ? 's' : ''}</span>
+          ${entry.nodesCount > 0 ? `<span>🔷 ${entry.nodesCount} nodes</span>` : ''}
+          ${entry.controlsCount > 0 ? `<span>✅ ${entry.controlsCount} controls</span>` : ''}
+        </div>
+      </div>
+      ${cfgHtml ? `<div style="padding:12px 20px;border-bottom:1px solid #f3f4f6;display:flex;flex-wrap:wrap;gap:8px">${cfgHtml}</div>` : ''}
+      <div style="padding:20px">
+        ${noDataMsg || ''}
+        ${nodesSection}
+        ${controlsSection}
+        ${distSection}
+      </div>
+    </div>
+    ${entry.libraryUrn ? `<div style="margin-top:12px;padding:12px 16px;background:#f8fafc;border-radius:8px;font-size:12px;color:#6b7280">Library URN: <code style="background:#e5e7eb;padding:2px 6px;border-radius:4px;font-size:11px">${esc(entry.libraryUrn)}</code></div>` : ''}
+    ${entry.errorMessage ? `<div style="margin-top:12px;padding:12px 16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:12px;color:#b91c1c"><strong>Error:</strong> ${esc(entry.errorMessage)}</div>` : ''}
+  `;
+}
+
+function piBackFromHistoryDetail() {
+  piPhase = 'collection-detail';
+  piActiveTab = 'history';
+  piRender();
+}
+window.piBackFromHistoryDetail = piBackFromHistoryDetail;
 
 function piToggleFile(id) {
   const idx = piSelectedFileIds.indexOf(id);
@@ -4963,10 +5389,6 @@ window.piGenerateFromDetail = piGenerateFromDetail;
 // ─── Config Modal ──────────────────────────────────────
 function piRenderConfigModal(coll) {
   const files = piSelectedFileIds.length > 0 ? coll.files.filter(f => piSelectedFileIds.includes(f.id)) : coll.files;
-  const frameworks = piGrcFrameworksCache || [];
-  const fwList = frameworks.length > 0 ? frameworks.map(fw => `
-    <div class="pi-fw-item"><input type="checkbox" id="pi-fw-${fw.id}" value="${fw.id}"><label for="pi-fw-${fw.id}">${esc(fw.name)}</label><span class="pi-fw-req-count">${fw.requirementCount || 0} req</span></div>
-  `).join('') : '<div style="padding:8px;color:#9ca3af;font-size:11px">No frameworks available — login to GRC to load them</div>';
 
   const filesList = files.map(f => `
     <div class="pi-included-file"><span>${esc(f.name)}</span><button onclick="piRemoveIncludedFile('${f.id}')"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M9 3L3 9M3 3L9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></div>
@@ -5004,6 +5426,16 @@ function piRenderConfigModal(coll) {
                   <div class="pi-radio-desc">Extract reusable procedures and controls that become Applied Controls (Policies) in GRC</div>
                 </div>
               </label>
+              <label class="pi-radio-option" id="pi-radio-both" onclick="piSetGenerationType('both')">
+                <input type="radio" name="pi-gen-type" value="both">
+                <div>
+                  <div class="pi-radio-title" style="display:flex;align-items:center;gap:6px">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2L12 5V11L8 14L4 11V5L8 2Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><path d="M5.5 8L7 9.5L10.5 6.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    Generate Both
+                  </div>
+                  <div class="pi-radio-desc">Extract framework structure + reference controls in a single library (full extraction)</div>
+                </div>
+              </label>
             </div>
           </div>
           <div><label class="pi-form-label">Library Name</label><input type="text" class="pi-form-input" id="pi-cfg-lib-name" value="${esc(coll.name)}" placeholder="e.g., Information Security Policies"></div>
@@ -5017,7 +5449,6 @@ function piRenderConfigModal(coll) {
               <label class="pi-radio-option" id="pi-radio-summary" onclick="piSetDetailLevel('summary')"><input type="radio" name="pi-detail"><div><div class="pi-radio-title">Summary</div><div class="pi-radio-desc">Main sections only</div></div></label>
             </div>
           </div>
-          <div id="pi-cfg-fw-row" style="display:none"><label class="pi-form-label">Link to Frameworks <span>(optional)</span></label><p class="pi-form-hint">Select frameworks to automatically link generated items to</p><div class="pi-fw-list">${fwList}</div></div>
           <div><label class="pi-form-label">Included Files</label><div class="pi-included-files" id="pi-cfg-files">${filesList || '<div style="text-align:center;padding:8px"><span style="font-size:10px;color:#9ca3af">No files selected</span></div>'}</div></div>
         </div>
         <div class="pi-modal-footer">
@@ -5060,12 +5491,11 @@ window.piCloseConfig = piCloseConfig;
 function piSetGenerationType(type) {
   document.getElementById('pi-radio-framework')?.classList.toggle('active', type === 'framework');
   document.getElementById('pi-radio-controls')?.classList.toggle('active', type === 'controls');
-  // Show/hide folder selector: only needed for controls (policies are created in a folder)
+  document.getElementById('pi-radio-both')?.classList.toggle('active', type === 'both');
+  // Show/hide folder selector: needed for controls and both (policies are created in a folder)
+  const needsFolder = type === 'controls' || type === 'both';
   const folderRow = document.getElementById('pi-cfg-folder-row');
-  if (folderRow) folderRow.style.display = type === 'framework' ? 'none' : '';
-  // Show/hide linked frameworks: only relevant for controls
-  const fwRow = document.getElementById('pi-cfg-fw-row');
-  if (fwRow) fwRow.style.display = type === 'framework' ? 'none' : '';
+  if (folderRow) folderRow.style.display = needsFolder ? '' : 'none';
 }
 window.piSetGenerationType = piSetGenerationType;
 
@@ -5088,15 +5518,16 @@ let piCurrentConfig = {}; // Store config for approve step
 
 function piStartGenerate() {
   // Collect config values from the modal
-  const generationType = document.getElementById('pi-radio-framework')?.classList.contains('active') ? 'framework' : 'controls';
+  const generationType = document.getElementById('pi-radio-framework')?.classList.contains('active') ? 'framework'
+    : document.getElementById('pi-radio-controls')?.classList.contains('active') ? 'controls' : 'both';
   const libraryName = document.getElementById('pi-cfg-lib-name')?.value?.trim() || 'Untitled Library';
   const provider = document.getElementById('pi-cfg-provider')?.value?.trim() || '';
   const folder = document.getElementById('pi-cfg-folder')?.value || '';
   const language = document.getElementById('pi-cfg-lang')?.value || 'en';
   const detailLevel = document.getElementById('pi-radio-comprehensive')?.classList.contains('active') ? 'comprehensive' : 'summary';
 
-  // For controls mode, folder is required
-  if (generationType === 'controls' && !folder) {
+  // For controls/both mode, folder is required (policies are created in a folder)
+  if ((generationType === 'controls' || generationType === 'both') && !folder) {
     toast('error', 'Missing Folder', 'Please select a GRC folder for policy creation.');
     return;
   }
@@ -5136,12 +5567,16 @@ async function piRunExtraction(collId, config) {
     piGenerationResult = data.data;
     piReviewPolicies = data.data.policies || [];
     piReviewNodes = data.data.requirementNodes || [];
+    // Invalidate history cache so next visit shows the new entry
+    delete piHistoryCache[collId];
     piPhase = 'review';
     piRender();
 
     const genType = data.data.generationType || 'both';
     if (genType === 'framework') {
       toast('success', 'Framework Extracted', `${piReviewNodes.length} requirement nodes (${data.data.assessableNodes || 0} assessable) extracted from ${data.data.sourceFileCount || 0} files.`);
+    } else if (genType === 'both') {
+      toast('success', 'Full Extraction Complete', `${piReviewNodes.length} requirement nodes + ${piReviewPolicies.length} reference controls extracted from ${data.data.sourceFileCount || 0} files.`);
     } else {
       toast('success', 'Controls Extracted', `${piReviewPolicies.length} reference controls extracted from ${data.data.sourceFileCount || 0} files.`);
     }
@@ -5206,7 +5641,7 @@ function piStartProgressAnimation() {
     const remEl = document.getElementById('pi-progress-remaining');
     if (fillEl) fillEl.style.width = progress + '%';
     if (pctEl) pctEl.textContent = Math.round(progress) + '%';
-    if (remEl) remEl.textContent = 'Analyzing documents with Gemini AI…';
+    if (remEl) remEl.textContent = 'Analyzing documents with Wathbah AI…';
 
     // Advance steps based on progress
     const stepIdx = Math.min(Math.floor(progress / (90 / PI_STEPS.length)), PI_STEPS.length - 1);
@@ -5294,8 +5729,6 @@ function piRenderReview() {
         <div><div class="pi-review-stat-label">Source Files</div><div class="pi-review-stat-value">${r.sourceFileCount} files</div></div>
         <div><div class="pi-review-stat-label">Total Nodes</div><div class="pi-review-stat-value">${totalNodes} nodes</div></div>
         <div><div class="pi-review-stat-label">Assessable</div><div class="pi-review-stat-value">${assessableCount} requirements</div></div>
-        <div><div class="pi-review-stat-label">Confidence Score</div><div class="pi-confidence"><span class="pi-confidence-badge ${confClass}">${r.confidenceScore}%</span><div class="pi-confidence-bar"><div class="pi-confidence-bar-fill" style="width:${r.confidenceScore}%;${confBarClass}"></div></div></div></div>
-        <div><div class="pi-review-stat-label">Generation Time</div><div class="pi-review-stat-value">${esc(r.generationTime)}</div></div>
       </div></div>
 
       <div class="pi-policy-panel">
@@ -5312,12 +5745,12 @@ function piRenderReview() {
         <button class="pi-btn pi-btn-discard" onclick="piDiscard()">Discard & Delete</button>
         <div style="display:flex;gap:8px">
           <button class="pi-btn pi-btn-regenerate" onclick="piRegenerate()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 6C1 3.2 3.2 1 6 1C8.8 1 11 3.2 11 6C11 8.8 8.8 11 6 11" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M4 6L1 6L1 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Regenerate</button>
-          <button class="pi-btn pi-btn-approve" onclick="piApprove()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Approve & Create Framework Library</button>
+          <button class="pi-btn pi-btn-approve" onclick="piApprove()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Approve & Upload Library</button>
         </div>
       </div>`;
   }
 
-  // ── Controls mode (or legacy both): render reference controls / policies ──
+  // ── Controls / Both mode: render reference controls ──
   const catLabels = { policy: { label: 'Policy', cls: 'pi-tag-policy' }, process: { label: 'Process', cls: 'pi-tag-process' }, technical: { label: 'Technical', cls: 'pi-tag-technical' }, physical: { label: 'Physical', cls: 'pi-tag-physical' }, procedure: { label: 'Procedure', cls: 'pi-tag-process' } };
   const csfLabels = { govern: { label: 'Govern', cls: 'pi-tag-govern' }, protect: { label: 'Protect', cls: 'pi-tag-protect' }, detect: { label: 'Detect', cls: 'pi-tag-detect' }, respond: { label: 'Respond', cls: 'pi-tag-respond' }, recover: { label: 'Recover', cls: 'pi-tag-recover' }, identify: { label: 'Identify', cls: 'pi-tag-identify' } };
 
@@ -5335,7 +5768,7 @@ function piRenderReview() {
           <div class="pi-policy-tags">
             <span class="pi-policy-tag ${cat.cls}">${cat.label}</span>
             <span class="pi-policy-tag ${csf.cls}">${csf.label}</span>
-            <button class="pi-policy-edit-btn" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M10.5 2.5L11.5 3.5L4 11H2.5V9.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></button>
+            <button class="pi-policy-edit-btn" onclick="event.stopPropagation();piEditPolicy('${p.id}')" title="Edit"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M10.5 2.5L11.5 3.5L4 11H2.5V9.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></button>
             <button class="pi-policy-delete-btn" onclick="event.stopPropagation();piDeletePolicy('${p.id}')"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M4 4V3C4 2.4 4.4 2 5 2H9C9.6 2 10 2.4 10 3V4M5 6.5V10.5M7 6.5V10.5M9 6.5V10.5M3 4L4 12H10L11 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           </div>
         </div>
@@ -5351,29 +5784,69 @@ function piRenderReview() {
       </div>`;
   }).join('');
 
-  const panelTitle = genType === 'controls' ? 'Reference Controls' : 'Policies & Controls';
+  // ── For "both" mode: also build framework nodes panel ──
+  let bothNodesHtml = '';
+  if (genType === 'both' && piReviewNodes.length > 0) {
+    const nodes = piReviewNodes;
+    bothNodesHtml = `
+      <div class="pi-policy-panel" style="margin-bottom:16px">
+        <div class="pi-policy-panel-header" style="background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%)">
+          <h3><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L12 5V11L8 14L4 11V5L8 2Z" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg> Framework — ${esc(r.libraryName)}</h3>
+          <p>${nodes.length} requirement nodes — ${nodes.filter(n => n.assessable).length} assessable</p>
+        </div>
+        <div class="pi-policy-list" style="max-height:300px;overflow-y:auto">
+          ${nodes.map((n, idx) => {
+            const indent = Math.max(0, (n.depth || 1) - 1) * 20;
+            const isAssessable = !!n.assessable;
+            const depthLabel = n.depth === 1 ? 'Root' : n.depth === 2 ? 'Section' : n.depth === 3 ? 'Sub-section' : 'Requirement';
+            const assessBadge = isAssessable
+              ? '<span class="pi-policy-tag" style="background:#dcfce7;color:#166534;font-size:9px;padding:1px 6px;border-radius:4px">Assessable</span>'
+              : '<span class="pi-policy-tag" style="background:#f3f4f6;color:#6b7280;font-size:9px;padding:1px 6px;border-radius:4px">Structural</span>';
+  return `
+              <div class="pi-policy-item" style="margin-left:${indent}px">
+                <div class="pi-policy-item-header" onclick="piTogglePolicy('${n.id}')">
+                  <div class="pi-policy-toggle"><svg width="14" height="14" viewBox="0 0 12 12" fill="none"><path d="M5 3L8 6L5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                  <span class="pi-policy-code" style="min-width:40px">${esc(n.ref_id || '')}</span>
+                  <span class="pi-policy-name">${esc(n.name)}</span>
+                  <div class="pi-policy-tags">${assessBadge}<span style="font-size:9px;color:#9ca3af">${depthLabel}</span></div>
+                </div>
+                <div class="pi-policy-detail" id="pi-policy-detail-${n.id}">
+                  ${n.description ? `<div class="pi-policy-detail-section"><div class="pi-policy-detail-label">Description</div><p class="pi-policy-detail-text">${esc(n.description)}</p></div>` : ''}
+                </div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  const isBoth = genType === 'both';
+  const panelTitle = isBoth ? 'Framework + Reference Controls' : 'Reference Controls';
+  const reviewSubtitle = isBoth
+    ? 'Review the framework and reference controls extracted from your documents'
+    : 'Review the reference controls extracted from your documents before creating the library and policies';
+  const approveLabel = 'Approve & Upload Library';
 
   return `
     <div class="pi-review-header"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><h1>Review Generated ${esc(panelTitle)}</h1></div>
-    <p class="pi-review-subtitle">Review the reference controls extracted from your documents before creating the library and policies</p>
+    <p class="pi-review-subtitle">${reviewSubtitle}</p>
 
     <div class="pi-review-stats"><div class="pi-review-stats-grid">
       <div><div class="pi-review-stat-label">Library Name</div><div class="pi-review-stat-value">${esc(r.libraryName)}</div></div>
       <div><div class="pi-review-stat-label">Source Files</div><div class="pi-review-stat-value">${r.sourceFileCount} files</div></div>
       <div><div class="pi-review-stat-label">Extracted Controls</div><div class="pi-review-stat-value">${piReviewPolicies.length} controls</div></div>
-      <div><div class="pi-review-stat-label">Linked Frameworks</div><div class="pi-review-stat-value">${(r.linkedFrameworks || []).length} frameworks</div></div>
-      <div><div class="pi-review-stat-label">Confidence Score</div><div class="pi-confidence"><span class="pi-confidence-badge ${confClass}">${r.confidenceScore}%</span><div class="pi-confidence-bar"><div class="pi-confidence-bar-fill" style="width:${r.confidenceScore}%;${confBarClass}"></div></div></div></div>
-      <div><div class="pi-review-stat-label">Generation Time</div><div class="pi-review-stat-value">${esc(r.generationTime)}</div></div>
+      ${isBoth ? `<div><div class="pi-review-stat-label">Requirement Nodes</div><div class="pi-review-stat-value">${piReviewNodes.length} nodes</div></div>` : ''}
     </div></div>
+
+    ${bothNodesHtml}
 
     <div class="pi-policy-panel">
       <div class="pi-policy-panel-header">
-        <h3><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5" stroke="white" stroke-width="1.5"/><path d="M5.5 8L7 9.5L10.5 6.5" stroke="white" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> ${esc(r.libraryName)}</h3>
+        <h3><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5" stroke="white" stroke-width="1.5"/><path d="M5.5 8L7 9.5L10.5 6.5" stroke="white" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> ${isBoth ? 'Reference Controls' : esc(r.libraryName)}</h3>
         <p>${piReviewPolicies.length} extracted reference controls — click to view details or edit</p>
       </div>
       <div class="pi-policy-list">
         ${policiesHtml}
-        <button class="pi-add-policy-btn"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Add Control Manually</button>
+        <button class="pi-add-policy-btn" onclick="piAddControl()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Add Control Manually</button>
       </div>
     </div>
 
@@ -5381,7 +5854,7 @@ function piRenderReview() {
       <button class="pi-btn pi-btn-discard" onclick="piDiscard()">Discard & Delete</button>
       <div style="display:flex;gap:8px">
         <button class="pi-btn pi-btn-regenerate" onclick="piRegenerate()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 6C1 3.2 3.2 1 6 1C8.8 1 11 3.2 11 6C11 8.8 8.8 11 6 11" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M4 6L1 6L1 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Regenerate</button>
-        <button class="pi-btn pi-btn-approve" onclick="piApprove()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Approve & Create Library</button>
+        <button class="pi-btn pi-btn-approve" onclick="piApprove()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> ${approveLabel}</button>
       </div>
     </div>`;
 }
@@ -5401,11 +5874,56 @@ function piTogglePolicy(id) {
 }
 window.piTogglePolicy = piTogglePolicy;
 
-function piDeletePolicy(id) {
+async function piDeletePolicy(id) {
+  if (!await showConfirm({ title: 'Remove Control', message: 'Remove this control from the list?', confirmText: 'Remove', type: 'warning' })) return;
   piReviewPolicies = piReviewPolicies.filter(p => p.id !== id);
   piRender();
 }
 window.piDeletePolicy = piDeletePolicy;
+
+function piEditPolicy(id) {
+  const p = piReviewPolicies.find(x => x.id === id);
+  if (!p) return;
+  const catOpts = ['policy','process','technical','physical','procedure'];
+  const csfOpts = ['govern','protect','detect','respond','recover','identify'];
+  const catSel = catOpts.map(c => `<option value="${c}"${p.category===c?' selected':''}>${c[0].toUpperCase()+c.slice(1)}</option>`).join('');
+  const csfSel = csfOpts.map(c => `<option value="${c}"${p.csfFunction===c?' selected':''}>${c[0].toUpperCase()+c.slice(1)}</option>`).join('');
+  const det = document.getElementById(`pi-policy-detail-${id}`);
+  if (!det) return;
+  det.classList.add('open');
+  const item = det.closest('.pi-policy-item');
+  if (item) { const t = item.querySelector('.pi-policy-toggle svg path'); if (t) t.setAttribute('d','M3 5L6 8L9 5'); }
+  det.innerHTML = `<div class="pi-edit-form">
+    <div class="pi-edit-row"><label>Name</label><input type="text" id="pi-edit-name-${id}" class="pi-form-input" value="${esc(p.name)}"></div>
+    <div class="pi-edit-row"><label>Ref ID</label><input type="text" id="pi-edit-code-${id}" class="pi-form-input" value="${esc(p.code)}"></div>
+    <div class="pi-edit-row"><label>Description</label><textarea id="pi-edit-desc-${id}" class="pi-form-input" rows="3">${esc(p.description)}</textarea></div>
+    <div style="display:flex;gap:12px"><div class="pi-edit-row" style="flex:1"><label>Category</label><select id="pi-edit-cat-${id}" class="pi-form-select">${catSel}</select></div><div class="pi-edit-row" style="flex:1"><label>CSF Function</label><select id="pi-edit-csf-${id}" class="pi-form-select">${csfSel}</select></div></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6"><button class="pi-btn pi-btn-view" onclick="piRender()">Cancel</button><button class="btn-admin-primary" onclick="piSaveEdit('${id}')">Save Changes</button></div>
+  </div>`;
+}
+window.piEditPolicy = piEditPolicy;
+
+function piSaveEdit(id) {
+  const p = piReviewPolicies.find(x => x.id === id);
+  if (!p) return;
+  p.name = document.getElementById(`pi-edit-name-${id}`)?.value?.trim() || p.name;
+  p.code = document.getElementById(`pi-edit-code-${id}`)?.value?.trim() || p.code;
+  p.description = document.getElementById(`pi-edit-desc-${id}`)?.value?.trim() || p.description;
+  p.category = document.getElementById(`pi-edit-cat-${id}`)?.value || p.category;
+  p.csfFunction = document.getElementById(`pi-edit-csf-${id}`)?.value || p.csfFunction;
+  toast('success', 'Saved', `Updated "${p.name}"`);
+  piRender();
+}
+window.piSaveEdit = piSaveEdit;
+
+function piAddControl() {
+  const newId = 'gp-manual-' + Date.now();
+  const idx = piReviewPolicies.length + 1;
+  piReviewPolicies.push({ id: newId, code: `RC-NEW-${String(idx).padStart(2,'0')}`, name: 'New Control', description: '', category: 'policy', csfFunction: 'govern', sourceFile: 'Manual', sourcePages: '', linkedRequirements: [] });
+  piRender();
+  setTimeout(() => piEditPolicy(newId), 100);
+}
+window.piAddControl = piAddControl;
 
 function piDiscard() { piBackToCollections(); }
 window.piDiscard = piDiscard;
@@ -5421,21 +5939,17 @@ window.piRegenerate = piRegenerate;
 async function piApprove() {
   if (!piSelectedCollectionId) return;
   const genType = piGenerationResult?.generationType || piCurrentConfig?.generationType || 'both';
-  const folder = piCurrentConfig.folder;
-
-  // Folder is only required for controls/both modes
-  if (genType !== 'framework' && !folder) {
-    toast('error', 'Missing Folder', 'No GRC folder was selected. Please regenerate with a folder selected.');
-    return;
-  }
+  const folder = piCurrentConfig.folder || '';
 
   try {
-    const approveLabel = genType === 'framework' ? 'Creating framework library…' : 'Pushing controls & policies to GRC platform…';
-    toast('info', 'Approving…', approveLabel);
+    toast('info', 'Approving…', 'Uploading library to GRC platform…');
 
-    const approveBody = { folder };
-    if (genType !== 'framework') {
+    const approveBody = { folder, generationType: genType };
+    if (genType === 'controls' || genType === 'both') {
       approveBody.policies = piReviewPolicies;
+    }
+    if (genType === 'framework' || genType === 'both') {
+      approveBody.requirementNodes = piReviewNodes;
     }
 
     const res = await fetch(`${PI_API}/${piSelectedCollectionId}/approve`, {
@@ -5453,27 +5967,16 @@ async function piApprove() {
       coll.lastUpdated = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     }
 
-    const libMsg = data.data.libraryCreated
-      ? `Library created (${data.data.libraryUrn}). `
-      : (data.data.libraryError ? `Library warning: ${data.data.libraryError}. ` : '');
-
-    if (genType === 'framework') {
-      // Framework mode: just library creation, no policies
-      if (data.data.libraryCreated) {
-        toast('success', 'Framework Created!', `${libMsg}Framework library loaded successfully.`);
-      } else {
-        toast('error', 'Framework Error', data.data.libraryError || 'Failed to create framework library.');
-      }
+    if (data.data.libraryCreated) {
+      const rcCount = data.data.created || 0;
+      const rcMsg = rcCount > 0 ? ` ${rcCount} reference controls verified.` : '';
+      toast('success', 'Library Created!', `Library uploaded to GRC successfully.${rcMsg} Applied controls can be added manually in the GRC platform.`);
     } else {
-      // Controls/both mode: library + policies
-      if (data.data.errors > 0) {
-        const errDetails = (data.data.grcErrors || []).map(e => `• ${e.name}: ${e.error}`).join('\n');
-        console.warn('GRC push errors:\n' + errDetails);
-        toast('error', 'Partial Success', `${libMsg}${data.data.created}/${data.data.total} controls pushed. ${data.data.errors} failed.`, 8000);
-      } else {
-        toast('success', 'Approved!', `${libMsg}All ${data.data.created} controls pushed to GRC successfully.`);
-      }
+      toast('error', 'Library Error', data.data.libraryError || 'Failed to upload library to GRC.');
     }
+
+    // Invalidate history cache after approve
+    if (piSelectedCollectionId) delete piHistoryCache[piSelectedCollectionId];
     piPhase = 'success';
     piRender();
   } catch (err) {
@@ -5488,17 +5991,26 @@ function piRenderSuccess() {
   const r = piGenerationResult;
   const genType = r.generationType || 'both';
   const isFramework = genType === 'framework';
+  const isBoth = genType === 'both';
+  const hasControls = genType === 'controls' || isBoth;
 
-  const itemCount = isFramework ? piReviewNodes.length : piReviewPolicies.length;
-  const itemLabel = isFramework ? 'Requirement Nodes' : 'Reference Controls';
-  const successTitle = isFramework ? 'Framework library created successfully!' : 'Controls library created successfully!';
+  const controlsCount = piReviewPolicies.length;
+  const nodesCount = piReviewNodes.length;
+
+  const successTitle = isFramework ? 'Framework library created successfully!'
+    : isBoth ? 'Full library created successfully!'
+    : 'Controls library created successfully!';
   const successDesc = isFramework
     ? 'Your documents have been converted into a compliance framework for assessments'
+    : isBoth ? 'Your documents have been converted into a framework + reference controls with applied policies'
     : 'Your documents have been converted into reference controls and applied policies';
+  const genTypeLabel = isFramework ? 'Policy Framework' : isBoth ? 'Framework + Reference Controls' : 'Reference Controls';
 
   const infoText = isFramework
-    ? `The framework library has been created under Governance → Libraries with ${itemCount} requirement nodes. You can now use this framework for compliance assessments.`
-    : `The library has been created under Governance → Libraries, and ${itemCount} reference controls have been generated as policies under Governance → Policies. You can now audit these policies and link them to requirement assessments.`;
+    ? `The framework library has been created under Governance → Libraries with ${nodesCount} requirement nodes. You can now use this framework for compliance assessments.`
+    : isBoth
+    ? `The library has been created under Governance → Libraries with ${nodesCount} requirement nodes and ${controlsCount} reference controls. ${controlsCount} policies have been generated under Governance → Policies.`
+    : `The library has been created under Governance → Libraries, and ${controlsCount} reference controls have been generated as policies under Governance → Policies. You can now audit these policies and link them to requirement assessments.`;
 
   return `
     <div class="pi-header">
@@ -5515,15 +6027,15 @@ function piRenderSuccess() {
         <div class="pi-success-icon"><svg width="32" height="32" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#059669" stroke-width="1.5"/><path d="M5 8L7 10L11 6" stroke="#059669" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
 
         <div class="pi-success-stats">
-          <div class="pi-success-stat pi-success-stat-green"><div class="pi-success-stat-val">${itemCount}</div><div class="pi-success-stat-label">${itemLabel}</div></div>
-          ${isFramework ? `<div class="pi-success-stat pi-success-stat-blue"><div class="pi-success-stat-val">${(r.requirementNodes || piReviewNodes || []).filter(n => n.assessable).length}</div><div class="pi-success-stat-label">Assessable Requirements</div></div>` : `<div class="pi-success-stat pi-success-stat-blue"><div class="pi-success-stat-val">${(r.linkedFrameworks || []).length}</div><div class="pi-success-stat-label">Frameworks Linked</div></div>`}
+          ${hasControls ? `<div class="pi-success-stat pi-success-stat-green"><div class="pi-success-stat-val">${controlsCount}</div><div class="pi-success-stat-label">Reference Controls</div></div>` : ''}
+          ${(isFramework || isBoth) ? `<div class="pi-success-stat pi-success-stat-blue"><div class="pi-success-stat-val">${nodesCount}</div><div class="pi-success-stat-label">Requirement Nodes</div></div>` : ''}
           <div class="pi-success-stat pi-success-stat-gray"><div class="pi-success-stat-val">${r.sourceFileCount}</div><div class="pi-success-stat-label">Source Files</div></div>
         </div>
 
         <div class="pi-success-details">
           <div class="pi-success-detail-row"><span class="label">Library Name</span><span class="value">${esc(r.libraryName)}</span></div>
-          <div class="pi-success-detail-row"><span class="label">Generation Type</span><span class="value">${isFramework ? 'Policy Framework' : 'Reference Controls'}</span></div>
-          <div class="pi-success-detail-row"><span class="label">${itemLabel}</span><span class="value">${itemCount}</span></div>
+          <div class="pi-success-detail-row"><span class="label">Generation Type</span><span class="value">${genTypeLabel}</span></div>
+          ${hasControls ? `<div class="pi-success-detail-row"><span class="label">Policies Created</span><span class="value">${controlsCount}</span></div>` : ''}
           <div class="pi-success-detail-row"><span class="label">Confidence Score</span><span class="value" style="color:#059669">${r.confidenceScore}%</span></div>
         </div>
 
@@ -5531,7 +6043,7 @@ function piRenderSuccess() {
 
         <div class="pi-success-actions">
           <button class="btn-admin-primary"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg> View Library in Governance</button>
-          ${!isFramework ? `<button class="pi-btn pi-btn-view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg> View Policies</button>` : ''}
+          ${hasControls ? `<button class="pi-btn pi-btn-view"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg> View Policies</button>` : ''}
           <button class="pi-btn pi-btn-view" onclick="piBackToCollections()"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Generate More</button>
         </div>
 
