@@ -2609,7 +2609,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       // POST /api/policy-collections — Create new (+ File Search Store)
-      if (!collId && req.method === 'POST') {
+      if (!collId && !subResource && req.method === 'POST') {
         const body = await parseBody(req);
         const newId = 'pc-' + crypto.randomUUID();
         const collName = body.name || 'New Collection';
