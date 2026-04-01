@@ -3703,7 +3703,7 @@ const server = http.createServer(async (req, res) => {
           console.log(`[Chat] Session ${sessionId} — user: "${userMessage.substring(0, 80)}..."`);
 
           // Send message via SDK chat (multi-turn)
-          const result = await session.chat.sendMessage({ text: userMessage });
+          const result = await session.chat.sendMessage({ message: userMessage });
 
           // Extract text response
           const aiText = result.text || '';
