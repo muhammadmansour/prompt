@@ -397,27 +397,44 @@ const dbListGenHistory = db.prepare(`SELECT * FROM policy_generation_history WHE
 const dbGetLatestGenHistory = db.prepare(`SELECT * FROM policy_generation_history WHERE collection_id = ? ORDER BY created_at DESC LIMIT 1`);
 const dbGetGenHistoryById = db.prepare(`SELECT * FROM policy_generation_history WHERE id = ?`);
 
-function policyCollectionToJSON(row) {
-  const files = dbListPolicyFiles.all(row.id);
+async function policyCollectionToJSON(row, apiKey) {
+  const storeId = row.store_id || '';
+
+  // Fetch files directly from Gemini File Search Store
+  let files = [];
+  if (storeId && apiKey) {
+    try {
+      const storeName = storeId.startsWith('fileSearchStores/') ? storeId : `fileSearchStores/${storeId}`;
+      const result = await listStoreDocuments(storeName, apiKey);
+      files = (result.documents || []).map(doc => {
+        const displayName = doc.displayName || doc.name || '';
+        const ext = displayName.split('.').pop().toLowerCase();
+        const sizeBytes = parseInt(doc.sizeBytes || '0', 10);
+        return {
+          documentName: doc.name || '',
+          name: displayName,
+          type: ext,
+          sizeBytes,
+          size: sizeBytes > 1024 * 1024 ? (sizeBytes / (1024 * 1024)).toFixed(1) + ' MB' : (sizeBytes / 1024).toFixed(0) + ' KB',
+          createTime: doc.createTime || '',
+          updateTime: doc.updateTime || '',
+        };
+      });
+    } catch (err) {
+      console.warn(`[Policy] Could not list docs for store ${storeId}:`, err.message);
+    }
+  }
+
   return {
     id: row.id,
     name: row.name,
     description: row.description || '',
-    storeId: row.store_id || '',
+    storeId,
     status: row.status || 'empty',
     config: JSON.parse(row.config || '{}'),
     extractionResult: row.extraction_result ? JSON.parse(row.extraction_result) : null,
-    files: files.map(f => ({
-      id: f.id,
-      name: f.name,
-      type: f.name.split('.').pop().toLowerCase(),
-      mimeType: f.mime_type,
-      size: f.size > 1024 * 1024 ? (f.size / (1024 * 1024)).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB',
-      geminiFileName: f.gemini_file_name || '',
-      geminiFileUri: f.gemini_file_uri || '',
-      storeDocName: f.store_doc_name || '',
-      uploadedAt: new Date(f.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-    })),
+    files,
+    fileCount: files.length,
     lastUpdated: new Date(row.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -2539,42 +2556,45 @@ const server = http.createServer(async (req, res) => {
         subResource = 'chat';
       }
 
-      // GET /api/policy-collections/overview — Hierarchical view of all collections + files + Gemini status
+      // GET /api/policy-collections/overview — Hierarchical view of all collections + files from Gemini
       if (collId === 'overview' && req.method === 'GET') {
         const rows = dbListPolicyCollections.all();
-        const overview = rows.map(row => {
-          const files = dbListPolicyFiles.all(row.id);
+        const overview = await Promise.all(rows.map(async row => {
+          const storeId = row.store_id || '';
+          let files = [];
+          if (storeId && apiKey) {
+            try {
+              const storeName = storeId.startsWith('fileSearchStores/') ? storeId : `fileSearchStores/${storeId}`;
+              const result = await listStoreDocuments(storeName, apiKey);
+              files = (result.documents || []).map(doc => ({
+                documentName: doc.name || '',
+                name: doc.displayName || doc.name || '',
+                sizeBytes: parseInt(doc.sizeBytes || '0', 10),
+                createTime: doc.createTime || '',
+                updateTime: doc.updateTime || '',
+              }));
+            } catch (err) {
+              console.warn(`[Overview] Could not list docs for store ${storeId}:`, err.message);
+            }
+          }
           return {
             id: row.id,
             name: row.name,
             description: row.description || '',
-            storeId: row.store_id || '',
+            storeId,
             status: row.status || 'empty',
             fileCount: files.length,
             created: row.created_at,
-            files: files.map(f => ({
-              id: f.id,
-              name: f.name,
-              size: f.size,
-              mimeType: f.mime_type,
-              geminiFileName: f.gemini_file_name || '',
-              geminiFileUri: f.gemini_file_uri || '',
-              storeDocName: f.store_doc_name || '',
-              synced: !!(f.gemini_file_name && f.store_doc_name),
-              uploaded: f.created_at,
-            })),
+            files,
           };
-        });
+        }));
 
         const totalFiles = overview.reduce((sum, c) => sum + c.fileCount, 0);
-        const totalSynced = overview.reduce((sum, c) => sum + c.files.filter(f => f.synced).length, 0);
 
         sendJSON(res, 200, {
           success: true,
           totalCollections: overview.length,
           totalFiles,
-          totalSynced,
-          totalUnsynced: totalFiles - totalSynced,
           data: overview,
         });
         return;
@@ -2583,7 +2603,7 @@ const server = http.createServer(async (req, res) => {
       // GET /api/policy-collections — List all
       if (!collId && req.method === 'GET') {
         const rows = dbListPolicyCollections.all();
-        const collections = rows.map(policyCollectionToJSON);
+        const collections = await Promise.all(rows.map(r => policyCollectionToJSON(r, apiKey)));
         sendJSON(res, 200, { success: true, data: collections });
         return;
       }
@@ -2629,7 +2649,7 @@ const server = http.createServer(async (req, res) => {
           now2
         );
         const newRow = dbGetPolicyCollection.get(newId);
-        sendJSON(res, 201, { success: true, data: policyCollectionToJSON(newRow) });
+        sendJSON(res, 201, { success: true, data: await policyCollectionToJSON(newRow, apiKey) });
         return;
       }
 
@@ -2696,7 +2716,7 @@ const server = http.createServer(async (req, res) => {
           collId
         );
         const updated = dbGetPolicyCollection.get(collId);
-        sendJSON(res, 200, { success: true, data: policyCollectionToJSON(updated) });
+        sendJSON(res, 200, { success: true, data: await policyCollectionToJSON(updated, apiKey) });
         return;
       }
 
@@ -2704,7 +2724,7 @@ const server = http.createServer(async (req, res) => {
       if (collId && !subResource && req.method === 'GET') {
         const row = dbGetPolicyCollection.get(collId);
         if (!row) { sendJSON(res, 404, { error: 'Not found' }); return; }
-        sendJSON(res, 200, { success: true, data: policyCollectionToJSON(row) });
+        sendJSON(res, 200, { success: true, data: await policyCollectionToJSON(row, apiKey) });
         return;
       }
 
@@ -2827,20 +2847,37 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // GET /api/policy-collections/:id/files — List files (includes collection storeId + per-file doc IDs)
+      // GET /api/policy-collections/:id/files — List files directly from Gemini File Search Store
       if (collId && subResource === 'files' && !fileId && req.method === 'GET') {
         const collRow = dbGetPolicyCollection.get(collId);
-        const files = dbListPolicyFiles.all(collId);
+        if (!collRow) {
+          sendJSON(res, 404, { error: 'Collection not found' });
+          return;
+        }
+        const storeId = collRow.store_id || '';
+
+        // Fetch files from Gemini File Search Store directly
+        let geminiDocs = [];
+        if (storeId && apiKey) {
+          try {
+            const storeName = storeId.startsWith('fileSearchStores/') ? storeId : `fileSearchStores/${storeId}`;
+            const result = await listStoreDocuments(storeName, apiKey);
+            geminiDocs = (result.documents || []).map(doc => ({
+              name: doc.displayName || doc.name || '',
+              documentName: doc.name || '',
+              createTime: doc.createTime || '',
+              updateTime: doc.updateTime || '',
+              sizeBytes: doc.sizeBytes || 0,
+            }));
+          } catch (listErr) {
+            console.warn(`[Policy] Could not list File Search docs for store ${storeId}:`, listErr.message);
+          }
+        }
+
         sendJSON(res, 200, {
           success: true,
-          storeId: collRow?.store_id || '',
-          data: files.map(f => ({
-            id: f.id, name: f.name, mimeType: f.mime_type, size: f.size,
-            geminiFileName: f.gemini_file_name || '',
-            geminiFileUri: f.gemini_file_uri || '',
-            storeDocName: f.store_doc_name || '',
-            uploadedAt: new Date(f.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-          }))
+          storeId,
+          data: geminiDocs,
         });
         return;
       }
