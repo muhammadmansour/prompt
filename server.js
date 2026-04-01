@@ -431,6 +431,7 @@ if (!fs.existsSync(POLICY_UPLOADS_DIR)) fs.mkdirSync(POLICY_UPLOADS_DIR, { recur
 // Gemini SDK client + in-memory chat sessions (SDK ChatSession objects)
 let genai = null;
 const chatSessions = {};  // sessionId -> { chat: SDK ChatSession, systemPrompt: string }
+const policyChats = {};   // sessionId -> { chat: SDK ChatSession, storeIds, history, createdAt }
 
 // Load prompt templates from files (used as seed defaults)
 const promptTemplatePath = path.join(__dirname, 'prompts', 'requirement-analyzer.txt');
@@ -2524,14 +2525,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Policy Collections API ----
-  const policyCollMatch = url.pathname.match(/^\/api\/policy-collections(?:\/([^\/]+))?(?:\/(files|extract|approve|history|sync)(?:\/([^\/]+))?)?$/);
+  const policyCollMatch = url.pathname.match(/^\/api\/policy-collections(?:\/([^\/]+))?(?:\/(files|extract|approve|history|sync|chat)(?:\/([^\/]+))?)?$/);
   if (policyCollMatch) {
-    const collId = policyCollMatch[1];
-    const subResource = policyCollMatch[2]; // 'files' | 'extract' | 'approve' | 'history' | 'sync'
+    let collId = policyCollMatch[1];
+    let subResource = policyCollMatch[2]; // 'files' | 'extract' | 'approve' | 'history' | 'sync' | 'chat'
     const fileId = policyCollMatch[3];
     const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
 
     try {
+      // POST /api/policy-collections/chat — Chat without a specific collection (pass storeIds in body)
+      if (collId === 'chat' && !subResource && req.method === 'POST') {
+        collId = null;
+        subResource = 'chat';
+      }
+
       // GET /api/policy-collections/overview — Hierarchical view of all collections + files + Gemini status
       if (collId === 'overview' && req.method === 'GET') {
         const rows = dbListPolicyCollections.all();
@@ -3581,6 +3588,115 @@ const server = http.createServer(async (req, res) => {
           createdAt: r.created_at,
         }));
         sendJSON(res, 200, { success: true, data: history });
+        return;
+      }
+
+      // ── POST /api/policy-collections/chat — Chat with files using Gemini 2.5 Pro + File Search grounding ──
+      // Also handles: POST /api/policy-collections/:collectionId/chat
+      if (subResource === 'chat' && req.method === 'POST') {
+        if (!apiKey) {
+          sendJSON(res, 401, { error: 'Gemini API key not configured.' });
+          return;
+        }
+
+        const body = await parseBody(req);
+        const userMessage = (body.message || '').trim();
+        if (!userMessage) {
+          sendJSON(res, 400, { error: 'message is required.' });
+          return;
+        }
+
+        // Collect File Search Store IDs — from body or from the collection's storeId
+        let storeIds = body.storeIds || [];
+        if (typeof storeIds === 'string') storeIds = [storeIds];
+
+        // If called as /api/policy-collections/:id/chat, auto-include that collection's store
+        if (collId && collId !== 'chat') {
+          const coll = dbGetPolicyCollection.get(collId);
+          if (coll && coll.store_id && !storeIds.includes(coll.store_id)) {
+            storeIds.unshift(coll.store_id);
+          }
+        }
+
+        // Session management — allow multi-turn conversations
+        let sessionId = body.sessionId || null;
+        const systemInstruction = body.systemInstruction || 'You are Wathbah AI, a helpful assistant specialized in governance, risk, compliance (GRC), and organizational policy analysis. Answer questions based on the provided documents. Be precise, cite specific sections when possible, and format your responses clearly.';
+
+        // Build File Search grounding tool (SDK Tool_2.FileSearch format)
+        const tools = [];
+        if (storeIds.length > 0) {
+          const fileSearchStoreNames = storeIds.map(id =>
+            id.startsWith('fileSearchStores/') ? id : `fileSearchStores/${id}`
+          );
+          tools.push({ type: 'file_search', file_search_store_names: fileSearchStoreNames });
+          console.log(`[Chat] Using File Search Stores:`, fileSearchStoreNames);
+        }
+
+        try {
+          // Ensure Gemini SDK is initialized
+          if (!genai) genai = new GoogleGenAI({ apiKey });
+
+          // Reuse or create chat session
+          if (!sessionId || !policyChats[sessionId]) {
+            sessionId = 'pchat-' + crypto.randomUUID();
+            console.log(`[Chat] Creating new session ${sessionId} with ${storeIds.length} store(s)`);
+
+            const chatConfig = {
+              systemInstruction,
+              temperature: 0.7,
+              maxOutputTokens: 8192,
+            };
+
+            if (tools.length > 0) {
+              chatConfig.tools = tools;
+            }
+
+            policyChats[sessionId] = {
+              chat: genai.chats.create({
+                model: 'gemini-2.5-pro',
+                config: chatConfig,
+              }),
+              storeIds,
+              history: [],
+              createdAt: new Date().toISOString(),
+            };
+          }
+
+          const session = policyChats[sessionId];
+          console.log(`[Chat] Session ${sessionId} — user: "${userMessage.substring(0, 80)}..."`);
+
+          // Send message via SDK chat (multi-turn)
+          const result = await session.chat.sendMessage({ text: userMessage });
+
+          // Extract text response
+          const aiText = result.text || '';
+
+          // Extract grounding metadata if present
+          const groundingMetadata = result.candidates?.[0]?.groundingMetadata || null;
+          const groundingChunks = groundingMetadata?.groundingChunks || [];
+          const sources = groundingChunks.map(chunk => ({
+            title: chunk.retrievedContext?.title || null,
+            uri: chunk.retrievedContext?.uri || null,
+          })).filter(s => s.title || s.uri);
+
+          // Track history
+          session.history.push(
+            { role: 'user', text: userMessage, timestamp: new Date().toISOString() },
+            { role: 'model', text: aiText, sources, timestamp: new Date().toISOString() }
+          );
+
+          sendJSON(res, 200, {
+            success: true,
+            sessionId,
+            message: aiText,
+            sources,
+            turnCount: Math.floor(session.history.length / 2),
+          });
+
+        } catch (chatErr) {
+          console.error(`[Chat] Error in session ${sessionId}:`, chatErr.message);
+          sendJSON(res, 500, { error: chatErr.message });
+        }
         return;
       }
 
