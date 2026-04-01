@@ -4845,29 +4845,9 @@ async function piOpenCollection(id) {
   // Update URL to include collection ID
   updateRoute('policy-ingestion', id);
 
-  // Fetch files from API
+  // Files are already fetched in policyCollectionToJSON (from Gemini Store) — no separate call needed
   const coll = piCollections.find(c => c.id === id);
-  if (coll && !coll._filesLoaded) {
-    try {
-      const res = await fetch(`${PI_API}/${id}/files`);
-      const data = await res.json();
-      if (data.success) {
-        coll.files = (data.data || []).map(f => ({
-          id: f.id,
-          name: f.name,
-          type: f.name.split('.').pop().toLowerCase(),
-          size: f.size > 1024 * 1024 ? (f.size / (1024 * 1024)).toFixed(1) + ' MB' : f.size > 1024 ? Math.round(f.size / 1024) + ' KB' : f.size + ' B',
-          geminiFileName: f.geminiFileName || '',
-          geminiFileUri: f.geminiFileUri || '',
-          uploadedAt: f.uploadedAt || '',
-        }));
-        coll._filesLoaded = true;
-      }
-    } catch (err) {
-      console.warn('Failed to load files for collection:', err);
-      if (!coll.files) coll.files = [];
-    }
-  }
+  if (coll && !coll.files) coll.files = [];
   piRender();
 }
 window.piOpenCollection = piOpenCollection;
@@ -4936,12 +4916,14 @@ function piRenderCollectionDetail(coll) {
 
     const cards = coll.files.map(f => {
       const sel = piSelectedFileIds.includes(f.id);
+      const isActive = f.state === 'STATE_ACTIVE';
+      const stateLabel = isActive ? '☁ Active' : (f.state === 'STATE_PENDING' ? '⏳ Processing...' : '⏳ ' + (f.state || ''));
+      const stateClass = isActive ? 'pi-gemini-synced' : 'pi-gemini-pending';
       return `<div class="pi-file-card${sel ? ' selected' : ''}">
         <input type="checkbox" ${sel ? 'checked' : ''} onchange="piToggleFile('${f.id}')">
         <div class="pi-file-icon ${fileTypeIcons[f.type] || 'pi-file-icon-txt'}"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg></div>
-        <div class="pi-file-info"><div class="pi-file-name">${esc(f.name)}</div><div class="pi-file-meta">${esc(f.size)} · ${esc(f.uploadedAt)}${f.geminiFileName ? ' · <span class="pi-gemini-synced" title="Synced to Wathbah AI">☁ synced</span>' : ' · <span class="pi-gemini-pending" title="Not yet synced">⏳ local</span>'}</div></div>
+        <div class="pi-file-info"><div class="pi-file-name">${esc(f.name)}</div><div class="pi-file-meta">${esc(f.size)} · <span class="${stateClass}">${stateLabel}</span></div></div>
         <div class="pi-file-actions">
-          <button class="pi-file-action-btn" title="Open file" onclick="event.stopPropagation();piOpenFile('${f.id}','${esc(f.name)}','${f.type}')"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/></svg></button>
           <button class="pi-file-action-btn delete" title="Delete" onclick="piDeleteFile('${f.id}')"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M4 4V3C4 2.4 4.4 2 5 2H9C9.6 2 10 2.4 10 3V4M5 6.5V10.5M7 6.5V10.5M9 6.5V10.5M3 4L4 12H10L11 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         ${sel ? '<div class="pi-file-selected-check"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' : ''}
@@ -5437,11 +5419,19 @@ async function piDeleteFile(fileId) {
   const coll = piCollections.find(c => c.id === piSelectedCollectionId);
   if (!coll) return;
   try {
-    await fetch(`${PI_API}/${coll.id}/files/${fileId}`, { method: 'DELETE' });
-    coll.files = coll.files.filter(f => f.id !== fileId);
+    const res = await fetch(`${PI_API}/${coll.id}/files/${fileId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Delete failed');
+
+    // Refresh collection from server (files come from Gemini)
+    const freshData = await fetchJSON(`${PI_API}/${coll.id}`);
+    if (freshData.success && freshData.data) {
+      const idx = piCollections.findIndex(c => c.id === coll.id);
+      if (idx >= 0) piCollections[idx] = freshData.data;
+    }
     piSelectedFileIds = piSelectedFileIds.filter(id => id !== fileId);
-    coll.status = coll.files.length > 0 ? 'ready' : 'empty';
     piRender();
+    toast('success', 'Deleted', 'File removed from collection');
   } catch (err) {
     toast('error', 'Delete Error', err.message);
   }
@@ -5539,20 +5529,6 @@ async function piHandleFileUpload(event) {
       // Step 3: Processing response
       setProgress(90, 'Processing…');
 
-      const ext = file.name.split('.').pop().toLowerCase();
-      const size = file.size > 1024 * 1024 ? (file.size / (1024 * 1024)).toFixed(1) + ' MB' : (file.size / 1024).toFixed(0) + ' KB';
-      coll.files.push({
-        id: data.data.id,
-        name: file.name,
-        type: ext,
-        size,
-        geminiFileName: data.data.geminiFileName || '',
-        geminiFileUri: data.data.geminiFileUri || '',
-        storeDocName: data.data.storeDocName || '',
-        uploadedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      });
-      coll.status = 'ready';
-
       // Step 4: Done — show success
       setProgress(100, 'Uploaded successfully ✓');
       progressEl.classList.add('pi-upload-success');
@@ -5585,7 +5561,14 @@ async function piHandleFileUpload(event) {
       toast('error', 'Upload Error', `"${file.name}": ${err.message}`);
     }
   }
-  coll.lastUpdated = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  // Refresh collection data from server (files come from Gemini now)
+  try {
+    const freshData = await fetchJSON(`${PI_API}/${coll.id}`);
+    if (freshData.success && freshData.data) {
+      const idx = piCollections.findIndex(c => c.id === coll.id);
+      if (idx >= 0) piCollections[idx] = freshData.data;
+    }
+  } catch (e) { console.warn('Could not refresh collection:', e); }
 
   // Save any still-visible progress bars before re-render
   const liveProgressBars = container ? Array.from(container.children) : [];
