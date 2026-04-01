@@ -73,6 +73,8 @@ function isPublicPath(pathname) {
   if (PUBLIC_PATHS.has(pathname)) return true;
   // Fonts / favicons
   if (pathname.endsWith('.woff2') || pathname.endsWith('.woff') || pathname === '/favicon.ico') return true;
+  // Policy collections API is public for now
+  if (pathname.startsWith('/api/policy-collections')) return true;
   return false;
 }
 
