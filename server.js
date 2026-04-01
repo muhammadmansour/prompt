@@ -3659,13 +3659,13 @@ const server = http.createServer(async (req, res) => {
         let sessionId = body.sessionId || null;
         const systemInstruction = body.systemInstruction || 'You are Wathbah AI, a helpful assistant specialized in governance, risk, compliance (GRC), and organizational policy analysis. Answer questions based on the provided documents. Be precise, cite specific sections when possible, and format your responses clearly.';
 
-        // Build File Search grounding tool (SDK Tool_2.FileSearch format)
+        // Build File Search grounding tool
         const tools = [];
         if (storeIds.length > 0) {
           const fileSearchStoreNames = storeIds.map(id =>
             id.startsWith('fileSearchStores/') ? id : `fileSearchStores/${id}`
           );
-          tools.push({ type: 'file_search', file_search_store_names: fileSearchStoreNames });
+          tools.push({ fileSearch: { fileSearchStoreNames } });
           console.log(`[Chat] Using File Search Stores:`, fileSearchStoreNames);
         }
 
