@@ -1073,7 +1073,7 @@ async function listFileSearchStores(apiKey) {
 
 // Delete a file search store
 async function deleteFileSearchStore(storeName, apiKey) {
-  const res = await fetch(`${GEMINI_BASE_URL}/${storeName}?key=${apiKey}`, {
+  const res = await fetch(`${GEMINI_BASE_URL}/${storeName}?key=${apiKey}&force=true`, {
     method: 'DELETE'
   });
   if (!res.ok) {
@@ -1149,9 +1149,9 @@ async function listStoreDocuments(storeName, apiKey) {
   return res.json();
 }
 
-// Delete a document from a file search store
+// Delete a document from a file search store (force=true to delete even if it has chunks)
 async function deleteDocument(documentName, apiKey) {
-  const res = await fetch(`${GEMINI_BASE_URL}/${documentName}?key=${apiKey}`, {
+  const res = await fetch(`${GEMINI_BASE_URL}/${documentName}?key=${apiKey}&force=true`, {
     method: 'DELETE'
   });
   if (!res.ok) {
