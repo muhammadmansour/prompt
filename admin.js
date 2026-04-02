@@ -740,8 +740,12 @@ async function loadOrgContexts(subId) {
     if (idx >= 0) {
       orgDetailCtxId = subId;
       renderOrgContextDetail(orgContexts[idx], idx);
+      return; // detail page renders its own FAB
     }
   }
+
+  // Show chat FAB on the main list page (no specific org pre-selected)
+  renderOrgChatFAB(null);
 }
 
 function renderOrgStats() {
@@ -1629,6 +1633,8 @@ function renderOrgChatFAB(ctx) {
   // Remove previous FAB/panel if any
   document.querySelectorAll('.org-chat-fab, .org-chat-panel').forEach(el => el.remove());
 
+  const ctxName = ctx ? esc(ctx.nameEn || ctx.name || 'Organization') : 'Organizations';
+
   // Floating action button
   const fab = document.createElement('button');
   fab.className = 'org-chat-fab';
@@ -1646,7 +1652,7 @@ function renderOrgChatFAB(ctx) {
     <div class="org-chat-header">
       <div class="org-chat-header-info">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span>Chat — ${esc(ctx.nameEn || ctx.name || 'Organization')}</span>
+        <span>Chat — ${ctxName}</span>
       </div>
       <div class="org-chat-header-actions">
         <button class="org-chat-header-btn" title="New chat" onclick="orgChatReset()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2v12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6 10l2-2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -1663,11 +1669,11 @@ function renderOrgChatFAB(ctx) {
       <div class="org-chat-welcome">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style="color:#6366f1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>
         <div class="org-chat-welcome-title">Organization Assistant</div>
-        <div class="org-chat-welcome-sub">Ask questions about the uploaded documents and policies for this organization.</div>
+        <div class="org-chat-welcome-sub">Ask questions about the uploaded documents and policies across your organizations.</div>
       </div>
     </div>
     <div class="org-chat-input-area">
-      <textarea id="org-chat-input" class="org-chat-input" placeholder="Ask about this organization's documents..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();orgChatSend();}"></textarea>
+      <textarea id="org-chat-input" class="org-chat-input" placeholder="Ask about organization documents..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();orgChatSend();}"></textarea>
       <button class="org-chat-send-btn" id="org-chat-send-btn" onclick="orgChatSend()" title="Send">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -1695,15 +1701,22 @@ async function orgChatLoadStores(currentCtx) {
       return;
     }
 
-    // Auto-select current org's store
-    orgChatSelectedStores = currentCtx.storeId ? [currentCtx.storeId] : [];
+    const currentId = currentCtx ? currentCtx.id : null;
+
+    // Auto-select: if on a specific org detail, select that org's store; otherwise select all
+    if (currentCtx && currentCtx.storeId) {
+      orgChatSelectedStores = [currentCtx.storeId];
+    } else {
+      orgChatSelectedStores = orgsWithStores.map(o => o.storeId);
+    }
 
     listEl.innerHTML = orgsWithStores.map(org => {
-      const checked = org.id === currentCtx.id ? 'checked' : '';
-      return `<label class="org-chat-store-item ${checked ? 'selected' : ''}">
-        <input type="checkbox" value="${esc(org.storeId)}" data-orgid="${esc(org.id)}" ${checked} onchange="orgChatToggleStore(this)" />
+      const isChecked = orgChatSelectedStores.includes(org.storeId);
+      const isCurrent = org.id === currentId;
+      return `<label class="org-chat-store-item ${isChecked ? 'selected' : ''}">
+        <input type="checkbox" value="${esc(org.storeId)}" data-orgid="${esc(org.id)}" ${isChecked ? 'checked' : ''} onchange="orgChatToggleStore(this)" />
         <span class="org-chat-store-name">${esc(org.nameEn || org.name || 'Organization')}</span>
-        <span class="org-chat-store-badge">${org.id === currentCtx.id ? 'Current' : ''}</span>
+        ${isCurrent ? '<span class="org-chat-store-badge">Current</span>' : ''}
       </label>`;
     }).join('');
   } catch (err) {
@@ -1732,8 +1745,14 @@ function toggleOrgChat(ctx) {
   if (!panel) return;
   orgChatOpen = !orgChatOpen;
   panel.style.display = orgChatOpen ? 'flex' : 'none';
-  if (orgChatOpen && ctx) {
-    orgChatOrgId = ctx.id;
+  if (orgChatOpen) {
+    // Use provided ctx, or fall back to first org that has a store
+    if (ctx) {
+      orgChatOrgId = ctx.id;
+    } else if (!orgChatOrgId) {
+      const withStore = orgContexts.find(o => o.storeId);
+      orgChatOrgId = withStore ? withStore.id : (orgContexts[0] ? orgContexts[0].id : null);
+    }
     const input = document.getElementById('org-chat-input');
     if (input) setTimeout(() => input.focus(), 100);
   }
