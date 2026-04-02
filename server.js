@@ -2773,6 +2773,99 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- Org Context Chat ----
+  const orgChatMatch = url.pathname.match(/^\/api\/org-contexts\/([^\/]+)\/chat$/);
+  if (orgChatMatch && req.method === 'POST') {
+    const orgId = orgChatMatch[1];
+    const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+    if (!apiKey) { sendJSON(res, 401, { error: 'Gemini API key not configured.' }); return; }
+
+    const orgRow = dbGetOrgContext.get(orgId);
+    if (!orgRow) { sendJSON(res, 404, { error: 'Organization context not found' }); return; }
+
+    try {
+      const body = await parseBody(req);
+      const userMessage = (body.message || '').trim();
+      if (!userMessage) { sendJSON(res, 400, { error: 'message is required.' }); return; }
+
+      // Collect File Search Store IDs from request (multi-select) + org's own store
+      let storeIds = body.storeIds || [];
+      if (typeof storeIds === 'string') storeIds = [storeIds];
+      // Always include this org's own store if it has one
+      const ownStore = orgRow.store_id || '';
+      if (ownStore && !storeIds.includes(ownStore)) storeIds.unshift(ownStore);
+
+      // Session management
+      let sessionId = body.sessionId || null;
+      const orgName = orgRow.name_en || 'Organization';
+      const systemInstruction = body.systemInstruction || `You are Wathbah AI, an expert assistant for governance, risk, and compliance (GRC). You are helping with the organization "${orgName}". Answer questions based on the uploaded documents and organization context. Be precise, cite specific document sections when possible, and format your responses clearly with markdown.`;
+
+      // Build File Search grounding tool
+      const tools = [];
+      if (storeIds.length > 0) {
+        const fileSearchStoreNames = storeIds.map(id =>
+          id.startsWith('fileSearchStores/') ? id : `fileSearchStores/${id}`
+        );
+        tools.push({ fileSearch: { fileSearchStoreNames } });
+        console.log(`[OrgChat] Using File Search Stores:`, fileSearchStoreNames);
+      }
+
+      // Ensure Gemini SDK is initialized
+      if (!genai) genai = new GoogleGenAI({ apiKey });
+
+      // Reuse or create chat session (stored in policyChats with orgchat- prefix)
+      if (!sessionId || !policyChats[sessionId]) {
+        sessionId = 'orgchat-' + crypto.randomUUID();
+        console.log(`[OrgChat] Creating session ${sessionId} for org "${orgName}" with ${storeIds.length} store(s)`);
+
+        const chatConfig = {
+          systemInstruction,
+          temperature: 0.7,
+          maxOutputTokens: 8192,
+        };
+        if (tools.length > 0) chatConfig.tools = tools;
+
+        policyChats[sessionId] = {
+          chat: genai.chats.create({ model: 'gemini-2.5-pro', config: chatConfig }),
+          storeIds,
+          history: [],
+          createdAt: new Date().toISOString(),
+        };
+      }
+
+      const session = policyChats[sessionId];
+      console.log(`[OrgChat] Session ${sessionId} — user: "${userMessage.substring(0, 80)}..."`);
+
+      const result = await session.chat.sendMessage({ message: userMessage });
+      const aiText = result.text || '';
+
+      // Extract grounding metadata
+      const groundingMetadata = result.candidates?.[0]?.groundingMetadata || null;
+      const groundingChunks = groundingMetadata?.groundingChunks || [];
+      const sources = groundingChunks.map(chunk => ({
+        title: chunk.retrievedContext?.title || null,
+        uri: chunk.retrievedContext?.uri || null,
+      })).filter(s => s.title || s.uri);
+
+      session.history.push(
+        { role: 'user', text: userMessage, timestamp: new Date().toISOString() },
+        { role: 'model', text: aiText, sources, timestamp: new Date().toISOString() }
+      );
+
+      sendJSON(res, 200, {
+        success: true,
+        sessionId,
+        message: aiText,
+        sources,
+        turnCount: Math.floor(session.history.length / 2),
+      });
+    } catch (chatErr) {
+      console.error(`[OrgChat] Error:`, chatErr.message);
+      sendJSON(res, 500, { error: chatErr.message });
+    }
+    return;
+  }
+
   // ---- Policy Collections API ----
   const policyCollMatch = url.pathname.match(/^\/api\/policy-collections(?:\/([^\/]+))?(?:\/(files|extract|approve|history|sync|chat)(?:\/([^\/]+))?)?$/);
   if (policyCollMatch) {

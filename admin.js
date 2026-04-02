@@ -1613,7 +1613,267 @@ function renderOrgContextDetail(ctx, idx) {
 
   // Load files for this org context
   orgLoadFiles(ctx.id);
+
+  // Add floating chat button + chat panel
+  renderOrgChatFAB(ctx);
 }
+
+// ---- Org Context Chat ----
+
+let orgChatSessionId = null;
+let orgChatOrgId = null;
+let orgChatOpen = false;
+let orgChatSelectedStores = []; // store IDs selected by user
+
+function renderOrgChatFAB(ctx) {
+  // Remove previous FAB/panel if any
+  document.querySelectorAll('.org-chat-fab, .org-chat-panel').forEach(el => el.remove());
+
+  // Floating action button
+  const fab = document.createElement('button');
+  fab.className = 'org-chat-fab';
+  fab.title = 'Chat with organization documents';
+  fab.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  fab.onclick = () => toggleOrgChat(ctx);
+  document.body.appendChild(fab);
+
+  // Chat panel (hidden initially)
+  const panel = document.createElement('div');
+  panel.className = 'org-chat-panel';
+  panel.id = 'org-chat-panel';
+  panel.style.display = 'none';
+  panel.innerHTML = `
+    <div class="org-chat-header">
+      <div class="org-chat-header-info">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Chat — ${esc(ctx.nameEn || ctx.name || 'Organization')}</span>
+      </div>
+      <div class="org-chat-header-actions">
+        <button class="org-chat-header-btn" title="New chat" onclick="orgChatReset()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2v12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6 10l2-2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="org-chat-header-btn" title="Close" onclick="toggleOrgChat()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      </div>
+    </div>
+    <div class="org-chat-stores" id="org-chat-stores">
+      <div class="org-chat-stores-label">Select document stores to include:</div>
+      <div class="org-chat-stores-list" id="org-chat-stores-list">
+        <div style="padding:8px;color:#9ca3af;font-size:12px">Loading stores...</div>
+      </div>
+    </div>
+    <div class="org-chat-messages" id="org-chat-messages">
+      <div class="org-chat-welcome">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style="color:#6366f1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>
+        <div class="org-chat-welcome-title">Organization Assistant</div>
+        <div class="org-chat-welcome-sub">Ask questions about the uploaded documents and policies for this organization.</div>
+      </div>
+    </div>
+    <div class="org-chat-input-area">
+      <textarea id="org-chat-input" class="org-chat-input" placeholder="Ask about this organization's documents..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();orgChatSend();}"></textarea>
+      <button class="org-chat-send-btn" id="org-chat-send-btn" onclick="orgChatSend()" title="Send">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  `;
+  document.body.appendChild(panel);
+
+  // Load store options for multi-select
+  orgChatLoadStores(ctx);
+}
+
+async function orgChatLoadStores(currentCtx) {
+  const listEl = document.getElementById('org-chat-stores-list');
+  if (!listEl) return;
+  orgChatSelectedStores = [];
+  try {
+    const r = await fetch('/api/org-contexts');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const allOrgs = d.contexts || [];
+    // Filter to orgs that have a store_id
+    const orgsWithStores = allOrgs.filter(o => o.storeId);
+    if (!orgsWithStores.length) {
+      listEl.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:12px">No document stores available. Upload files to an organization first.</div>';
+      return;
+    }
+
+    // Auto-select current org's store
+    orgChatSelectedStores = currentCtx.storeId ? [currentCtx.storeId] : [];
+
+    listEl.innerHTML = orgsWithStores.map(org => {
+      const checked = org.id === currentCtx.id ? 'checked' : '';
+      return `<label class="org-chat-store-item ${checked ? 'selected' : ''}">
+        <input type="checkbox" value="${esc(org.storeId)}" data-orgid="${esc(org.id)}" ${checked} onchange="orgChatToggleStore(this)" />
+        <span class="org-chat-store-name">${esc(org.nameEn || org.name || 'Organization')}</span>
+        <span class="org-chat-store-badge">${org.id === currentCtx.id ? 'Current' : ''}</span>
+      </label>`;
+    }).join('');
+  } catch (err) {
+    console.error('Load org stores error:', err);
+    listEl.innerHTML = '<div style="padding:8px;color:#ef4444;font-size:12px">Failed to load stores.</div>';
+  }
+}
+
+function orgChatToggleStore(checkbox) {
+  const storeId = checkbox.value;
+  const label = checkbox.closest('.org-chat-store-item');
+  if (checkbox.checked) {
+    if (!orgChatSelectedStores.includes(storeId)) orgChatSelectedStores.push(storeId);
+    if (label) label.classList.add('selected');
+  } else {
+    orgChatSelectedStores = orgChatSelectedStores.filter(s => s !== storeId);
+    if (label) label.classList.remove('selected');
+  }
+  // Reset session when stores change
+  orgChatSessionId = null;
+}
+window.orgChatToggleStore = orgChatToggleStore;
+
+function toggleOrgChat(ctx) {
+  const panel = document.getElementById('org-chat-panel');
+  if (!panel) return;
+  orgChatOpen = !orgChatOpen;
+  panel.style.display = orgChatOpen ? 'flex' : 'none';
+  if (orgChatOpen && ctx) {
+    orgChatOrgId = ctx.id;
+    const input = document.getElementById('org-chat-input');
+    if (input) setTimeout(() => input.focus(), 100);
+  }
+}
+window.toggleOrgChat = toggleOrgChat;
+
+function orgChatReset() {
+  orgChatSessionId = null;
+  const msgs = document.getElementById('org-chat-messages');
+  if (msgs) {
+    msgs.innerHTML = `<div class="org-chat-welcome">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style="color:#6366f1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>
+      <div class="org-chat-welcome-title">Organization Assistant</div>
+      <div class="org-chat-welcome-sub">Ask questions about the uploaded documents and policies for this organization.</div>
+    </div>`;
+  }
+  const input = document.getElementById('org-chat-input');
+  if (input) { input.value = ''; input.focus(); }
+}
+window.orgChatReset = orgChatReset;
+
+async function orgChatSend() {
+  const input = document.getElementById('org-chat-input');
+  const sendBtn = document.getElementById('org-chat-send-btn');
+  const msgsEl = document.getElementById('org-chat-messages');
+  if (!input || !msgsEl) return;
+
+  const message = input.value.trim();
+  if (!message) return;
+  if (!orgChatOrgId) return;
+
+  // Clear welcome if present
+  const welcome = msgsEl.querySelector('.org-chat-welcome');
+  if (welcome) welcome.remove();
+
+  // Add user message bubble
+  const userBubble = document.createElement('div');
+  userBubble.className = 'org-chat-msg user';
+  userBubble.innerHTML = `<div class="org-chat-msg-content">${escHtml(message)}</div>`;
+  msgsEl.appendChild(userBubble);
+
+  // Add thinking indicator
+  const thinkingEl = document.createElement('div');
+  thinkingEl.className = 'org-chat-msg ai';
+  thinkingEl.innerHTML = `<div class="org-chat-msg-content org-chat-thinking"><svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Thinking...</div>`;
+  msgsEl.appendChild(thinkingEl);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+
+  input.value = '';
+  input.disabled = true;
+  if (sendBtn) sendBtn.disabled = true;
+
+  try {
+    const payload = {
+      message,
+      storeIds: orgChatSelectedStores,
+    };
+    if (orgChatSessionId) payload.sessionId = orgChatSessionId;
+
+    const r = await fetch(`/api/org-contexts/${orgChatOrgId}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const d = await r.json();
+    thinkingEl.remove();
+
+    if (!r.ok || !d.success) {
+      throw new Error(d.error || 'Chat request failed');
+    }
+
+    orgChatSessionId = d.sessionId;
+
+    // Add AI response bubble
+    const aiBubble = document.createElement('div');
+    aiBubble.className = 'org-chat-msg ai';
+    let sourcesHtml = '';
+    if (d.sources && d.sources.length) {
+      sourcesHtml = `<div class="org-chat-sources">${d.sources.map(s => `<span class="org-chat-source-pill" title="${esc(s.uri || '')}">${esc(s.title || 'Source')}</span>`).join('')}</div>`;
+    }
+    aiBubble.innerHTML = `<div class="org-chat-msg-content">${formatOrgChatMarkdown(d.message || '')}</div>${sourcesHtml}`;
+    msgsEl.appendChild(aiBubble);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+
+  } catch (err) {
+    thinkingEl.remove();
+    console.error('[OrgChat] Error:', err);
+    const errBubble = document.createElement('div');
+    errBubble.className = 'org-chat-msg ai';
+    errBubble.innerHTML = `<div class="org-chat-msg-content org-chat-error">Error: ${escHtml(err.message)}</div>`;
+    msgsEl.appendChild(errBubble);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  } finally {
+    input.disabled = false;
+    if (sendBtn) sendBtn.disabled = false;
+    input.focus();
+  }
+}
+window.orgChatSend = orgChatSend;
+
+function escHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function formatOrgChatMarkdown(text) {
+  // Simple markdown-like formatting
+  let html = escHtml(text);
+  // Bold
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Code blocks
+  html = html.replace(/```[\s\S]*?```/g, m => {
+    const code = m.replace(/```\w*\n?/, '').replace(/\n?```$/, '');
+    return `<pre><code>${code}</code></pre>`;
+  });
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  // Lists
+  html = html.replace(/(?:^|<br>)[-•]\s+(.*?)(?=<br>|$)/g, '<li>$1</li>');
+  if (html.includes('<li>')) html = html.replace(/(<li>.*?<\/li>)+/g, '<ul>$&</ul>');
+  return html;
+}
+
+// Clean up chat on navigating away
+const origOrgBackToList = window.orgBackToList;
+window.orgBackToList = function() {
+  // Remove chat FAB and panel
+  document.querySelectorAll('.org-chat-fab, .org-chat-panel').forEach(el => el.remove());
+  orgChatSessionId = null;
+  orgChatOrgId = null;
+  orgChatOpen = false;
+  orgChatSelectedStores = [];
+  if (origOrgBackToList) origOrgBackToList();
+};
 
 // ---- Org Context File Attachments ----
 
