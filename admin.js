@@ -1694,7 +1694,6 @@ async function orgChatLoadStores(currentCtx) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     const allOrgs = d.contexts || [];
-    // Filter to orgs that have a store_id
     const orgsWithStores = allOrgs.filter(o => o.storeId);
     if (!orgsWithStores.length) {
       listEl.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:12px">No document stores available. Upload files to an organization first.</div>';
@@ -1703,37 +1702,85 @@ async function orgChatLoadStores(currentCtx) {
 
     const currentId = currentCtx ? currentCtx.id : null;
 
-    // Auto-select: if on a specific org detail, select that org's store; otherwise select all
     if (currentCtx && currentCtx.storeId) {
       orgChatSelectedStores = [currentCtx.storeId];
     } else {
       orgChatSelectedStores = orgsWithStores.map(o => o.storeId);
     }
 
-    listEl.innerHTML = orgsWithStores.map(org => {
+    listEl.innerHTML = orgsWithStores.map((org, i) => {
       const isChecked = orgChatSelectedStores.includes(org.storeId);
       const isCurrent = org.id === currentId;
-      return `<label class="org-chat-store-item ${isChecked ? 'selected' : ''}">
-        <input type="checkbox" value="${esc(org.storeId)}" data-orgid="${esc(org.id)}" ${isChecked ? 'checked' : ''} onchange="orgChatToggleStore(this)" />
-        <span class="org-chat-store-name">${esc(org.nameEn || org.name || 'Organization')}</span>
-        ${isCurrent ? '<span class="org-chat-store-badge">Current</span>' : ''}
-      </label>`;
+      return `<div class="org-chat-store-accordion ${isChecked ? 'selected' : ''}" data-storeid="${esc(org.storeId)}">
+        <div class="org-chat-store-header" onclick="orgChatToggleAccordion(this)">
+          <input type="checkbox" value="${esc(org.storeId)}" data-orgid="${esc(org.id)}" ${isChecked ? 'checked' : ''} onchange="orgChatToggleStore(this)" onclick="event.stopPropagation()" />
+          <span class="org-chat-store-name">${esc(org.nameEn || org.name || 'Organization')}</span>
+          ${isCurrent ? '<span class="org-chat-store-badge">Current</span>' : ''}
+          <svg class="org-chat-store-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M4 5.5L7 8.5L10 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="org-chat-store-files" id="org-chat-files-${esc(org.id)}" style="display:none">
+          <div class="org-chat-files-loading"><svg class="spinner" width="12" height="12" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Loading files...</div>
+        </div>
+      </div>`;
     }).join('');
+
+    // Pre-fetch files for each store
+    orgsWithStores.forEach(org => orgChatFetchStoreFiles(org.id));
+
   } catch (err) {
     console.error('Load org stores error:', err);
     listEl.innerHTML = '<div style="padding:8px;color:#ef4444;font-size:12px">Failed to load stores.</div>';
   }
 }
 
+function orgChatToggleAccordion(headerEl) {
+  const accordion = headerEl.closest('.org-chat-store-accordion');
+  if (!accordion) return;
+  const filesEl = accordion.querySelector('.org-chat-store-files');
+  if (!filesEl) return;
+  const isOpen = filesEl.style.display !== 'none';
+  filesEl.style.display = isOpen ? 'none' : 'block';
+  accordion.classList.toggle('open', !isOpen);
+}
+window.orgChatToggleAccordion = orgChatToggleAccordion;
+
+async function orgChatFetchStoreFiles(orgId) {
+  const filesEl = document.getElementById('org-chat-files-' + orgId);
+  if (!filesEl) return;
+  try {
+    const r = await fetch(`/api/org-contexts/${orgId}/files`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const files = (d.data && d.data.documents) || [];
+    if (!files.length) {
+      filesEl.innerHTML = '<div class="org-chat-files-empty">No files uploaded</div>';
+      return;
+    }
+    filesEl.innerHTML = files.map(f => {
+      const displayName = f.displayName || (f.name || '').split('/').pop();
+      const state = (f.state || '').toUpperCase();
+      const isActive = state === 'ACTIVE';
+      return `<div class="org-chat-file-row">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg>
+        <span class="org-chat-file-name">${esc(displayName)}</span>
+        ${isActive ? '<span class="org-chat-file-status active">●</span>' : '<span class="org-chat-file-status processing">●</span>'}
+      </div>`;
+    }).join('');
+  } catch (err) {
+    console.error('Fetch store files error:', err);
+    filesEl.innerHTML = '<div class="org-chat-files-empty" style="color:#ef4444">Failed to load</div>';
+  }
+}
+
 function orgChatToggleStore(checkbox) {
   const storeId = checkbox.value;
-  const label = checkbox.closest('.org-chat-store-item');
+  const accordion = checkbox.closest('.org-chat-store-accordion');
   if (checkbox.checked) {
     if (!orgChatSelectedStores.includes(storeId)) orgChatSelectedStores.push(storeId);
-    if (label) label.classList.add('selected');
+    if (accordion) accordion.classList.add('selected');
   } else {
     orgChatSelectedStores = orgChatSelectedStores.filter(s => s !== storeId);
-    if (label) label.classList.remove('selected');
+    if (accordion) accordion.classList.remove('selected');
   }
   // Reset session when stores change
   orgChatSessionId = null;
