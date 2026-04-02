@@ -1594,10 +1594,131 @@ function renderOrgContextDetail(ctx, idx) {
       <div class="org-detail-card-title">Notes</div>
       <div class="org-detail-notes">${esc(notes)}</div>
     </div>` : ''}
+
+    <div class="org-detail-card">
+      <div class="org-detail-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>File Attachments</span>
+        <label class="pi-btn pi-btn-primary" style="cursor:pointer;font-size:12px;padding:5px 12px;margin:0">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="margin-right:4px;vertical-align:-2px"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>Upload File
+          <input type="file" id="org-file-upload-${esc(ctx.id)}" style="display:none" onchange="orgUploadFile('${esc(ctx.id)}', this)" multiple accept=".pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.pptx,.ppt,.png,.jpg,.jpeg,.gif,.webp" />
+        </label>
+      </div>
+      <div id="org-files-list-${esc(ctx.id)}" class="org-files-list">
+        <div style="text-align:center;padding:16px;color:#9ca3af"><svg class="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Loading files...</div>
+      </div>
+    </div>
   `;
 
   container.appendChild(detailEl);
+
+  // Load files for this org context
+  orgLoadFiles(ctx.id);
 }
+
+// ---- Org Context File Attachments ----
+
+async function orgLoadFiles(orgId) {
+  const listEl = document.getElementById('org-files-list-' + orgId);
+  if (!listEl) return;
+  try {
+    const r = await fetch(`/api/org-contexts/${orgId}/files`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const files = (d.data && d.data.documents) || [];
+    const storeId = d.storeId || '';
+    if (!files.length) {
+      listEl.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;font-size:13px">No files attached yet. Upload files to attach them to this organization.</div>';
+      return;
+    }
+    listEl.innerHTML = files.map(f => {
+      const docName = f.name || '';
+      const docId = docName.split('/').pop();
+      const displayName = f.displayName || docId;
+      const state = (f.state || '').toUpperCase();
+      const isActive = state === 'ACTIVE';
+      const statusBadge = isActive
+        ? '<span class="pi-file-status active">Active</span>'
+        : `<span class="pi-file-status processing">${esc(state || 'PROCESSING')}</span>`;
+      return `<div class="org-file-row">
+        <div class="org-file-info">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg>
+          <span class="org-file-name">${esc(displayName)}</span>
+          ${statusBadge}
+        </div>
+        <div class="org-file-actions">
+          ${isActive ? `<button class="pi-file-action-btn view" title="View file" onclick="event.stopPropagation();orgViewFile('${esc(orgId)}','${esc(docId)}','${esc(displayName)}')"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 7s2.2-4.5 6-4.5S13 7 13 7s-2.2 4.5-6 4.5S1 7 1 7z" stroke="currentColor" stroke-width="1.2"/><circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.2"/></svg></button>` : ''}
+          <button class="pi-file-action-btn delete" title="Delete file" onclick="event.stopPropagation();orgDeleteFile('${esc(orgId)}','${esc(docId)}','${esc(displayName)}')"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    console.error('Org files load error:', err);
+    listEl.innerHTML = '<div style="text-align:center;padding:16px;color:#ef4444;font-size:13px">Failed to load files.</div>';
+  }
+}
+window.orgLoadFiles = orgLoadFiles;
+
+async function orgUploadFile(orgId, input) {
+  const files = input.files;
+  if (!files || !files.length) return;
+  const listEl = document.getElementById('org-files-list-' + orgId);
+  if (listEl) {
+    listEl.innerHTML = '<div style="text-align:center;padding:16px;color:#6366f1"><svg class="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Uploading ' + files.length + ' file(s)...</div>';
+  }
+
+  for (const file of files) {
+    try {
+      const data = await fileToBase64(file);
+      const r = await fetch(`/api/org-contexts/${orgId}/files`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileName: file.name, mimeType: file.type || 'application/octet-stream', data })
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Upload failed'); }
+      console.log(`[OrgFiles] Uploaded: ${file.name}`);
+    } catch (err) {
+      console.error(`[OrgFiles] Upload error for ${file.name}:`, err);
+      alert(`Failed to upload "${file.name}": ${err.message}`);
+    }
+  }
+
+  input.value = '';
+  // Reload files list
+  orgLoadFiles(orgId);
+}
+window.orgUploadFile = orgUploadFile;
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function orgViewFile(orgId, fileId, fileName) {
+  const url = `/api/org-contexts/${orgId}/files/${fileId}`;
+  window.open(url, '_blank');
+}
+window.orgViewFile = orgViewFile;
+
+async function orgDeleteFile(orgId, fileId, fileName) {
+  if (!confirm(`Delete "${fileName}"?`)) return;
+  try {
+    const r = await fetch(`/api/org-contexts/${orgId}/files/${fileId}`, { method: 'DELETE' });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Delete failed'); }
+    console.log(`[OrgFiles] Deleted: ${fileName}`);
+    orgLoadFiles(orgId);
+  } catch (err) {
+    console.error('[OrgFiles] Delete error:', err);
+    alert(`Failed to delete: ${err.message}`);
+  }
+}
+window.orgDeleteFile = orgDeleteFile;
 
 // Org search
 const orgSearch = document.getElementById('org-search');

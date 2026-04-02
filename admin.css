@@ -2767,6 +2767,16 @@
 .org-detail-doc-row:last-child { border-bottom: none; }
 .org-detail-doc-row svg { color: #9ca3af; flex-shrink: 0; }
 
+/* --- Org File Attachments --- */
+.org-files-list { display: flex; flex-direction: column; gap: 0; }
+.org-file-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #f3f4f6; transition: background 0.15s; }
+.org-file-row:last-child { border-bottom: none; }
+.org-file-row:hover { background: #f9fafb; }
+.org-file-info { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #374151; min-width: 0; }
+.org-file-info svg { color: #9ca3af; flex-shrink: 0; }
+.org-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.org-file-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
 /* ---------- File Collections ---------- */
 .fc-stats-grid {
   display: grid;

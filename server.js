@@ -144,6 +144,7 @@ db.exec(`
     obligatory_frameworks TEXT DEFAULT '[]',
     notes TEXT DEFAULT '',
     is_active INTEGER DEFAULT 1,
+    store_id TEXT DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -254,6 +255,7 @@ try {
   addCol('it_infrastructure', "TEXT DEFAULT ''");
   addCol('strategic_objectives', "TEXT DEFAULT '[]'");
   addCol('policies', "TEXT DEFAULT '[]'");
+  addCol('store_id', "TEXT DEFAULT ''");
 } catch (migErr) { console.warn('Org profile migration:', migErr.message); }
 
 console.log('SQLite database initialized (sessions.db)');
@@ -307,6 +309,8 @@ const dbUpdateOrgContext = db.prepare(`
 `);
 const dbDeleteOrgContext = db.prepare(`DELETE FROM org_contexts WHERE id = ?`);
 
+const dbUpdateOrgContextStoreId = db.prepare(`UPDATE org_contexts SET store_id = ?, updated_at = ? WHERE id = ?`);
+
 function orgContextToJSON(r) {
   return {
     id: r.id,
@@ -325,6 +329,7 @@ function orgContextToJSON(r) {
     obligatoryFrameworks: JSON.parse(r.obligatory_frameworks || '[]'),
     policies: JSON.parse(r.policies || '[]'),
     notes: r.notes,
+    storeId: r.store_id || '',
     isActive: !!r.is_active,
     created_at: r.created_at,
     updated_at: r.updated_at,
@@ -2594,6 +2599,23 @@ const server = http.createServer(async (req, res) => {
       const id = orgCtxMatch[1];
       const row = dbGetOrgContext.get(id);
       if (!row) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Not found.' })); return; }
+
+      // Clean up Gemini File Search Store + local files
+      const orgStoreId = row.store_id || '';
+      if (orgStoreId) {
+        const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+        if (apiKey) {
+          try {
+            await deleteFileSearchStore(`fileSearchStores/${orgStoreId}`, apiKey);
+            console.log(`[OrgFiles] Deleted File Search Store: ${orgStoreId}`);
+          } catch (delErr) { console.warn(`[OrgFiles] Could not delete store: ${delErr.message}`); }
+        }
+        try {
+          const storeDir = path.join(COLLECTION_UPLOADS_DIR, orgStoreId);
+          if (fs.existsSync(storeDir)) fs.rmSync(storeDir, { recursive: true, force: true });
+        } catch (rmErr) { console.warn(`[OrgFiles] Could not remove local dir: ${rmErr.message}`); }
+      }
+
       dbDeleteOrgContext.run(id);
       console.log(`Org context deleted: ${id}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2602,6 +2624,151 @@ const server = http.createServer(async (req, res) => {
       console.error('Delete org context error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Org Context File Attachments ----
+  const orgFileMatch = url.pathname.match(/^\/api\/org-contexts\/([^\/]+)\/files(?:\/([^\/]+))?$/);
+  if (orgFileMatch) {
+    const orgId = orgFileMatch[1];
+    const fileId = orgFileMatch[2];
+    const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
+
+    const orgRow = dbGetOrgContext.get(orgId);
+    if (!orgRow) { sendJSON(res, 404, { error: 'Organization context not found' }); return; }
+
+    try {
+      // POST /api/org-contexts/:id/files — Upload file
+      if (!fileId && req.method === 'POST') {
+        if (!apiKey) { sendJSON(res, 401, { error: 'Gemini API key not configured.' }); return; }
+
+        const body = await parseBody(req);
+        const { fileName, mimeType, data } = body;
+        if (!fileName || !data) { sendJSON(res, 400, { error: 'fileName and data (base64) are required.' }); return; }
+
+        const fileBuffer = Buffer.from(data, 'base64');
+        const mime = mimeType || 'application/octet-stream';
+
+        // Ensure org has a File Search Store (create if needed)
+        let storeId = orgRow.store_id || '';
+        if (!storeId) {
+          const safeName = ((orgRow.name_en || 'Org') + ' Files').replace(/[^\x20-\x7E]/g, '_');
+          console.log(`[OrgFiles] Creating File Search Store for org "${orgRow.name_en}"...`);
+          const storeResult = await createFileSearchStore(safeName, apiKey);
+          let store = storeResult;
+          if (storeResult.name && !storeResult.done && !storeResult.name.startsWith('fileSearchStores/')) {
+            store = await pollOperation(storeResult.name, apiKey);
+            store = store.response || store;
+          }
+          storeId = (store.name || '').replace('fileSearchStores/', '');
+          dbUpdateOrgContextStoreId.run(storeId, new Date().toISOString(), orgId);
+          console.log(`[OrgFiles] File Search Store created: ${storeId}`);
+        }
+
+        // Upload to Gemini File Search Store
+        const storeName = `fileSearchStores/${storeId}`;
+        console.log(`[OrgFiles] Uploading "${fileName}" to ${storeName}...`);
+        const result = await uploadFileToStore(storeName, fileName, mime, fileBuffer, apiKey);
+        let finalResult = result;
+        if (result.name && !result.done) {
+          finalResult = await pollOperation(result.name, apiKey);
+        }
+
+        // Save local copy for viewing
+        try {
+          const oStoreDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          if (!fs.existsSync(oStoreDir)) fs.mkdirSync(oStoreDir, { recursive: true });
+          const oSafeFileName = (fileName || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+          fs.writeFileSync(path.join(oStoreDir, oSafeFileName), fileBuffer);
+          const oMetaPath = path.join(oStoreDir, '_metadata.json');
+          let oMeta = {};
+          try { oMeta = JSON.parse(fs.readFileSync(oMetaPath, 'utf-8')); } catch {}
+          const oDocName = finalResult?.response?.name || finalResult?.name || '';
+          const oDocId = oDocName.split('/').pop() || oSafeFileName;
+          oMeta[oDocId] = { originalName: fileName, localFile: oSafeFileName, mimeType: mime, size: fileBuffer.length, uploadedAt: new Date().toISOString() };
+          oMeta[oSafeFileName] = oMeta[oDocId];
+          fs.writeFileSync(oMetaPath, JSON.stringify(oMeta, null, 2));
+          console.log(`[OrgFiles] Local copy saved for "${fileName}"`);
+        } catch (localErr) {
+          console.warn(`[OrgFiles] Could not save local copy: ${localErr.message}`);
+        }
+
+        sendJSON(res, 200, { success: true, data: finalResult });
+        return;
+      }
+
+      // GET /api/org-contexts/:id/files — List files
+      if (!fileId && req.method === 'GET') {
+        const storeId = orgRow.store_id || '';
+        if (!storeId) { sendJSON(res, 200, { success: true, storeId: '', data: { documents: [] } }); return; }
+        const storeName = `fileSearchStores/${storeId}`;
+        const docs = await listStoreDocuments(storeName, apiKey);
+        sendJSON(res, 200, { success: true, storeId, data: docs });
+        return;
+      }
+
+      // GET /api/org-contexts/:id/files/:fileId — View/download file
+      if (fileId && req.method === 'GET') {
+        const storeId = orgRow.store_id || '';
+        if (!storeId) { sendJSON(res, 404, { error: 'No files store for this organization.' }); return; }
+        try {
+          const storeDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          const metaPath = path.join(storeDir, '_metadata.json');
+          if (!fs.existsSync(metaPath)) { sendJSON(res, 404, { error: 'No local files found.' }); return; }
+          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+          const fileMeta = meta[fileId];
+          if (!fileMeta) { sendJSON(res, 404, { error: 'File not found locally.' }); return; }
+          const localFilePath = path.join(storeDir, fileMeta.localFile);
+          if (!fs.existsSync(localFilePath)) { sendJSON(res, 404, { error: 'Local file removed.' }); return; }
+          const fileContent = fs.readFileSync(localFilePath);
+          res.writeHead(200, {
+            'Content-Type': fileMeta.mimeType || 'application/octet-stream',
+            'Content-Disposition': `inline; filename="${encodeURIComponent(fileMeta.originalName || fileMeta.localFile)}"`,
+            'Content-Length': fileContent.length
+          });
+          res.end(fileContent);
+        } catch (viewErr) {
+          console.error('[OrgFiles] File view error:', viewErr.message);
+          sendJSON(res, 500, { error: viewErr.message });
+        }
+        return;
+      }
+
+      // DELETE /api/org-contexts/:id/files/:fileId — Delete file
+      if (fileId && req.method === 'DELETE') {
+        const storeId = orgRow.store_id || '';
+        if (!storeId) { sendJSON(res, 404, { error: 'No files store for this organization.' }); return; }
+        const documentName = `fileSearchStores/${storeId}/documents/${fileId}`;
+        console.log(`[OrgFiles] Deleting document: ${documentName}`);
+        await deleteDocument(documentName, apiKey);
+
+        // Remove local copy
+        try {
+          const storeDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          const metaPath = path.join(storeDir, '_metadata.json');
+          if (fs.existsSync(metaPath)) {
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+            if (meta[fileId]) {
+              const localFile = path.join(storeDir, meta[fileId].localFile);
+              if (fs.existsSync(localFile)) fs.unlinkSync(localFile);
+              delete meta[meta[fileId].localFile];
+              delete meta[fileId];
+              fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+            }
+          }
+        } catch (delLocalErr) {
+          console.warn(`[OrgFiles] Could not remove local copy: ${delLocalErr.message}`);
+        }
+
+        sendJSON(res, 200, { success: true });
+        return;
+      }
+
+      sendJSON(res, 405, { error: 'Method not allowed' });
+    } catch (err) {
+      console.error('[OrgFiles] Error:', err.message);
+      sendJSON(res, 500, { error: err.message });
     }
     return;
   }
