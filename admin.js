@@ -1629,6 +1629,8 @@ let orgChatOrgId = null;
 let orgChatOpen = false;
 let orgChatSelectedStores = []; // store IDs selected by user
 
+let orgChatStep = 1; // 1 = select stores, 2 = chat
+
 function renderOrgChatFAB(ctx) {
   // Remove previous FAB/panel if any
   document.querySelectorAll('.org-chat-fab, .org-chat-panel').forEach(el => el.remove());
@@ -1652,38 +1654,85 @@ function renderOrgChatFAB(ctx) {
     <div class="org-chat-header">
       <div class="org-chat-header-info">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span>Chat — ${ctxName}</span>
+        <span id="org-chat-header-title">Chat — ${ctxName}</span>
       </div>
       <div class="org-chat-header-actions">
-        <button class="org-chat-header-btn" title="New chat" onclick="orgChatReset()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2v12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6 10l2-2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="org-chat-header-btn" id="org-chat-back-btn" title="Back to stores" onclick="orgChatGoToStep1()" style="display:none"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button class="org-chat-header-btn" title="Close" onclick="toggleOrgChat()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
     </div>
-    <div class="org-chat-stores" id="org-chat-stores">
-      <div class="org-chat-stores-label">Select document stores to include:</div>
-      <div class="org-chat-stores-list" id="org-chat-stores-list">
-        <div style="padding:8px;color:#9ca3af;font-size:12px">Loading stores...</div>
+
+    <!-- STEP 1: Select collections -->
+    <div class="org-chat-step" id="org-chat-step1">
+      <div class="org-chat-stores" id="org-chat-stores">
+        <div class="org-chat-stores-label">Select document stores to include:</div>
+        <div class="org-chat-stores-list" id="org-chat-stores-list">
+          <div style="padding:8px;color:#9ca3af;font-size:12px">Loading stores...</div>
+        </div>
+      </div>
+      <div class="org-chat-step1-footer">
+        <div class="org-chat-selected-count" id="org-chat-selected-count">0 stores selected</div>
+        <button class="org-chat-start-btn" id="org-chat-start-btn" onclick="orgChatGoToStep2()" disabled>Start Chat <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 3L11 8L6 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
     </div>
-    <div class="org-chat-messages" id="org-chat-messages">
-      <div class="org-chat-welcome">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style="color:#6366f1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>
-        <div class="org-chat-welcome-title">Organization Assistant</div>
-        <div class="org-chat-welcome-sub">Ask questions about the uploaded documents and policies across your organizations.</div>
+
+    <!-- STEP 2: Chat conversation -->
+    <div class="org-chat-step" id="org-chat-step2" style="display:none">
+      <div class="org-chat-messages" id="org-chat-messages">
+        <div class="org-chat-welcome">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style="color:#6366f1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>
+          <div class="org-chat-welcome-title">Organization Assistant</div>
+          <div class="org-chat-welcome-sub">Ask questions about the uploaded documents and policies.</div>
+        </div>
       </div>
-    </div>
-    <div class="org-chat-input-area">
-      <textarea id="org-chat-input" class="org-chat-input" placeholder="Ask about organization documents..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();orgChatSend();}"></textarea>
-      <button class="org-chat-send-btn" id="org-chat-send-btn" onclick="orgChatSend()" title="Send">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
+      <div class="org-chat-input-area">
+        <textarea id="org-chat-input" class="org-chat-input" placeholder="Ask about organization documents..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();orgChatSend();}"></textarea>
+        <button class="org-chat-send-btn" id="org-chat-send-btn" onclick="orgChatSend()" title="Send">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
     </div>
   `;
   document.body.appendChild(panel);
 
-  // Load store options for multi-select
+  orgChatStep = 1;
   orgChatLoadStores(ctx);
 }
+
+function orgChatUpdateSelectedCount() {
+  const countEl = document.getElementById('org-chat-selected-count');
+  const startBtn = document.getElementById('org-chat-start-btn');
+  const n = orgChatSelectedStores.length;
+  if (countEl) countEl.textContent = n + ' store' + (n !== 1 ? 's' : '') + ' selected';
+  if (startBtn) startBtn.disabled = n === 0;
+}
+
+function orgChatGoToStep2() {
+  if (!orgChatSelectedStores.length) return;
+  orgChatStep = 2;
+  const step1 = document.getElementById('org-chat-step1');
+  const step2 = document.getElementById('org-chat-step2');
+  const backBtn = document.getElementById('org-chat-back-btn');
+  const titleEl = document.getElementById('org-chat-header-title');
+  if (step1) step1.style.display = 'none';
+  if (step2) step2.style.display = 'flex';
+  if (backBtn) backBtn.style.display = 'flex';
+  if (titleEl) titleEl.textContent = 'Chat — ' + orgChatSelectedStores.length + ' store' + (orgChatSelectedStores.length !== 1 ? 's' : '');
+  const input = document.getElementById('org-chat-input');
+  if (input) setTimeout(() => input.focus(), 100);
+}
+window.orgChatGoToStep2 = orgChatGoToStep2;
+
+function orgChatGoToStep1() {
+  orgChatStep = 1;
+  const step1 = document.getElementById('org-chat-step1');
+  const step2 = document.getElementById('org-chat-step2');
+  const backBtn = document.getElementById('org-chat-back-btn');
+  if (step1) step1.style.display = 'flex';
+  if (step2) step2.style.display = 'none';
+  if (backBtn) backBtn.style.display = 'none';
+}
+window.orgChatGoToStep1 = orgChatGoToStep1;
 
 async function orgChatLoadStores(currentCtx) {
   const listEl = document.getElementById('org-chat-stores-list');
@@ -1726,6 +1775,7 @@ async function orgChatLoadStores(currentCtx) {
 
     // Pre-fetch files for each store
     orgsWithStores.forEach(org => orgChatFetchStoreFiles(org.id));
+    orgChatUpdateSelectedCount();
 
   } catch (err) {
     console.error('Load org stores error:', err);
@@ -1782,8 +1832,8 @@ function orgChatToggleStore(checkbox) {
     orgChatSelectedStores = orgChatSelectedStores.filter(s => s !== storeId);
     if (accordion) accordion.classList.remove('selected');
   }
-  // Reset session when stores change
   orgChatSessionId = null;
+  orgChatUpdateSelectedCount();
 }
 window.orgChatToggleStore = orgChatToggleStore;
 
@@ -1808,16 +1858,19 @@ window.toggleOrgChat = toggleOrgChat;
 
 function orgChatReset() {
   orgChatSessionId = null;
+  // Clear messages
   const msgs = document.getElementById('org-chat-messages');
   if (msgs) {
     msgs.innerHTML = `<div class="org-chat-welcome">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style="color:#6366f1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>
       <div class="org-chat-welcome-title">Organization Assistant</div>
-      <div class="org-chat-welcome-sub">Ask questions about the uploaded documents and policies for this organization.</div>
+      <div class="org-chat-welcome-sub">Ask questions about the uploaded documents and policies.</div>
     </div>`;
   }
   const input = document.getElementById('org-chat-input');
-  if (input) { input.value = ''; input.focus(); }
+  if (input) input.value = '';
+  // Go back to step 1
+  orgChatGoToStep1();
 }
 window.orgChatReset = orgChatReset;
 
