@@ -687,6 +687,17 @@ function toggleFCExpand(storeId) {
 }
 window.toggleFCExpand = toggleFCExpand;
 
+// View a file from a collection (opens in new tab via the local copy)
+function viewFileInCollection(storeId, docId) {
+  if (!storeId || !docId) {
+    toast('error', 'Cannot View', 'File identifier not available.');
+    return;
+  }
+  const viewUrl = `/api/collections/${encodeURIComponent(storeId)}/files/${encodeURIComponent(docId)}/view`;
+  window.open(viewUrl, '_blank');
+}
+window.viewFileInCollection = viewFileInCollection;
+
 function renderFCFiles(storeId) {
   const body = document.getElementById('fc-files-' + storeId);
   const files = collectionFiles[storeId] || [];
@@ -700,10 +711,13 @@ function renderFCFiles(storeId) {
     const state = f.state || 'UNKNOWN';
     const stateClass = state === 'STATE_ACTIVE' ? 'badge-emerald' : (state === 'STATE_PENDING' ? 'badge-amber' : 'badge-red');
     const stateLabel = state.replace('STATE_', '');
+    const isActive = state === 'STATE_ACTIVE';
+    const docId = (f.name || '').split('/').pop();
     return `
-      <div class="org-ctx-doc">
-        <div class="org-ctx-doc-name">${esc(name)}</div>
+      <div class="org-ctx-doc" style="display:flex;align-items:center;gap:8px">
+        <div class="org-ctx-doc-name" style="flex:1">${esc(name)}</div>
         <span class="badge ${stateClass}">${stateLabel}</span>
+        ${isActive && docId ? `<button class="btn-admin-sm" onclick="event.stopPropagation();viewFileInCollection('${esc(storeId)}','${esc(docId)}')" title="View file" style="padding:2px 6px;font-size:11px"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 7 3.5 2.5 7 2.5C10.5 2.5 13 7 13 7C13 7 10.5 11.5 7 11.5C3.5 11.5 1 7 1 7Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.3"/></svg></button>` : ''}
       </div>`;
   }).join('') + '</div>';
 }
@@ -2528,11 +2542,13 @@ function csRenderRefCollections() {
         const stateLabel = isActive ? 'Active' : (state === 'STATE_PENDING' ? 'Processing...' : 'Failed');
         const stateIcon = isActive ? '✓' : (state === 'STATE_PENDING' ? '◌' : '✗');
 
+        const csDocId = (f.name || '').split('/').pop();
         html += `<div class="studio-file-item ${isFileSelected ? 'file-selected' : ''}" data-file-key="${esc(fileKey)}">
           ${isActive ? `<div class="studio-file-cb" onclick="event.stopPropagation();csToggleFile('${esc(storeId)}','${esc(fileKey).replace(/'/g, "\\'")}')"><span class="studio-cb-mark ${isFileSelected ? 'checked' : ''}"></span></div>` : '<span style="width:22px;display:inline-block"></span>'}
           <svg class="studio-file-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           <span class="studio-file-name">${esc(fName)}</span>
           <span class="studio-file-state ${stateClass}">${stateIcon} ${stateLabel}</span>
+          ${isActive && csDocId ? `<button class="btn-admin-sm" onclick="event.stopPropagation();viewFileInCollection('${esc(storeId)}','${esc(csDocId)}')" title="View file" style="padding:2px 6px;font-size:11px;margin-left:auto"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 7 3.5 2.5 7 2.5C10.5 2.5 13 7 13 7C13 7 10.5 11.5 7 11.5C3.5 11.5 1 7 1 7Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.3"/></svg></button>` : ''}
         </div>`;
       });
     }
@@ -4378,11 +4394,13 @@ function studioRenderCollections() {
         const stateLabel = isActive ? 'Active' : (isPending ? 'Processing...' : 'Failed');
         const stateIcon = isActive ? '✓' : (isPending ? '◌' : '✗');
 
+        const studioDocId = (f.name || '').split('/').pop();
         html += `<div class="studio-file-item ${isFailed ? 'file-failed' : ''} ${isFileSelected ? 'file-selected' : ''}" data-file-key="${esc(fileKey)}">
           ${isActive ? `<div class="studio-file-cb" onclick="event.stopPropagation();studioToggleFileSel('${esc(storeId)}','${esc(fileKey).replace(/'/g, "\\'")}')"><span class="studio-cb-mark ${isFileSelected ? 'checked' : ''}"></span></div>` : '<span style="width:22px;display:inline-block"></span>'}
           <svg class="studio-file-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H9L13 6V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9 2V6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           <span class="studio-file-name">${esc(fName)}</span>
           <span class="studio-file-state ${stateClass}">${stateIcon} ${stateLabel}</span>
+          ${isActive && studioDocId ? `<button class="btn-admin-sm" onclick="event.stopPropagation();viewFileInCollection('${esc(storeId)}','${esc(studioDocId)}')" title="View file" style="padding:2px 6px;font-size:11px;margin-left:auto"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 7 3.5 2.5 7 2.5C10.5 2.5 13 7 13 7C13 7 10.5 11.5 7 11.5C3.5 11.5 1 7 1 7Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.3"/></svg></button>` : ''}
         </div>`;
       });
     }
@@ -4924,6 +4942,7 @@ function piRenderCollectionDetail(coll) {
         <div class="pi-file-icon ${fileTypeIcons[f.type] || 'pi-file-icon-txt'}"><svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg></div>
         <div class="pi-file-info"><div class="pi-file-name">${esc(f.name)}</div><div class="pi-file-meta">${esc(f.size)} · <span class="${stateClass}">${stateLabel}</span></div></div>
         <div class="pi-file-actions">
+          ${isActive ? `<button class="pi-file-action-btn view" title="Open file" onclick="event.stopPropagation();piOpenFile('${f.id}','${esc(f.name)}','${esc(f.type || '')}')"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 7s2.2-4.5 6-4.5S13 7 13 7s-2.2 4.5-6 4.5S1 7 1 7z" stroke="currentColor" stroke-width="1.2"/><circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.2"/></svg></button>` : ''}
           <button class="pi-file-action-btn delete" title="Delete" onclick="piDeleteFile('${f.id}')"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4H12M4 4V3C4 2.4 4.4 2 5 2H9C9.6 2 10 2.4 10 3V4M5 6.5V10.5M7 6.5V10.5M9 6.5V10.5M3 4L4 12H10L11 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         ${sel ? '<div class="pi-file-selected-check"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' : ''}
@@ -5053,8 +5072,8 @@ function piRenderCollectionDetail(coll) {
           Files <span class="pi-tab-count">${coll.files.length}</span>
         </button>
         <button class="pi-tab${piActiveTab === 'history' ? ' active' : ''}" onclick="piSwitchTab('history')">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M8 5V8.5L10.5 10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          History ${historyCount > 0 ? `<span class="pi-tab-count">${historyCount}</span>` : ''}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 1H10L13 4V14C13 14.6 12.6 15 12 15H3C2.4 15 2 14.6 2 14V2C2 1.4 2.4 1 3 1Z" stroke="currentColor" stroke-width="1.3"/><path d="M5 8H11M5 10.5H9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          Extracted Policies ${historyCount > 0 ? `<span class="pi-tab-count">${historyCount}</span>` : ''}
         </button>
       </div>
       <div class="pi-tab-content">
@@ -5315,7 +5334,7 @@ function piRenderHistoryDetail(entry) {
     <div class="pi-detail-header">
       <button class="pi-back-btn" onclick="piBackFromHistoryDetail()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <div style="flex:1">
-        <div class="pi-detail-breadcrumb">History &gt; Generation Detail</div>
+        <div class="pi-detail-breadcrumb">Extracted Policies &gt; Generation Detail</div>
         <div class="pi-detail-title" style="font-size:18px">${dateStr} at ${timeStr}</div>
       </div>
     </div>

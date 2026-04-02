@@ -1374,6 +1374,32 @@ textarea::placeholder {
   background: rgba(220, 38, 38, 0.08);
 }
 
+.btn-file-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--color-text-hint);
+  cursor: pointer;
+  transition: var(--transition);
+  flex-shrink: 0;
+  opacity: 0;
+  margin-left: auto;
+}
+
+.collection-file-item:hover .btn-file-view {
+  opacity: 1;
+}
+
+.btn-file-view:hover {
+  color: var(--color-primary);
+  background: rgba(99, 102, 241, 0.08);
+}
+
 /* Collection & file selection checkboxes */
 .coll-checkbox,
 .file-checkbox {

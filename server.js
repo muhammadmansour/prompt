@@ -450,6 +450,10 @@ async function policyCollectionToJSON(row, apiKey) {
 const POLICY_UPLOADS_DIR = path.join(__dirname, 'policy-uploads');
 if (!fs.existsSync(POLICY_UPLOADS_DIR)) fs.mkdirSync(POLICY_UPLOADS_DIR, { recursive: true });
 
+// Ensure collection-uploads directory exists (local copies of file-search files for viewing)
+const COLLECTION_UPLOADS_DIR = path.join(__dirname, 'collection-uploads');
+if (!fs.existsSync(COLLECTION_UPLOADS_DIR)) fs.mkdirSync(COLLECTION_UPLOADS_DIR, { recursive: true });
+
 // Gemini SDK client + in-memory chat sessions (SDK ChatSession objects)
 let genai = null;
 const chatSessions = {};  // sessionId -> { chat: SDK ChatSession, systemPrompt: string }
@@ -2083,6 +2087,28 @@ const server = http.createServer(async (req, res) => {
         console.warn(`Cache creation failed (will use direct system instruction): ${cacheErr.message}`);
       }
 
+      // Build File Search grounding tool from selected collections
+      const fileSearchStoreNames = [];
+      if (context && context.collections && context.collections.length > 0) {
+        context.collections.forEach(c => {
+          const sid = c.storeId || '';
+          if (sid) {
+            const fullName = sid.startsWith('fileSearchStores/') ? sid : `fileSearchStores/${sid}`;
+            if (!fileSearchStoreNames.includes(fullName)) fileSearchStoreNames.push(fullName);
+          }
+        });
+      }
+      // Also gather store IDs from individual file resources
+      if (context && context.fileResources && context.fileResources.length > 0) {
+        context.fileResources.forEach(f => {
+          const sid = f.storeId || '';
+          if (sid) {
+            const fullName = sid.startsWith('fileSearchStores/') ? sid : `fileSearchStores/${sid}`;
+            if (!fileSearchStoreNames.includes(fullName)) fileSearchStoreNames.push(fullName);
+          }
+        });
+      }
+
       // Create SDK chat session — with cached content if available, otherwise system instruction
       const chatConfig = {
         temperature: 0.7,
@@ -2093,6 +2119,12 @@ const server = http.createServer(async (req, res) => {
         chatConfig.cachedContent = cachedContentName;
       } else {
         chatConfig.systemInstruction = systemPrompt;
+      }
+
+      // Add File Search grounding if collections were selected
+      if (fileSearchStoreNames.length > 0) {
+        chatConfig.tools = [{ fileSearch: { fileSearchStoreNames } }];
+        console.log(`[Audit Chat] File Search Stores attached:`, fileSearchStoreNames);
       }
 
       const createdAt = new Date().toISOString();
@@ -2113,13 +2145,14 @@ const server = http.createServer(async (req, res) => {
         systemPrompt,
         context: context || {},
         createdAt,
+        fileSearchStoreNames,
         chat: genai.chats.create({
           model: 'gemini-2.5-pro',
           config: chatConfig
         })
       };
 
-      console.log(`Chat session created & persisted: ${sessionId} (cache: ${cachedContentName || 'none'}, prompt: ${systemPrompt.length} chars)`);
+      console.log(`Chat session created & persisted: ${sessionId} (cache: ${cachedContentName || 'none'}, prompt: ${systemPrompt.length} chars, fileSearch: ${fileSearchStoreNames.length} stores)`);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -2188,18 +2221,45 @@ const server = http.createServer(async (req, res) => {
             chatConfig.history = history;
           }
 
+          // Restore File Search grounding from saved context
+          const savedCtx = JSON.parse(row.context || '{}');
+          const restoredStoreNames = [];
+          if (savedCtx.collections && savedCtx.collections.length > 0) {
+            savedCtx.collections.forEach(c => {
+              const sid = c.storeId || '';
+              if (sid) {
+                const fullName = sid.startsWith('fileSearchStores/') ? sid : `fileSearchStores/${sid}`;
+                if (!restoredStoreNames.includes(fullName)) restoredStoreNames.push(fullName);
+              }
+            });
+          }
+          if (savedCtx.fileResources && savedCtx.fileResources.length > 0) {
+            savedCtx.fileResources.forEach(f => {
+              const sid = f.storeId || '';
+              if (sid) {
+                const fullName = sid.startsWith('fileSearchStores/') ? sid : `fileSearchStores/${sid}`;
+                if (!restoredStoreNames.includes(fullName)) restoredStoreNames.push(fullName);
+              }
+            });
+          }
+          if (restoredStoreNames.length > 0) {
+            chatConfig.tools = [{ fileSearch: { fileSearchStoreNames: restoredStoreNames } }];
+            console.log(`[Audit Chat] Restored File Search Stores:`, restoredStoreNames);
+          }
+
           chatSessions[sessionId] = {
             id: sessionId,
             cachedContentName: null, // Don't reuse expired cache
             systemPrompt: row.system_prompt,
-            context: JSON.parse(row.context || '{}'),
+            context: savedCtx,
             createdAt: row.created_at,
+            fileSearchStoreNames: restoredStoreNames,
             chat: genai.chats.create({
               model: 'gemini-2.5-pro',
               config: chatConfig
             })
           };
-          console.log(`Chat session restored from DB: ${sessionId} (${history.length} messages, using systemInstruction)`);
+          console.log(`Chat session restored from DB: ${sessionId} (${history.length} messages, ${restoredStoreNames.length} file search stores)`);
         } else {
           // No DB record — create a fresh session
           const createdAt = new Date().toISOString();
@@ -2758,6 +2818,26 @@ const server = http.createServer(async (req, res) => {
           console.log(`[Policy] Upload complete:`, finalResult.done);
         }
 
+        // Save local copy for viewing/downloading
+        try {
+          const pStoreDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          if (!fs.existsSync(pStoreDir)) fs.mkdirSync(pStoreDir, { recursive: true });
+          const pSafeFileName = (fileName || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+          const pLocalFilePath = path.join(pStoreDir, pSafeFileName);
+          fs.writeFileSync(pLocalFilePath, fileBuffer);
+          const pMetaPath = path.join(pStoreDir, '_metadata.json');
+          let pMeta = {};
+          try { pMeta = JSON.parse(fs.readFileSync(pMetaPath, 'utf-8')); } catch {}
+          const pDocName = finalResult?.response?.name || finalResult?.name || '';
+          const pDocId = pDocName.split('/').pop() || pSafeFileName;
+          pMeta[pDocId] = { originalName: fileName, localFile: pSafeFileName, mimeType: mime, size: fileBuffer.length, uploadedAt: new Date().toISOString() };
+          pMeta[pSafeFileName] = pMeta[pDocId];
+          fs.writeFileSync(pMetaPath, JSON.stringify(pMeta, null, 2));
+          console.log(`[Policy] Local copy saved: ${pLocalFilePath}`);
+        } catch (pLocalErr) {
+          console.warn(`[Policy] Could not save local copy of "${fileName}": ${pLocalErr.message}`);
+        }
+
         console.log(`[Policy] File "${fileName}" uploaded to store ${storeId}`);
         sendJSON(res, 200, { success: true, data: finalResult });
         return;
@@ -2781,6 +2861,48 @@ const server = http.createServer(async (req, res) => {
         const docs = await listStoreDocuments(storeName, apiKey);
 
         sendJSON(res, 200, { success: true, storeId, data: docs });
+        return;
+      }
+
+      // GET /api/policy-collections/:id/files/:fileId — View/download a locally stored file
+      if (collId && subResource === 'files' && fileId && req.method === 'GET') {
+        const collRow = dbGetPolicyCollection.get(collId);
+        const storeId = collRow?.store_id || '';
+        if (!storeId) {
+          sendJSON(res, 404, { error: 'Collection has no store' });
+          return;
+        }
+        try {
+          const storeDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          const metaPath = path.join(storeDir, '_metadata.json');
+          if (!fs.existsSync(metaPath)) {
+            sendJSON(res, 404, { error: 'No local files found for this collection.' });
+            return;
+          }
+          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+          const fileMeta = meta[fileId];
+          if (!fileMeta) {
+            sendJSON(res, 404, { error: 'File not found locally.' });
+            return;
+          }
+          const localFilePath = path.join(storeDir, fileMeta.localFile);
+          if (!fs.existsSync(localFilePath)) {
+            sendJSON(res, 404, { error: 'Local file has been removed.' });
+            return;
+          }
+          const fileContent = fs.readFileSync(localFilePath);
+          const mime = fileMeta.mimeType || 'application/octet-stream';
+          const originalName = fileMeta.originalName || fileMeta.localFile;
+          res.writeHead(200, {
+            'Content-Type': mime,
+            'Content-Disposition': `inline; filename="${encodeURIComponent(originalName)}"`,
+            'Content-Length': fileContent.length
+          });
+          res.end(fileContent);
+        } catch (viewErr) {
+          console.error('[Policy] File view error:', viewErr.message);
+          sendJSON(res, 500, { error: viewErr.message });
+        }
         return;
       }
 
@@ -3493,11 +3615,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Collections API ----
-  const collectionsMatch = url.pathname.match(/^\/api\/collections(?:\/([^\/]+))?(?:\/(files)(?:\/([^\/]+))?)?$/);
+  const collectionsMatch = url.pathname.match(/^\/api\/collections(?:\/([^\/]+))?(?:\/(files)(?:\/([^\/]+))?(?:\/(view))?)?$/);
   if (collectionsMatch) {
     const storeId = collectionsMatch[1];
     const isFiles = collectionsMatch[2] === 'files';
     const fileId = collectionsMatch[3]; // optional file ID for single-file ops
+    const isView = collectionsMatch[4] === 'view'; // /view suffix for downloading
     const apiKey = GEMINI_API_KEY || req.headers['x-api-key'];
 
     if (!apiKey) {
@@ -3537,6 +3660,17 @@ const server = http.createServer(async (req, res) => {
         console.log(`Deleting store: ${storeName}`);
         
         await deleteFileSearchStore(storeName, apiKey);
+
+        // Clean up local copies
+        try {
+          const localStoreDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          if (fs.existsSync(localStoreDir)) {
+            fs.rmSync(localStoreDir, { recursive: true, force: true });
+            console.log(`Local files cleaned up for store ${storeId}`);
+          }
+        } catch (cleanErr) {
+          console.warn(`Could not clean up local files for store ${storeId}: ${cleanErr.message}`);
+        }
         
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
@@ -3544,7 +3678,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       // POST /api/collections/:id/files — Upload file to a store
-      if (storeId && isFiles && req.method === 'POST') {
+      if (storeId && isFiles && !fileId && req.method === 'POST') {
         const body = await parseBody(req);
         const { fileName, mimeType, data } = body;
 
@@ -3576,6 +3710,30 @@ const server = http.createServer(async (req, res) => {
           console.log('Upload complete:', finalResult.done);
         }
 
+        // Save a local copy for viewing/downloading
+        try {
+          const storeDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          if (!fs.existsSync(storeDir)) fs.mkdirSync(storeDir, { recursive: true });
+          // Use a safe filename: store the original name in a metadata JSON alongside the binary
+          const safeFileName = (fileName || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+          const localFilePath = path.join(storeDir, safeFileName);
+          fs.writeFileSync(localFilePath, fileBuffer);
+          // Also save metadata for name mapping
+          const metaPath = path.join(storeDir, '_metadata.json');
+          let meta = {};
+          try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); } catch {}
+          // Extract the document ID from the result (the Gemini API returns it)
+          const docName = finalResult?.response?.name || finalResult?.name || '';
+          const docId = docName.split('/').pop() || safeFileName;
+          meta[docId] = { originalName: fileName, localFile: safeFileName, mimeType: mimeType || 'application/octet-stream', size: fileBuffer.length, uploadedAt: new Date().toISOString() };
+          // Also store by safe filename as a fallback lookup
+          meta[safeFileName] = meta[docId];
+          fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+          console.log(`Local copy saved: ${localFilePath} (docId: ${docId})`);
+        } catch (localErr) {
+          console.warn(`Could not save local copy of "${fileName}": ${localErr.message}`);
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: true,
@@ -3584,8 +3742,55 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      // GET /api/collections/:id/files/:fileId/view — Download/view a locally stored file
+      if (storeId && isFiles && fileId && isView && req.method === 'GET') {
+        try {
+          const storeDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          const metaPath = path.join(storeDir, '_metadata.json');
+
+          if (!fs.existsSync(metaPath)) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No local files found for this collection. Files uploaded before local storage was enabled cannot be viewed.' }));
+            return;
+          }
+
+          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+          const fileMeta = meta[fileId];
+
+          if (!fileMeta) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'File not found locally. It may have been uploaded before local storage was enabled.' }));
+            return;
+          }
+
+          const localFilePath = path.join(storeDir, fileMeta.localFile);
+          if (!fs.existsSync(localFilePath)) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Local file has been removed.' }));
+            return;
+          }
+
+          const fileContent = fs.readFileSync(localFilePath);
+          const mime = fileMeta.mimeType || 'application/octet-stream';
+          const originalName = fileMeta.originalName || fileMeta.localFile;
+
+          // Set headers for inline viewing (browser will display PDFs, images, etc.)
+          res.writeHead(200, {
+            'Content-Type': mime,
+            'Content-Disposition': `inline; filename="${encodeURIComponent(originalName)}"`,
+            'Content-Length': fileContent.length
+          });
+          res.end(fileContent);
+        } catch (viewErr) {
+          console.error('File view error:', viewErr.message);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: viewErr.message }));
+        }
+        return;
+      }
+
       // GET /api/collections/:id/files — List files in a store
-      if (storeId && isFiles && req.method === 'GET') {
+      if (storeId && isFiles && !fileId && req.method === 'GET') {
         const storeName = `fileSearchStores/${storeId}`;
         console.log(`Listing documents in ${storeName}`);
         
@@ -3597,13 +3802,37 @@ const server = http.createServer(async (req, res) => {
       }
 
       // DELETE /api/collections/:id/files/:fileId — Delete a single file
-      if (storeId && isFiles && fileId && req.method === 'DELETE') {
+      if (storeId && isFiles && fileId && !isView && req.method === 'DELETE') {
         const documentName = `fileSearchStores/${storeId}/documents/${fileId}`;
         console.log(`Deleting document: ${documentName}`);
         
         await deleteDocument(documentName, apiKey);
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+        // Also clean up local copy
+        try {
+          const delStoreDir = path.join(COLLECTION_UPLOADS_DIR, storeId);
+          const delMetaPath = path.join(delStoreDir, '_metadata.json');
+          if (fs.existsSync(delMetaPath)) {
+            const delMeta = JSON.parse(fs.readFileSync(delMetaPath, 'utf-8'));
+            if (delMeta[fileId]) {
+              const localFile = delMeta[fileId].localFile;
+              if (localFile) {
+                const localPath = path.join(delStoreDir, localFile);
+                if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+              }
+              delete delMeta[fileId];
+              // Clean up the safe-name alias too
+              Object.keys(delMeta).forEach(k => {
+                if (delMeta[k] && delMeta[k].localFile === delMeta[fileId]?.localFile) delete delMeta[k];
+              });
+              fs.writeFileSync(delMetaPath, JSON.stringify(delMeta, null, 2));
+            }
+          }
+        } catch (delLocalErr) {
+          console.warn(`Could not clean up local file for ${fileId}: ${delLocalErr.message}`);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
         return;
       }

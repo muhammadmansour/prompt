@@ -10,6 +10,11 @@ node_modules/
 sessions.db
 sessions.db-wal
 sessions.db-shm
+wathba.db
+
+# File uploads
+policy-uploads/
+collection-uploads/
 
 # OS
 .DS_Store

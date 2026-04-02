@@ -4510,6 +4510,8 @@
 .pi-file-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .pi-file-action-btn { padding: 6px; color: #d1d5db; border: none; background: none; border-radius: 4px; cursor: pointer; transition: color 0.15s; }
 .pi-file-action-btn:hover { color: #6b7280; }
+.pi-file-action-btn.view { color: #9ca3af; }
+.pi-file-action-btn.view:hover { color: #2563eb; }
 .pi-file-action-btn.delete:hover { color: #ef4444; }
 .pi-file-selected-check { width: 20px; height: 20px; border-radius: 50%; background: var(--admin-primary); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 

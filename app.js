@@ -1455,6 +1455,14 @@ function renderCollections() {
                 </svg>
                 <span class="file-name">${escapeHtml(fName)}</span>
                 <span class="file-status ${stateClass}" title="${fState}">${stateIcon} ${stateLabel}</span>
+                ${isActive ? `
+                <button type="button" class="btn-file-view" onclick="event.stopPropagation(); viewCollectionFile('${escapeHtml(storeId)}', '${escapeHtml((file.name || '').split('/').pop())}', '${escapeHtml(fName)}')" title="View file">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M1 7C1 7 3.5 2.5 7 2.5C10.5 2.5 13 7 13 7C13 7 10.5 11.5 7 11.5C3.5 11.5 1 7 1 7Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.3"/>
+                  </svg>
+                </button>
+                ` : ''}
               </div>
             `;
           }).join('')}
@@ -1574,6 +1582,16 @@ function getSelectedCollections() {
       storeId: s.name,
       displayName: s.displayName || s.name
     }));
+}
+
+// View/download a file from a collection (opens in new tab)
+function viewCollectionFile(storeId, fileId, displayName) {
+  if (!fileId) {
+    showToast('error', 'Cannot View', 'File identifier not available.');
+    return;
+  }
+  const viewUrl = `/api/collections/${encodeURIComponent(storeId)}/files/${encodeURIComponent(fileId)}/view`;
+  window.open(viewUrl, '_blank');
 }
 
 // Update collection-related summary counts
@@ -1754,4 +1772,5 @@ window.toggleFileSelection = toggleFileSelection;
 window.removeContextFile = removeContextFile;
 window.uploadFileToCollection = uploadFileToCollection;
 window.deleteCollection = deleteCollection;
+window.viewCollectionFile = viewCollectionFile;
 window.deleteSession = deleteSession;
