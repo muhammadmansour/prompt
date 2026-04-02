@@ -1658,6 +1658,7 @@ function renderOrgChatFAB(ctx) {
       </div>
       <div class="org-chat-header-actions">
         <button class="org-chat-header-btn" id="org-chat-back-btn" title="Back to stores" onclick="orgChatGoToStep1()" style="display:none"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="org-chat-header-btn" id="org-chat-expand-btn" title="Expand" onclick="orgChatToggleExpand()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2h4M2 2v4M14 14h-4M14 14v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
         <button class="org-chat-header-btn" title="Close" onclick="toggleOrgChat()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
     </div>
@@ -1733,6 +1734,24 @@ function orgChatGoToStep1() {
   if (backBtn) backBtn.style.display = 'none';
 }
 window.orgChatGoToStep1 = orgChatGoToStep1;
+
+let orgChatExpanded = false;
+function orgChatToggleExpand() {
+  const panel = document.getElementById('org-chat-panel');
+  const btn = document.getElementById('org-chat-expand-btn');
+  const fab = document.querySelector('.org-chat-fab');
+  if (!panel) return;
+  orgChatExpanded = !orgChatExpanded;
+  panel.classList.toggle('expanded', orgChatExpanded);
+  if (fab) fab.style.display = orgChatExpanded ? 'none' : '';
+  if (btn) {
+    btn.title = orgChatExpanded ? 'Collapse' : 'Expand';
+    btn.innerHTML = orgChatExpanded
+      ? '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 2v3H2M11 14v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2h4M2 2v4M14 14h-4M14 14v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  }
+}
+window.orgChatToggleExpand = orgChatToggleExpand;
 
 async function orgChatLoadStores(currentCtx) {
   const listEl = document.getElementById('org-chat-stores-list');
@@ -1985,11 +2004,11 @@ function formatOrgChatMarkdown(text) {
 // Clean up chat on navigating away
 const origOrgBackToList = window.orgBackToList;
 window.orgBackToList = function() {
-  // Remove chat FAB and panel
   document.querySelectorAll('.org-chat-fab, .org-chat-panel').forEach(el => el.remove());
   orgChatSessionId = null;
   orgChatOrgId = null;
   orgChatOpen = false;
+  orgChatExpanded = false;
   orgChatSelectedStores = [];
   if (origOrgBackToList) origOrgBackToList();
 };
