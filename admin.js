@@ -103,7 +103,7 @@ function navigateTo(page, pushState = true, subId = null) {
   if (page === 'audit-sessions') loadSessions();
   if (page === 'audit-studio') loadAuditStudio();
   if (page === 'file-collections') loadCollections();
-  if (page === 'org-contexts') loadOrgContexts();
+  if (page === 'org-contexts') loadOrgContexts(subId);
   if (page === 'prompts') loadPrompts();
   if (page === 'controls-studio') loadControlsStudio();
   if (page === 'merge-optimizer') loadMergeOptimizer();
@@ -724,7 +724,7 @@ function renderFCFiles(storeId) {
 
 // ─── Organization Contexts Page ───────────────────────────────
 
-async function loadOrgContexts() {
+async function loadOrgContexts(subId) {
   try {
     const d = await fetchJSON(API.orgContexts);
     orgContexts = d.contexts || [];
@@ -733,6 +733,15 @@ async function loadOrgContexts() {
   if (!frameworks || !frameworks.length) await fetchFrameworks();
   renderOrgStats();
   renderOrgContextsList();
+
+  // If a subId is provided (deep link), open that context's detail page
+  if (subId) {
+    const idx = orgContexts.findIndex(c => c.id === subId);
+    if (idx >= 0) {
+      orgDetailCtxId = subId;
+      renderOrgContextDetail(orgContexts[idx], idx);
+    }
+  }
 }
 
 function renderOrgStats() {
@@ -851,6 +860,9 @@ function renderOrgContextsList(query) {
           <div class="org-ctx-right">
             <div class="org-ctx-fws">${fwHtml}</div>
             ${docCount > 0 ? `<span class="org-ctx-docs">${docCount} docs</span>` : ''}
+            <button class="org-ctx-action-btn" onclick="event.stopPropagation();openOrgContextDetail(${origIdx})" title="Open">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2H12V5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 2L7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10 8V11C10 11.6 9.6 12 9 12H3C2.4 12 2 11.6 2 11V5C2 4.4 2.4 4 3 4H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
             <button class="org-ctx-action-btn" onclick="event.stopPropagation();editOrgContext(${origIdx})" title="Edit">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
@@ -1436,6 +1448,156 @@ async function deleteOrgContext(idx) {
   }
 }
 window.deleteOrgContext = deleteOrgContext;
+
+// ─── Org Context Detail Page ─────────────────────────────────
+let orgDetailCtxId = null;
+
+function openOrgContextDetail(idx) {
+  const ctx = orgContexts[idx];
+  if (!ctx) return;
+  orgDetailCtxId = ctx.id;
+  updateRoute('org-contexts', ctx.id);
+  renderOrgContextDetail(ctx, idx);
+}
+window.openOrgContextDetail = openOrgContextDetail;
+
+function orgBackToList() {
+  orgDetailCtxId = null;
+  updateRoute('org-contexts', null);
+  // Show list UI, hide detail
+  const container = document.getElementById('page-org-contexts').querySelector('.page-container');
+  container.querySelectorAll('.org-detail-page').forEach(el => el.remove());
+  container.querySelectorAll('.org-list-section').forEach(el => el.style.display = '');
+  // Also show the header
+  const hdr = container.querySelector('.page-header');
+  if (hdr) hdr.style.display = '';
+}
+window.orgBackToList = orgBackToList;
+
+function renderOrgContextDetail(ctx, idx) {
+  const container = document.getElementById('page-org-contexts').querySelector('.page-container');
+
+  // Hide list sections
+  const header = container.querySelector('.page-header');
+  if (header) header.style.display = 'none';
+  container.querySelectorAll('.org-stats-grid, .admin-search-bar, #org-contexts-list').forEach(el => {
+    el.classList.add('org-list-section');
+    el.style.display = 'none';
+  });
+  // Remove old detail if any
+  container.querySelectorAll('.org-detail-page').forEach(el => el.remove());
+
+  const sectorLabels = { banking: 'Banking & Financial Services', financial: 'Financial', government: 'Government', healthcare: 'Healthcare', energy: 'Energy & Utilities', telecom: 'Telecommunications', education: 'Education', retail: 'Retail & E-Commerce', insurance: 'Insurance', technology: 'Technology', defense: 'Defense & Military', manufacturing: 'Manufacturing', transportation: 'Transportation & Logistics', custom: 'Custom', other: 'Other' };
+  const sizeLabels = { small: 'Small', medium: 'Medium', large: 'Large', enterprise: 'Enterprise' };
+  const govLabel = { centralized: 'Centralized', decentralized: 'Decentralized', federated: 'Federated', hybrid: 'Hybrid' };
+  const matLabels = { 1: 'Initial', 2: 'Developing', 3: 'Defined', 4: 'Managed', 5: 'Optimizing' };
+
+  const name = ctx.nameEn || ctx.name || 'Untitled';
+  const nameAr = ctx.nameAr || '';
+  const sector = ctx.sectorCustom || sectorLabels[ctx.sector] || ctx.sector || '—';
+  const size = sizeLabels[ctx.size] || ctx.size || '—';
+  const maturity = ctx.complianceMaturity || 1;
+  const gov = govLabel[ctx.governanceStructure] || ctx.governanceStructure || '—';
+  const dataCls = ctx.dataClassification || '—';
+  const geo = ctx.geographicScope || '—';
+  const itInfra = ctx.itInfrastructure || '—';
+  const fws = ctx.obligatoryFrameworks || [];
+  const mandates = ctx.regulatoryMandates || [];
+  const objectives = ctx.strategicObjectives || [];
+  const policies = ctx.policies || [];
+  const docs = ctx.documents || [];
+  const notes = ctx.notes || '';
+
+  const fwPills = fws.map(f => `<span class="org-fw-pill">${esc(f)}</span>`).join('') || '<span style="color:#9ca3af">None</span>';
+  const mandPills = mandates.map(m => `<span class="org-fw-pill" style="color:#b45309;background:#fffbeb;border-color:#fde68a">${esc(m)}</span>`).join('') || '<span style="color:#9ca3af">None</span>';
+  const policyPills = policies.map(p => {
+    const pName = typeof p === 'object' ? p.name : p;
+    const refId = typeof p === 'object' && p.refId ? ` (${esc(p.refId)})` : '';
+    return `<span class="org-fw-pill" style="color:#4338ca;background:#eef2ff;border-color:#c7d2fe">${esc(pName)}${refId}</span>`;
+  }).join('') || '<span style="color:#9ca3af">None</span>';
+
+  const objHtml = objectives.length
+    ? `<ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(o)}</li>`).join('')}</ul>`
+    : '<span style="color:#9ca3af">None</span>';
+
+  const docsHtml = docs.length
+    ? docs.map(d => `<div class="org-detail-doc-row"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg><span>${esc(d.name || d)}</span></div>`).join('')
+    : '<span style="color:#9ca3af">No documents</span>';
+
+  const matDots = [1,2,3,4,5].map(n =>
+    `<span class="org-detail-mat-dot ${n <= maturity ? 'active' : ''}" title="Level ${n}: ${matLabels[n]}">${n}</span>`
+  ).join('');
+
+  const detailEl = document.createElement('div');
+  detailEl.className = 'org-detail-page';
+  detailEl.innerHTML = `
+    <div class="org-detail-top">
+      <button class="pi-back-btn" onclick="orgBackToList()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div class="org-detail-top-info">
+        <div class="org-detail-breadcrumb">Admin &gt; Organization Contexts</div>
+        <div class="org-detail-title">${esc(name)} ${nameAr ? `<span class="org-detail-title-ar">${esc(nameAr)}</span>` : ''}</div>
+      </div>
+      <div class="org-detail-top-actions">
+        <button class="pi-btn pi-btn-view" onclick="editOrgContext(${idx})"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Edit</button>
+        <button class="org-ctx-action-btn" style="color:#ef4444" onclick="deleteOrgContext(${idx})" title="Delete"><svg width="16" height="16" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M6 7V10M8 7V10M4 4L5 12H9L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+    </div>
+
+    <div class="org-detail-grid">
+      <div class="org-detail-card">
+        <div class="org-detail-card-title">General Information</div>
+        <div class="org-detail-field-grid">
+          <div class="org-detail-field"><div class="org-detail-field-label">Sector</div><div class="org-detail-field-value">${esc(sector)}</div></div>
+          <div class="org-detail-field"><div class="org-detail-field-label">Organization Size</div><div class="org-detail-field-value">${esc(size)}</div></div>
+          <div class="org-detail-field"><div class="org-detail-field-label">Governance Structure</div><div class="org-detail-field-value">${esc(gov)}</div></div>
+          <div class="org-detail-field"><div class="org-detail-field-label">Data Classification</div><div class="org-detail-field-value">${esc(dataCls)}</div></div>
+          <div class="org-detail-field"><div class="org-detail-field-label">Geographic Scope</div><div class="org-detail-field-value">${esc(geo)}</div></div>
+          <div class="org-detail-field"><div class="org-detail-field-label">IT Infrastructure</div><div class="org-detail-field-value">${esc(itInfra)}</div></div>
+        </div>
+      </div>
+
+      <div class="org-detail-card">
+        <div class="org-detail-card-title">Compliance Maturity</div>
+        <div class="org-detail-maturity">
+          <div class="org-detail-mat-bar">${matDots}</div>
+          <div class="org-detail-mat-label">Level ${maturity} — ${matLabels[maturity] || maturity}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="org-detail-card">
+      <div class="org-detail-card-title">Obligatory Frameworks</div>
+      <div class="org-detail-pills">${fwPills}</div>
+    </div>
+
+    <div class="org-detail-card">
+      <div class="org-detail-card-title">Regulatory Mandates</div>
+      <div class="org-detail-pills">${mandPills}</div>
+    </div>
+
+    ${policies.length ? `<div class="org-detail-card">
+      <div class="org-detail-card-title">Policies</div>
+      <div class="org-detail-pills">${policyPills}</div>
+    </div>` : ''}
+
+    <div class="org-detail-card">
+      <div class="org-detail-card-title">Strategic Objectives</div>
+      <div class="org-detail-section-body">${objHtml}</div>
+    </div>
+
+    ${docs.length ? `<div class="org-detail-card">
+      <div class="org-detail-card-title">Documents</div>
+      <div class="org-detail-section-body">${docsHtml}</div>
+    </div>` : ''}
+
+    ${notes ? `<div class="org-detail-card">
+      <div class="org-detail-card-title">Notes</div>
+      <div class="org-detail-notes">${esc(notes)}</div>
+    </div>` : ''}
+  `;
+
+  container.appendChild(detailEl);
+}
 
 // Org search
 const orgSearch = document.getElementById('org-search');

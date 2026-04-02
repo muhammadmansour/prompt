@@ -2732,6 +2732,41 @@
   margin-left: 8px;
 }
 
+/* ---------- Org Context Detail Page ---------- */
+.org-detail-page { animation: fadeIn 0.2s ease; }
+.org-detail-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 24px; }
+.org-detail-top .pi-back-btn { margin-top: 4px; }
+.org-detail-top-info { flex: 1; }
+.org-detail-breadcrumb { font-size: 11px; color: #9ca3af; margin-bottom: 4px; }
+.org-detail-title { font-size: 20px; font-weight: 700; color: #111827; display: flex; align-items: baseline; gap: 10px; }
+.org-detail-title-ar { font-size: 15px; font-weight: 400; color: #9ca3af; direction: rtl; }
+.org-detail-top-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+
+.org-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+@media (max-width: 768px) { .org-detail-grid { grid-template-columns: 1fr; } }
+
+.org-detail-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.org-detail-grid .org-detail-card { margin-bottom: 0; }
+.org-detail-card-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.3px; }
+
+.org-detail-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.org-detail-field-label { font-size: 11px; font-weight: 500; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px; }
+.org-detail-field-value { font-size: 14px; color: #111827; font-weight: 500; }
+
+.org-detail-maturity { text-align: center; padding: 12px 0; }
+.org-detail-mat-bar { display: flex; justify-content: center; gap: 8px; margin-bottom: 12px; }
+.org-detail-mat-dot { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #9ca3af; background: #f3f4f6; border: 2px solid #e5e7eb; transition: all 0.2s; }
+.org-detail-mat-dot.active { background: rgba(var(--admin-primary-rgb, 0,119,204), 0.1); color: rgba(var(--admin-primary-rgb, 0,119,204), 1); border-color: rgba(var(--admin-primary-rgb, 0,119,204), 0.4); }
+.org-detail-mat-label { font-size: 13px; color: #6b7280; font-weight: 500; }
+
+.org-detail-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.org-detail-section-body { font-size: 13px; color: #374151; }
+.org-detail-notes { font-size: 13px; color: #6b7280; line-height: 1.6; white-space: pre-wrap; }
+
+.org-detail-doc-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f3f4f6; font-size: 13px; color: #374151; }
+.org-detail-doc-row:last-child { border-bottom: none; }
+.org-detail-doc-row svg { color: #9ca3af; flex-shrink: 0; }
+
 /* ---------- File Collections ---------- */
 .fc-stats-grid {
   display: grid;
