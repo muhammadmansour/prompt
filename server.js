@@ -2104,6 +2104,44 @@ const server = http.createServer(async (req, res) => {
           systemPrompt += `\n---\n## SESSION CONTEXT: User's Initial Query\n"${context.query}"\n`;
           systemPrompt += `\nAddress this query directly in your first response. Tailor all analysis to this specific focus area.\n`;
         }
+
+        // Inject organization context profile
+        if (context.orgContext) {
+          const org = context.orgContext;
+          systemPrompt += `\n---\n## SESSION CONTEXT: Organization Profile\n`;
+          systemPrompt += `- **Name (EN):** ${org.nameEn || '—'}\n`;
+          if (org.nameAr) systemPrompt += `- **Name (AR):** ${org.nameAr}\n`;
+          systemPrompt += `- **Sector:** ${org.sectorCustom || org.sector || '—'}\n`;
+          systemPrompt += `- **Size:** ${org.size || '—'}\n`;
+          systemPrompt += `- **Compliance Maturity Level:** ${org.complianceMaturity || 1}\n`;
+          if (org.governanceStructure) systemPrompt += `- **Governance Structure:** ${org.governanceStructure}\n`;
+          if (org.dataClassification) systemPrompt += `- **Data Classification:** ${org.dataClassification}\n`;
+          if (org.geographicScope) systemPrompt += `- **Geographic Scope:** ${org.geographicScope}\n`;
+          if (org.itInfrastructure) systemPrompt += `- **IT Infrastructure:** ${org.itInfrastructure}\n`;
+          const fws = org.obligatoryFrameworks || [];
+          if (fws.length) systemPrompt += `- **Obligatory Frameworks:** ${fws.join(', ')}\n`;
+          const mandates = org.regulatoryMandates || [];
+          if (mandates.length) systemPrompt += `- **Regulatory Mandates:** ${mandates.join(', ')}\n`;
+          const policies = org.policies || [];
+          if (policies.length) {
+            const pNames = policies.map(p => typeof p === 'object' ? (p.name + (p.refId ? ` (${p.refId})` : '')) : p);
+            systemPrompt += `- **Policies:** ${pNames.join(', ')}\n`;
+          }
+          const objectives = org.strategicObjectives || [];
+          if (objectives.length) systemPrompt += `- **Strategic Objectives:**\n${objectives.map(o => `  - ${o}`).join('\n')}\n`;
+          const metrics = org.trackingMetrics || [];
+          if (metrics.length) {
+            const mNames = metrics.map(m => typeof m === 'object' ? m.name : m);
+            systemPrompt += `- **Tracking Metrics:** ${mNames.join(', ')}\n`;
+          }
+          const risks = org.riskScenarios || [];
+          if (risks.length) {
+            const rNames = risks.map(r => typeof r === 'object' ? r.name : r);
+            systemPrompt += `- **Risk Scenarios:** ${rNames.join(', ')}\n`;
+          }
+          if (org.notes) systemPrompt += `- **Notes:** ${org.notes}\n`;
+          systemPrompt += `\nUse this organization profile to contextualize all your responses. Tailor your GRC advice to this organization's sector, size, maturity level, frameworks, and regulatory mandates.\n`;
+        }
       }
 
       // Create Gemini cached content to store the session context on Gemini's servers

@@ -41,7 +41,8 @@ let sessionContext = {
   fileResources: [],
   collections: [],
   query: '',
-  contextFiles: []
+  contextFiles: [],
+  orgContext: null
 };
 
 // ==========================================
@@ -76,7 +77,8 @@ function loadSessionContext() {
         fileResources: parsed.fileResources || [],
         collections: parsed.collections || [],
         query: parsed.query || '',
-        contextFiles: parsed.contextFiles || []
+        contextFiles: parsed.contextFiles || [],
+        orgContext: parsed.orgContext || null
       };
     }
   } catch (e) {
@@ -88,11 +90,25 @@ function renderContextBar() {
   const reqs = sessionContext.requirements || [];
   const files = sessionContext.fileResources || [];
   const colls = sessionContext.collections || [];
+  const org = sessionContext.orgContext || null;
 
-  // Requirements — show names, not just count
+  // Update first card label for org context sessions
+  const firstCardLabel = document.querySelector('#chat-ctx-bar .chat-ctx-card:first-child .chat-ctx-label');
+  if (firstCardLabel && org && reqs.length === 0) {
+    firstCardLabel.innerHTML = 'Organization <svg class="chat-ctx-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+  }
+
+  // Requirements — show names, not just count; or show org profile if org context
   const reqCount = document.getElementById('ctx-req-count');
   if (reqCount) {
-    if (reqs.length === 0) {
+    if (org && reqs.length === 0) {
+      // Show org context info instead of requirements
+      const fws = org.obligatoryFrameworks || [];
+      let html = `<span class="ctx-inline-req"><b>🏢 ${escapeHtml(org.nameEn || org.name || 'Organization')}</b></span>`;
+      if (org.sector || org.sectorCustom) html += `<br><span style="color:var(--color-text-hint);font-size:0.6875rem">${escapeHtml(org.sectorCustom || org.sector)} · ${escapeHtml(org.size || '')}</span>`;
+      if (fws.length) html += `<br><span style="color:var(--color-text-hint);font-size:0.6875rem">${fws.slice(0, 3).map(f => escapeHtml(f)).join(', ')}${fws.length > 3 ? ' +' + (fws.length - 3) + ' more' : ''}</span>`;
+      reqCount.innerHTML = html;
+    } else if (reqs.length === 0) {
       reqCount.textContent = '0 selected';
     } else if (reqs.length <= 2) {
       // Show actual names
@@ -150,7 +166,21 @@ function renderContextBar() {
   // Populate requirements detail panel
   const reqList = document.getElementById('ctx-req-list');
   if (reqList) {
-    if (reqs.length === 0) {
+    if (org && reqs.length === 0) {
+      // Show org context profile details
+      let html = `<div class="ctx-group-label">🏢 Organization Profile</div>`;
+      html += `<div class="ctx-detail-item"><span class="ctx-ref-id">Name</span><span class="ctx-desc">${escapeHtml(org.nameEn || '')}${org.nameAr ? ' / ' + escapeHtml(org.nameAr) : ''}</span></div>`;
+      if (org.sector || org.sectorCustom) html += `<div class="ctx-detail-item"><span class="ctx-ref-id">Sector</span><span class="ctx-desc">${escapeHtml(org.sectorCustom || org.sector)}</span></div>`;
+      if (org.size) html += `<div class="ctx-detail-item"><span class="ctx-ref-id">Size</span><span class="ctx-desc">${escapeHtml(org.size)}</span></div>`;
+      if (org.complianceMaturity) html += `<div class="ctx-detail-item"><span class="ctx-ref-id">Maturity</span><span class="ctx-desc">Level ${org.complianceMaturity}</span></div>`;
+      if (org.governanceStructure) html += `<div class="ctx-detail-item"><span class="ctx-ref-id">Governance</span><span class="ctx-desc">${escapeHtml(org.governanceStructure)}</span></div>`;
+      const fws = org.obligatoryFrameworks || [];
+      if (fws.length) html += `<div class="ctx-detail-item"><span class="ctx-ref-id">Frameworks</span><span class="ctx-desc">${fws.map(f => escapeHtml(f)).join(', ')}</span></div>`;
+      const mandates = org.regulatoryMandates || [];
+      if (mandates.length) html += `<div class="ctx-detail-item"><span class="ctx-ref-id">Mandates</span><span class="ctx-desc">${mandates.map(m => escapeHtml(m)).join(', ')}</span></div>`;
+      if (org.notes) html += `<div class="ctx-detail-item"><span class="ctx-ref-id">Notes</span><span class="ctx-desc">${escapeHtml(org.notes)}</span></div>`;
+      reqList.innerHTML = html;
+    } else if (reqs.length === 0) {
       reqList.innerHTML = '<div class="ctx-empty">No requirements selected</div>';
     } else {
       // Group by framework
@@ -226,10 +256,14 @@ function updateHeaderSessionInfo() {
     idEl.textContent = sessionContext.sessionId.substring(0, 8) + '...';
     idEl.title = sessionContext.sessionId;
   }
-  // Update title with framework info if available
-  if (titleEl && sessionContext.requirements && sessionContext.requirements.length > 0) {
-    const fw = sessionContext.requirements[0].frameworkName;
-    if (fw) titleEl.textContent = `Audit: ${fw}`;
+  // Update title with framework or org context info
+  if (titleEl) {
+    if (sessionContext.orgContext && sessionContext.orgContext.nameEn) {
+      titleEl.textContent = `Chat: ${sessionContext.orgContext.nameEn}`;
+    } else if (sessionContext.requirements && sessionContext.requirements.length > 0) {
+      const fw = sessionContext.requirements[0].frameworkName;
+      if (fw) titleEl.textContent = `Audit: ${fw}`;
+    }
   }
 }
 
@@ -374,6 +408,7 @@ async function resumeSession(sessionId) {
       sessionContext.collections = data.context.collections || [];
       sessionContext.query = data.context.query || '';
       sessionContext.contextFiles = data.context.contextFiles || [];
+      sessionContext.orgContext = data.context.orgContext || null;
     }
 
     // Update context bar and header with detailed info
@@ -412,7 +447,8 @@ async function initSession() {
           fileResources: sessionContext.fileResources,
           collections: sessionContext.collections,
           query: sessionContext.query,
-          contextFiles: sessionContext.contextFiles
+          contextFiles: sessionContext.contextFiles,
+          orgContext: sessionContext.orgContext || undefined
         }
       })
     });

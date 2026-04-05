@@ -2039,19 +2039,50 @@ function orgChatUpdateSelectedCount() {
   if (startBtn) startBtn.disabled = n === 0;
 }
 
-function orgChatGoToStep2() {
+async function orgChatGoToStep2() {
   if (!orgChatSelectedStores.length) return;
-  orgChatStep = 2;
-  const step1 = document.getElementById('org-chat-step1');
-  const step2 = document.getElementById('org-chat-step2');
-  const backBtn = document.getElementById('org-chat-back-btn');
-  const titleEl = document.getElementById('org-chat-header-title');
-  if (step1) step1.style.display = 'none';
-  if (step2) step2.style.display = 'flex';
-  if (backBtn) backBtn.style.display = 'flex';
-  if (titleEl) titleEl.textContent = 'Chat — ' + orgChatSelectedStores.length + ' store' + (orgChatSelectedStores.length !== 1 ? 's' : '');
-  const input = document.getElementById('org-chat-input');
-  if (input) setTimeout(() => input.focus(), 100);
+
+  const startBtn = document.getElementById('org-chat-start-btn');
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'Creating session...'; }
+
+  try {
+    // Gather org context data for the selected stores
+    const selectedOrgs = orgContexts.filter(o => orgChatSelectedStores.includes(o.storeId));
+    // Use the first selected org as the primary org context (or merge data if needed)
+    const primaryOrg = selectedOrgs[0] || null;
+
+    // Build collections array for file search grounding
+    const collections = orgChatSelectedStores.map(sid => ({
+      storeId: sid,
+      displayName: (orgContexts.find(o => o.storeId === sid) || {}).nameEn || sid,
+    }));
+
+    // Create session via main chat API
+    const payload = {
+      context: {
+        collections,
+        orgContext: primaryOrg, // full org profile data
+        query: primaryOrg
+          ? `I want to discuss governance, risk, and compliance for "${primaryOrg.nameEn || primaryOrg.name || 'this organization'}". Use the uploaded documents and organization context to help me.`
+          : '',
+      }
+    };
+
+    const r = await fetch('/api/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    if (!r.ok || !d.success) throw new Error(d.error || 'Session creation failed');
+
+    // Navigate to the chat page with the new session
+    window.location.href = `chat.html?session=${d.sessionId}`;
+  } catch (err) {
+    console.error('[OrgChat] Session creation error:', err);
+    toast('error', 'Chat Error', err.message);
+    if (startBtn) { startBtn.disabled = false; startBtn.innerHTML = 'Start Chat <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 3L11 8L6 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+  }
 }
 window.orgChatGoToStep2 = orgChatGoToStep2;
 
