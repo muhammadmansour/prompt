@@ -841,6 +841,11 @@ function renderOrgContextsList(query) {
       const refId = typeof p === 'object' && p.refId ? ` (${esc(p.refId)})` : '';
       return `<span class="org-fw-pill" style="color:#4338ca;background:#eef2ff;border-color:#c7d2fe">${esc(name)}${refId}</span>`;
     }).join('');
+    const metrics = ctx.trackingMetrics || [];
+    const metricsHtml = metrics.map(m => {
+      const mName = typeof m === 'object' ? m.name : m;
+      return `<span class="org-fw-pill" style="color:#047857;background:#ecfdf5;border-color:#a7f3d0">${esc(mName)}</span>`;
+    }).join('');
 
     return `
       <div class="org-ctx-card" id="org-card-${origIdx}">
@@ -882,6 +887,7 @@ function renderOrgContextsList(query) {
           ${mandates.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Regulatory Mandates</span><div class="org-ctx-detail-pills">${mandHtml}</div></div>` : ''}
           ${objectives.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Strategic Objectives</span><ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(o)}</li>`).join('')}</ul></div>` : ''}
           ${policies.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Policies</span><div class="org-ctx-detail-pills">${policiesHtml}</div></div>` : ''}
+          ${metrics.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Tracking Metrics</span><div class="org-ctx-detail-pills">${metricsHtml}</div></div>` : ''}
           ${ctx.notes ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Notes</span><p class="org-ctx-notes-text">${esc(ctx.notes)}</p></div>` : ''}
         </div>
       </div>`;
@@ -968,6 +974,18 @@ async function openOrgModal() {
   }
   const polDd = document.getElementById('org-policies-dropdown');
   if (polDd) polDd.classList.remove('open');
+
+  // Fetch GRC metrics if not cached
+  if (!grcMetricsCache) {
+    const metLabel = document.getElementById('org-metrics-label');
+    if (metLabel) metLabel.textContent = 'Loading metrics…';
+    await fetchGrcMetrics();
+  }
+  if (editingOrgIdx === null) {
+    renderMetricsCheckboxes([]);
+  }
+  const metDd = document.getElementById('org-metrics-dropdown');
+  if (metDd) metDd.classList.remove('open');
 }
 function closeOrgModal() { orgModal.classList.remove('active'); document.body.style.overflow = ''; editingOrgIdx = null; clearOrgForm(); }
 let orgObjectives = []; // temp state for objectives list (now stores {id, name} objects)
@@ -1194,6 +1212,123 @@ function getSelectedPolicyIds() {
   return Array.from(checkboxes).map(cb => cb.value);
 }
 
+// ── Tracking Metrics (from GRC metric-instances) ──
+let grcMetricsCache = null;
+
+async function fetchGrcMetrics() {
+  try {
+    const res = await fetch('/api/grc/metric-instances');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    grcMetricsCache = (data.results || []).map(m => ({
+      id: m.id,
+      name: m.name || '',
+      description: m.description || '',
+      value: m.value != null ? m.value : '',
+      target: m.target != null ? m.target : '',
+      result: m.result || '',
+    }));
+    return grcMetricsCache;
+  } catch (err) {
+    console.error('Failed to fetch GRC metrics:', err);
+    grcMetricsCache = [];
+    return [];
+  }
+}
+
+function renderMetricsCheckboxes(selectedIds = []) {
+  const labelEl = document.getElementById('org-metrics-label');
+  const optionsEl = document.getElementById('org-metrics-options');
+  if (!optionsEl) return;
+
+  if (!grcMetricsCache || grcMetricsCache.length === 0) {
+    if (labelEl) labelEl.textContent = 'No metrics available';
+    optionsEl.innerHTML = '';
+    return;
+  }
+
+  optionsEl.innerHTML = grcMetricsCache.map(m => {
+    const checked = selectedIds.includes(m.id) ? 'checked' : '';
+    const desc = m.description ? `<br><span style="font-size:10px;color:#9ca3af">${esc(m.description)}</span>` : '';
+    return `<label>
+      <input type="checkbox" value="${esc(m.id)}" ${checked} onchange="updateMetricsLabel()">
+      <span><strong>${esc(m.name)}</strong>${desc}</span>
+    </label>`;
+  }).join('');
+
+  updateMetricsLabel();
+}
+
+function toggleMetricsDropdown() {
+  const dd = document.getElementById('org-metrics-dropdown');
+  if (dd) dd.classList.toggle('open');
+}
+window.toggleMetricsDropdown = toggleMetricsDropdown;
+
+// Close metrics dropdown when clicking outside
+document.addEventListener('click', e => {
+  const dd = document.getElementById('org-metrics-dropdown');
+  if (dd && !dd.contains(e.target)) dd.classList.remove('open');
+});
+
+function filterMetricsDropdown(query) {
+  const q = (query || '').toLowerCase();
+  const options = document.querySelectorAll('#org-metrics-options label');
+  options.forEach(lbl => {
+    const text = lbl.textContent.toLowerCase();
+    lbl.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+window.filterMetricsDropdown = filterMetricsDropdown;
+
+function updateMetricsLabel() {
+  const labelEl = document.getElementById('org-metrics-label');
+  const chipsEl = document.getElementById('org-metrics-chips');
+  const checkboxes = document.querySelectorAll('#org-metrics-options input[type="checkbox"]:checked');
+  const count = checkboxes.length;
+
+  if (labelEl) {
+    labelEl.textContent = count === 0 ? 'Select metrics…' : `${count} metric${count > 1 ? 's' : ''} selected`;
+  }
+
+  if (chipsEl) {
+    if (count === 0) {
+      chipsEl.innerHTML = '';
+    } else {
+      chipsEl.innerHTML = Array.from(checkboxes).map(cb => {
+        const m = grcMetricsCache?.find(met => met.id === cb.value);
+        if (!m) return '';
+        return `<span class="multiselect-chip">
+          ${esc(m.name)}
+          <button type="button" onclick="removeMetricById('${esc(m.id)}')" class="multiselect-chip-remove">&times;</button>
+        </span>`;
+      }).join('');
+    }
+  }
+}
+window.updateMetricsLabel = updateMetricsLabel;
+
+function removeMetricById(id) {
+  const cb = document.querySelector(`#org-metrics-options input[value="${id}"]`);
+  if (cb) { cb.checked = false; updateMetricsLabel(); }
+}
+window.removeMetricById = removeMetricById;
+
+function getSelectedMetrics() {
+  const checkboxes = document.querySelectorAll('#org-metrics-options input[type="checkbox"]:checked');
+  const selected = [];
+  checkboxes.forEach(cb => {
+    const m = grcMetricsCache?.find(met => met.id === cb.value);
+    if (m) selected.push({ id: m.id, name: m.name });
+  });
+  return selected;
+}
+
+function getSelectedMetricIds() {
+  const checkboxes = document.querySelectorAll('#org-metrics-options input[type="checkbox"]:checked');
+  return Array.from(checkboxes).map(cb => cb.value);
+}
+
 // ── Add Objective Modal ──
 const addObjModal = document.getElementById('add-obj-modal-overlay');
 
@@ -1301,6 +1436,7 @@ function clearOrgForm() {
   orgObjectives = [];
   renderObjectivesCheckboxes([]);
   renderPoliciesCheckboxes([]);
+  renderMetricsCheckboxes([]);
   document.getElementById('org-notes').value = '';
 }
 
@@ -1366,6 +1502,7 @@ orgModalSave.addEventListener('click', async () => {
     strategicObjectives: getSelectedObjectives(),
     obligatoryFrameworks: mandates,
     policies: getSelectedPolicies(),
+    trackingMetrics: getSelectedMetrics(),
     notes,
     isActive: true,
   };
@@ -1431,6 +1568,16 @@ async function editOrgContext(idx) {
   const savedPolicies = ctx.policies || [];
   const savedPolicyIds = savedPolicies.map(p => typeof p === 'object' ? p.id : p).filter(Boolean);
   renderPoliciesCheckboxes(savedPolicyIds);
+
+  // Pre-select saved metrics by matching id or name → id
+  const savedMetrics = ctx.trackingMetrics || [];
+  const savedMetricIds = savedMetrics.map(m => typeof m === 'object' ? m.id : m).filter(Boolean);
+  // Also match by name if stored as strings
+  const metricIdsByName = (grcMetricsCache || [])
+    .filter(met => savedMetrics.includes(met.name))
+    .map(met => met.id);
+  const allMetricIds = [...new Set([...savedMetricIds, ...metricIdsByName])];
+  renderMetricsCheckboxes(allMetricIds);
 
   document.getElementById('org-name-en').focus();
 }
@@ -1509,6 +1656,7 @@ function renderOrgContextDetail(ctx, idx) {
   const mandates = ctx.regulatoryMandates || [];
   const objectives = ctx.strategicObjectives || [];
   const policies = ctx.policies || [];
+  const trackingMetrics = ctx.trackingMetrics || [];
   const docs = ctx.documents || [];
   const notes = ctx.notes || '';
 
@@ -1523,6 +1671,11 @@ function renderOrgContextDetail(ctx, idx) {
   const objHtml = objectives.length
     ? `<ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(o)}</li>`).join('')}</ul>`
     : '<span style="color:#9ca3af">None</span>';
+
+  const metricPills = trackingMetrics.map(m => {
+    const mName = typeof m === 'object' ? m.name : m;
+    return `<span class="org-fw-pill" style="color:#047857;background:#ecfdf5;border-color:#a7f3d0">${esc(mName)}</span>`;
+  }).join('') || '<span style="color:#9ca3af">None</span>';
 
   const docsHtml = docs.length
     ? docs.map(d => `<div class="org-detail-doc-row"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/></svg><span>${esc(d.name || d)}</span></div>`).join('')
@@ -1587,6 +1740,11 @@ function renderOrgContextDetail(ctx, idx) {
     <div class="org-detail-card">
       <div class="org-detail-card-title">Strategic Objectives</div>
       <div class="org-detail-section-body">${objHtml}</div>
+    </div>
+
+    <div class="org-detail-card">
+      <div class="org-detail-card-title">Tracking Metrics</div>
+      <div class="org-detail-pills">${metricPills}</div>
     </div>
 
     ${docs.length ? `<div class="org-detail-card">
