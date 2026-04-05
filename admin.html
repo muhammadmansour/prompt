@@ -747,6 +747,31 @@
           </div>
         </div>
 
+        <!-- Section: Risk Scenarios -->
+        <div class="org-form-section">
+          <div class="org-form-section-title">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L13 5V9L7 13L1 9V5L7 1Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 5V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="10" r="0.7" fill="currentColor"/></svg>
+            Risk Scenarios
+          </div>
+          <div class="admin-form-row">
+            <label class="admin-form-label">Linked Risk Scenarios</label>
+            <div style="display:flex;gap:8px;align-items:flex-start">
+              <div class="multiselect-dropdown" id="org-risk-scenarios-dropdown" style="flex:1">
+                <div class="multiselect-trigger" id="org-risk-scenarios-trigger" onclick="toggleRiskScenariosDropdown()">
+                  <span class="multiselect-placeholder" id="org-risk-scenarios-label">Loading risk scenarios…</span>
+                  <svg class="multiselect-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="multiselect-menu" id="org-risk-scenarios-menu">
+                  <input type="text" class="multiselect-search" id="org-risk-scenarios-search" placeholder="Search risk scenarios…" oninput="filterRiskScenariosDropdown(this.value)" autocomplete="off" />
+                  <div id="org-risk-scenarios-options" style="max-height:200px;overflow-y:auto"></div>
+                </div>
+              </div>
+            </div>
+            <div class="multiselect-chips" id="org-risk-scenarios-chips"></div>
+            <span class="admin-form-hint">Select risk scenarios from GRC risk scenarios</span>
+          </div>
+        </div>
+
         <!-- Section: Policies -->
         <div class="org-form-section">
           <div class="org-form-section-title">

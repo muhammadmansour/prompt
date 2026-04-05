@@ -846,6 +846,11 @@ function renderOrgContextsList(query) {
       const mName = typeof m === 'object' ? m.name : m;
       return `<span class="org-fw-pill" style="color:#047857;background:#ecfdf5;border-color:#a7f3d0">${esc(mName)}</span>`;
     }).join('');
+    const riskScenarios = ctx.riskScenarios || [];
+    const riskScenariosHtml = riskScenarios.map(r => {
+      const rName = typeof r === 'object' ? r.name : r;
+      return `<span class="org-fw-pill" style="color:#dc2626;background:#fef2f2;border-color:#fecaca">${esc(rName)}</span>`;
+    }).join('');
 
     return `
       <div class="org-ctx-card" id="org-card-${origIdx}">
@@ -888,6 +893,7 @@ function renderOrgContextsList(query) {
           ${objectives.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Strategic Objectives</span><ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(o)}</li>`).join('')}</ul></div>` : ''}
           ${policies.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Policies</span><div class="org-ctx-detail-pills">${policiesHtml}</div></div>` : ''}
           ${metrics.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Tracking Metrics</span><div class="org-ctx-detail-pills">${metricsHtml}</div></div>` : ''}
+          ${riskScenarios.length ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Risk Scenarios</span><div class="org-ctx-detail-pills">${riskScenariosHtml}</div></div>` : ''}
           ${ctx.notes ? `<div class="org-ctx-detail-section"><span class="org-ctx-detail-label">Notes</span><p class="org-ctx-notes-text">${esc(ctx.notes)}</p></div>` : ''}
         </div>
       </div>`;
@@ -986,6 +992,18 @@ async function openOrgModal() {
   }
   const metDd = document.getElementById('org-metrics-dropdown');
   if (metDd) metDd.classList.remove('open');
+
+  // Fetch GRC risk scenarios if not cached
+  if (!grcRiskScenariosCache) {
+    const rsLabel = document.getElementById('org-risk-scenarios-label');
+    if (rsLabel) rsLabel.textContent = 'Loading risk scenarios…';
+    await fetchGrcRiskScenarios();
+  }
+  if (editingOrgIdx === null) {
+    renderRiskScenariosCheckboxes([]);
+  }
+  const rsDd = document.getElementById('org-risk-scenarios-dropdown');
+  if (rsDd) rsDd.classList.remove('open');
 }
 function closeOrgModal() { orgModal.classList.remove('active'); document.body.style.overflow = ''; editingOrgIdx = null; clearOrgForm(); }
 let orgObjectives = []; // temp state for objectives list (now stores {id, name} objects)
@@ -1329,6 +1347,123 @@ function getSelectedMetricIds() {
   return Array.from(checkboxes).map(cb => cb.value);
 }
 
+// ── Risk Scenarios (from GRC risk-scenarios) ──
+let grcRiskScenariosCache = null;
+
+async function fetchGrcRiskScenarios() {
+  try {
+    const res = await fetch('/api/grc/risk-scenarios');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    grcRiskScenariosCache = (data.results || []).map(r => ({
+      id: r.id,
+      name: r.name || '',
+      description: r.description || '',
+      treatment: r.treatment || '',
+      ref_id: r.ref_id || '',
+    }));
+    return grcRiskScenariosCache;
+  } catch (err) {
+    console.error('Failed to fetch GRC risk scenarios:', err);
+    grcRiskScenariosCache = [];
+    return [];
+  }
+}
+
+function renderRiskScenariosCheckboxes(selectedIds = []) {
+  const labelEl = document.getElementById('org-risk-scenarios-label');
+  const optionsEl = document.getElementById('org-risk-scenarios-options');
+  if (!optionsEl) return;
+
+  if (!grcRiskScenariosCache || grcRiskScenariosCache.length === 0) {
+    if (labelEl) labelEl.textContent = 'No risk scenarios available';
+    optionsEl.innerHTML = '';
+    return;
+  }
+
+  optionsEl.innerHTML = grcRiskScenariosCache.map(r => {
+    const checked = selectedIds.includes(r.id) ? 'checked' : '';
+    const desc = r.description ? `<br><span style="font-size:10px;color:#9ca3af">${esc(r.description)}</span>` : '';
+    const treat = r.treatment ? `<br><span style="font-size:10px;color:#6b7280">Treatment: ${esc(r.treatment)}</span>` : '';
+    return `<label>
+      <input type="checkbox" value="${esc(r.id)}" ${checked} onchange="updateRiskScenariosLabel()">
+      <span><strong>${esc(r.name)}</strong>${desc}${treat}</span>
+    </label>`;
+  }).join('');
+
+  updateRiskScenariosLabel();
+}
+
+function toggleRiskScenariosDropdown() {
+  const dd = document.getElementById('org-risk-scenarios-dropdown');
+  if (dd) dd.classList.toggle('open');
+}
+window.toggleRiskScenariosDropdown = toggleRiskScenariosDropdown;
+
+// Close risk scenarios dropdown when clicking outside
+document.addEventListener('click', e => {
+  const dd = document.getElementById('org-risk-scenarios-dropdown');
+  if (dd && !dd.contains(e.target)) dd.classList.remove('open');
+});
+
+function filterRiskScenariosDropdown(query) {
+  const q = (query || '').toLowerCase();
+  const options = document.querySelectorAll('#org-risk-scenarios-options label');
+  options.forEach(lbl => {
+    const text = lbl.textContent.toLowerCase();
+    lbl.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+window.filterRiskScenariosDropdown = filterRiskScenariosDropdown;
+
+function updateRiskScenariosLabel() {
+  const labelEl = document.getElementById('org-risk-scenarios-label');
+  const chipsEl = document.getElementById('org-risk-scenarios-chips');
+  const checkboxes = document.querySelectorAll('#org-risk-scenarios-options input[type="checkbox"]:checked');
+  const count = checkboxes.length;
+
+  if (labelEl) {
+    labelEl.textContent = count === 0 ? 'Select risk scenarios…' : `${count} risk scenario${count > 1 ? 's' : ''} selected`;
+  }
+
+  if (chipsEl) {
+    if (count === 0) {
+      chipsEl.innerHTML = '';
+    } else {
+      chipsEl.innerHTML = Array.from(checkboxes).map(cb => {
+        const r = grcRiskScenariosCache?.find(rs => rs.id === cb.value);
+        if (!r) return '';
+        return `<span class="multiselect-chip">
+          ${esc(r.name)}
+          <button type="button" onclick="removeRiskScenarioById('${esc(r.id)}')" class="multiselect-chip-remove">&times;</button>
+        </span>`;
+      }).join('');
+    }
+  }
+}
+window.updateRiskScenariosLabel = updateRiskScenariosLabel;
+
+function removeRiskScenarioById(id) {
+  const cb = document.querySelector(`#org-risk-scenarios-options input[value="${id}"]`);
+  if (cb) { cb.checked = false; updateRiskScenariosLabel(); }
+}
+window.removeRiskScenarioById = removeRiskScenarioById;
+
+function getSelectedRiskScenarios() {
+  const checkboxes = document.querySelectorAll('#org-risk-scenarios-options input[type="checkbox"]:checked');
+  const selected = [];
+  checkboxes.forEach(cb => {
+    const r = grcRiskScenariosCache?.find(rs => rs.id === cb.value);
+    if (r) selected.push({ id: r.id, name: r.name });
+  });
+  return selected;
+}
+
+function getSelectedRiskScenarioIds() {
+  const checkboxes = document.querySelectorAll('#org-risk-scenarios-options input[type="checkbox"]:checked');
+  return Array.from(checkboxes).map(cb => cb.value);
+}
+
 // ── Add Objective Modal ──
 const addObjModal = document.getElementById('add-obj-modal-overlay');
 
@@ -1437,6 +1572,7 @@ function clearOrgForm() {
   renderObjectivesCheckboxes([]);
   renderPoliciesCheckboxes([]);
   renderMetricsCheckboxes([]);
+  renderRiskScenariosCheckboxes([]);
   document.getElementById('org-notes').value = '';
 }
 
@@ -1503,6 +1639,7 @@ orgModalSave.addEventListener('click', async () => {
     obligatoryFrameworks: mandates,
     policies: getSelectedPolicies(),
     trackingMetrics: getSelectedMetrics(),
+    riskScenarios: getSelectedRiskScenarios(),
     notes,
     isActive: true,
   };
@@ -1578,6 +1715,16 @@ async function editOrgContext(idx) {
     .map(met => met.id);
   const allMetricIds = [...new Set([...savedMetricIds, ...metricIdsByName])];
   renderMetricsCheckboxes(allMetricIds);
+
+  // Pre-select saved risk scenarios by matching id or name → id
+  const savedRiskScenarios = ctx.riskScenarios || [];
+  const savedRsIds = savedRiskScenarios.map(r => typeof r === 'object' ? r.id : r).filter(Boolean);
+  // Also match by name if stored as strings
+  const rsIdsByName = (grcRiskScenariosCache || [])
+    .filter(rs => savedRiskScenarios.includes(rs.name))
+    .map(rs => rs.id);
+  const allRsIds = [...new Set([...savedRsIds, ...rsIdsByName])];
+  renderRiskScenariosCheckboxes(allRsIds);
 
   document.getElementById('org-name-en').focus();
 }
@@ -1657,6 +1804,7 @@ function renderOrgContextDetail(ctx, idx) {
   const objectives = ctx.strategicObjectives || [];
   const policies = ctx.policies || [];
   const trackingMetrics = ctx.trackingMetrics || [];
+  const riskScenarios = ctx.riskScenarios || [];
   const docs = ctx.documents || [];
   const notes = ctx.notes || '';
 
@@ -1675,6 +1823,11 @@ function renderOrgContextDetail(ctx, idx) {
   const metricPills = trackingMetrics.map(m => {
     const mName = typeof m === 'object' ? m.name : m;
     return `<span class="org-fw-pill" style="color:#047857;background:#ecfdf5;border-color:#a7f3d0">${esc(mName)}</span>`;
+  }).join('') || '<span style="color:#9ca3af">None</span>';
+
+  const riskScenarioPills = riskScenarios.map(r => {
+    const rName = typeof r === 'object' ? r.name : r;
+    return `<span class="org-fw-pill" style="color:#dc2626;background:#fef2f2;border-color:#fecaca">${esc(rName)}</span>`;
   }).join('') || '<span style="color:#9ca3af">None</span>';
 
   const docsHtml = docs.length
@@ -1745,6 +1898,11 @@ function renderOrgContextDetail(ctx, idx) {
     <div class="org-detail-card">
       <div class="org-detail-card-title">Tracking Metrics</div>
       <div class="org-detail-pills">${metricPills}</div>
+    </div>
+
+    <div class="org-detail-card">
+      <div class="org-detail-card-title">Risk Scenarios</div>
+      <div class="org-detail-pills">${riskScenarioPills}</div>
     </div>
 
     ${docs.length ? `<div class="org-detail-card">
