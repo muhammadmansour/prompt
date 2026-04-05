@@ -729,6 +729,20 @@ async function loadOrgContexts(subId) {
     const d = await fetchJSON(API.orgContexts);
     orgContexts = d.contexts || [];
   } catch (e) { console.error('Org contexts fetch error:', e); orgContexts = []; }
+
+  // Clean up any existing detail page and restore list view
+  const container = document.getElementById('page-org-contexts')?.querySelector('.page-container');
+  if (container) {
+    container.querySelectorAll('.org-detail-page').forEach(el => el.remove());
+    container.querySelectorAll('.org-list-section').forEach(el => el.style.display = '');
+    const hdr = container.querySelector('.page-header');
+    if (hdr) hdr.style.display = '';
+  }
+  // Remove stale chat FAB/panel from previous detail page
+  document.querySelectorAll('.org-chat-fab, .org-chat-panel').forEach(el => el.remove());
+  orgChatOpen = false;
+  orgChatExpanded = false;
+
   // Ensure frameworks are loaded for mandate checkboxes
   if (!frameworks || !frameworks.length) await fetchFrameworks();
   renderOrgStats();
@@ -744,6 +758,7 @@ async function loadOrgContexts(subId) {
     }
   }
 
+  orgDetailCtxId = null;
   // Show chat FAB on the main list page (no specific org pre-selected)
   renderOrgChatFAB(null);
 }
