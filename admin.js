@@ -4015,6 +4015,7 @@ async function csStartGenerate() {
     });
 
     const data = await res.json();
+    console.log('[Controls] AI generation response:', data);
 
     if (barEl) barEl.style.width = '100%';
     if (textEl) textEl.textContent = `Done!`;
@@ -4025,6 +4026,8 @@ async function csStartGenerate() {
 
     const controls = data.data?.controls || [];
     const progress = data.data?.progress || {};
+    console.log('[Controls] Parsed controls:', controls);
+    console.log('[Controls] Progress:', progress);
 
     addLog(`✓ Generated ${controls.length} controls for ${progress.completed || reqs.length} requirements`, 'success');
     if (progress.failed > 0) addLog(`⚠ ${progress.failed} requirements failed`, 'warn');
