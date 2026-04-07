@@ -4163,10 +4163,27 @@ function csRenderStepReview(el) {
                   <div class="cs-ctrl-content" onclick="csExpandControl('${esc(c.id)}')">
                     <div class="cs-ctrl-name-line">
                       <span class="cs-ctrl-name" dir="rtl">${esc(c.name || c.name_ar || 'Control ' + (i+1))}</span>
-                      ${(c.linkedRequirements || []).length > 1 ? `<span class="cs-tag cs-tag-sky" style="font-size:9px;padding:1px 6px;margin-left:6px">${(c.linkedRequirements || []).length} requirements</span>` : ''}
                       ${isExported ? `<span class="cs-exported-pill"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.2"/><path d="M4 6L5.5 7.5L8 4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Already exported</span>` : ''}
                     </div>
                     <div class="cs-ctrl-desc-line" dir="rtl">${esc(c.description || '')}</div>
+                    ${(() => {
+                      const reqs = c.linkedRequirements || [];
+                      if (reqs.length > 0) {
+                        return '<div class="cs-ctrl-req-pills">' + reqs.map(r => {
+                          const label = r.refId ? r.refId : (r.name || '').substring(0, 30);
+                          const fw = r.framework || c.framework || '';
+                          return '<span class="cs-ctrl-req-pill" title="' + esc((r.name || '') + (fw ? ' (' + fw + ')' : '')) + '">' +
+                            '<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 3h8v7H2z" stroke="currentColor" stroke-width="1.2"/><path d="M4 1v2M8 1v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
+                            esc(label) +
+                          '</span>';
+                        }).join('') + '</div>';
+                      } else if (c.requirementRefId) {
+                        return '<div class="cs-ctrl-req-pills"><span class="cs-ctrl-req-pill" title="' + esc(c.requirementName || '') + '">' +
+                          '<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 3h8v7H2z" stroke="currentColor" stroke-width="1.2"/><path d="M4 1v2M8 1v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
+                          esc(c.requirementRefId) + '</span></div>';
+                      }
+                      return '';
+                    })()}
                   </div>
                   <div class="cs-ctrl-tags">
                     ${cat ? `<span class="cs-tag ${catColor[cat] || 'cs-tag-gray'}">${esc(catLabel[cat] || cat)}</span>` : ''}
