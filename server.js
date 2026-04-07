@@ -937,6 +937,7 @@ async function generateControlsForRequirement(requirement, orgContext, contextFi
 
   const data = await response.json();
   const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  console.log('[Controls AI Response]', textResponse);
   if (!textResponse) throw new Error('No response from Gemini API');
 
   // Parse JSON from response

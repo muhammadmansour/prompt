@@ -2069,6 +2069,98 @@
   overflow: hidden;
 }
 
+/* Requirement groups (accordion) */
+.cs-req-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  background: #fff;
+  overflow: hidden;
+  transition: box-shadow .15s;
+}
+.cs-req-group:hover {
+  box-shadow: 0 1px 4px rgba(0,0,0,.04);
+}
+.cs-req-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+  background: linear-gradient(135deg, #f8fafc 0%, #f0f9ff 100%);
+  border-bottom: 1px solid #e5e7eb;
+  transition: background .15s;
+}
+.cs-req-group-header:hover {
+  background: linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%);
+}
+.cs-req-group-toggle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+}
+.cs-req-group-chevron {
+  transition: transform .2s ease;
+  color: #64748b;
+}
+.cs-req-group:not(.cs-req-group-collapsed) .cs-req-group-chevron {
+  transform: rotate(90deg);
+}
+.cs-req-group-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-req-group-refid {
+  font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+  font-size: 12px;
+  font-weight: 700;
+  color: #0369a1;
+  background: #e0f2fe;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cs-req-group-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1e293b;
+  line-height: 1.4;
+}
+.cs-req-group-meta {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cs-req-group-count {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.cs-req-group-body {
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: max-height .3s ease, opacity .2s ease;
+}
+.cs-req-group-collapsed .cs-req-group-body {
+  display: none;
+}
+.cs-req-group-collapsed .cs-req-group-header {
+  border-bottom: none;
+}
+
 /* Requirement pills (visible on card) */
 .cs-ctrl-req-pills {
   display: flex;
