@@ -729,20 +729,6 @@ async function loadOrgContexts(subId) {
     const d = await fetchJSON(API.orgContexts);
     orgContexts = d.contexts || [];
   } catch (e) { console.error('Org contexts fetch error:', e); orgContexts = []; }
-
-  // Clean up any existing detail page and restore list view
-  const container = document.getElementById('page-org-contexts')?.querySelector('.page-container');
-  if (container) {
-    container.querySelectorAll('.org-detail-page').forEach(el => el.remove());
-    container.querySelectorAll('.org-list-section').forEach(el => el.style.display = '');
-    const hdr = container.querySelector('.page-header');
-    if (hdr) hdr.style.display = '';
-  }
-  // Remove stale chat FAB/panel from previous detail page
-  document.querySelectorAll('.org-chat-fab, .org-chat-panel').forEach(el => el.remove());
-  orgChatOpen = false;
-  orgChatExpanded = false;
-
   // Ensure frameworks are loaded for mandate checkboxes
   if (!frameworks || !frameworks.length) await fetchFrameworks();
   renderOrgStats();
@@ -758,7 +744,6 @@ async function loadOrgContexts(subId) {
     }
   }
 
-  orgDetailCtxId = null;
   // Show chat FAB on the main list page (no specific org pre-selected)
   renderOrgChatFAB(null);
 }
@@ -2039,50 +2024,19 @@ function orgChatUpdateSelectedCount() {
   if (startBtn) startBtn.disabled = n === 0;
 }
 
-async function orgChatGoToStep2() {
+function orgChatGoToStep2() {
   if (!orgChatSelectedStores.length) return;
-
-  const startBtn = document.getElementById('org-chat-start-btn');
-  if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'Creating session...'; }
-
-  try {
-    // Gather org context data for the selected stores
-    const selectedOrgs = orgContexts.filter(o => orgChatSelectedStores.includes(o.storeId));
-    // Use the first selected org as the primary org context (or merge data if needed)
-    const primaryOrg = selectedOrgs[0] || null;
-
-    // Build collections array for file search grounding
-    const collections = orgChatSelectedStores.map(sid => ({
-      storeId: sid,
-      displayName: (orgContexts.find(o => o.storeId === sid) || {}).nameEn || sid,
-    }));
-
-    // Create session via main chat API
-    const payload = {
-      context: {
-        collections,
-        orgContext: primaryOrg, // full org profile data
-        query: primaryOrg
-          ? `I want to discuss governance, risk, and compliance for "${primaryOrg.nameEn || primaryOrg.name || 'this organization'}". Use the uploaded documents and organization context to help me.`
-          : '',
-      }
-    };
-
-    const r = await fetch('/api/chat/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const d = await r.json();
-    if (!r.ok || !d.success) throw new Error(d.error || 'Session creation failed');
-
-    // Navigate to the chat page with the new session
-    window.location.href = `chat.html?session=${d.sessionId}`;
-  } catch (err) {
-    console.error('[OrgChat] Session creation error:', err);
-    toast('error', 'Chat Error', err.message);
-    if (startBtn) { startBtn.disabled = false; startBtn.innerHTML = 'Start Chat <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 3L11 8L6 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
-  }
+  orgChatStep = 2;
+  const step1 = document.getElementById('org-chat-step1');
+  const step2 = document.getElementById('org-chat-step2');
+  const backBtn = document.getElementById('org-chat-back-btn');
+  const titleEl = document.getElementById('org-chat-header-title');
+  if (step1) step1.style.display = 'none';
+  if (step2) step2.style.display = 'flex';
+  if (backBtn) backBtn.style.display = 'flex';
+  if (titleEl) titleEl.textContent = 'Chat — ' + orgChatSelectedStores.length + ' store' + (orgChatSelectedStores.length !== 1 ? 's' : '');
+  const input = document.getElementById('org-chat-input');
+  if (input) setTimeout(() => input.focus(), 100);
 }
 window.orgChatGoToStep2 = orgChatGoToStep2;
 
@@ -4209,6 +4163,7 @@ function csRenderStepReview(el) {
                   <div class="cs-ctrl-content" onclick="csExpandControl('${esc(c.id)}')">
                     <div class="cs-ctrl-name-line">
                       <span class="cs-ctrl-name" dir="rtl">${esc(c.name || c.name_ar || 'Control ' + (i+1))}</span>
+                      ${(c.linkedRequirements || []).length > 1 ? `<span class="cs-tag cs-tag-sky" style="font-size:9px;padding:1px 6px;margin-left:6px">${(c.linkedRequirements || []).length} requirements</span>` : ''}
                       ${isExported ? `<span class="cs-exported-pill"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.2"/><path d="M4 6L5.5 7.5L8 4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Already exported</span>` : ''}
                     </div>
                     <div class="cs-ctrl-desc-line" dir="rtl">${esc(c.description || '')}</div>
@@ -4229,8 +4184,16 @@ function csRenderStepReview(el) {
                   ${readOnly ? `
                     ${c.implementation_guidance ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Implementation Guidance</span><p>${esc(c.implementation_guidance)}</p></div>` : ''}
                     ${c.rationale ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Rationale</span><p>${esc(c.rationale)}</p></div>` : ''}
-                    ${c.requirementRefId ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Cross-Framework Mapping</span><div class="cs-ctrl-detail-pills"><span class="cs-tag cs-tag-mono">${esc(c.requirementRefId)}</span>${c.requirementName ? `<span class="cs-tag cs-tag-primary">${esc(c.requirementName)}</span>` : ''}</div></div>` : ''}
-                    ${c.framework ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Framework</span><span class="cs-tag cs-tag-primary">${esc(c.framework)}</span></div>` : ''}
+                    ${(() => {
+                      const reqs = c.linkedRequirements || [];
+                      if (reqs.length > 0) {
+                        return `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Linked Requirements (${reqs.length})</span><div class="cs-ctrl-detail-pills">${reqs.map(r => `<span class="cs-tag cs-tag-mono">${esc(r.refId || '')}</span><span class="cs-tag cs-tag-primary">${esc(r.name || '')}</span>${r.framework ? `<span class="cs-tag cs-tag-gray" style="font-size:9px">${esc(r.framework)}</span>` : ''}`).join('<span style="display:block;height:4px"></span>')}</div></div>`;
+                      } else if (c.requirementRefId) {
+                        return `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Cross-Framework Mapping</span><div class="cs-ctrl-detail-pills"><span class="cs-tag cs-tag-mono">${esc(c.requirementRefId)}</span>${c.requirementName ? `<span class="cs-tag cs-tag-primary">${esc(c.requirementName)}</span>` : ''}</div></div>`;
+                      }
+                      return '';
+                    })()}
+                    ${c.framework && !(c.linkedRequirements || []).length ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Framework</span><span class="cs-tag cs-tag-primary">${esc(c.framework)}</span></div>` : ''}
                     ${(c.effort || c.effort_estimate) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Effort</span><span class="cs-tag cs-tag-gray">${esc(c.effort || c.effort_estimate)}</span></div>` : ''}
                     ${c.status ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Status</span><span class="cs-tag cs-tag-gray">${esc(c.status)}</span></div>` : ''}
                     ${(c.evidence_examples && c.evidence_examples.length) ? `<div class="cs-ctrl-detail"><span class="cs-ctrl-detail-label">Evidence Examples</span><div class="cs-ctrl-detail-pills">${c.evidence_examples.map(e => `<span class="cs-tag cs-tag-gray">${esc(e)}</span>`).join('')}</div></div>` : ''}
@@ -4303,6 +4266,16 @@ function csRenderStepReview(el) {
                           <input type="text" name="framework" value="${esc(c.framework || '')}" placeholder="e.g. PDPL, NCA-ECC" />
                         </div>
                       </div>
+                      ${(c.linkedRequirements || []).length > 0 ? `
+                        <div class="cs-edit-row">
+                          <div class="cs-edit-field cs-edit-field-full">
+                            <label>Linked Requirements (${(c.linkedRequirements || []).length})</label>
+                            <div class="cs-ctrl-detail-pills" style="margin-top:4px">
+                              ${(c.linkedRequirements || []).map(r => `<span class="cs-tag cs-tag-mono" style="margin:2px">${esc(r.refId || '')} — ${esc((r.name || '').length > 50 ? (r.name || '').substring(0, 50) + '...' : (r.name || ''))}</span>`).join('')}
+                            </div>
+                          </div>
+                        </div>
+                      ` : ''}
                       <div class="cs-edit-actions">
                         <button type="submit" class="btn-admin-primary cs-edit-save-btn">
                           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -4385,6 +4358,7 @@ function csAddManualControl() {
     selected: true,
     framework: '',
     requirementRefId: '',
+    linkedRequirements: [],
   };
   controls.push(newCtrl);
   csSaveStep();
@@ -4482,7 +4456,14 @@ function csRenderStepExport(el) {
   const selected = controls.filter(c => c.selected !== false);
   const total = selected.length;
   const fwSet = new Set(); const reqSet = new Set();
-  selected.forEach(c => { if (c.framework) fwSet.add(c.framework); if (c.requirementRefId) reqSet.add(c.requirementRefId); });
+  selected.forEach(c => {
+    const reqs = c.linkedRequirements || [];
+    if (reqs.length > 0) {
+      reqs.forEach(r => { if (r.framework) fwSet.add(r.framework); if (r.refId) reqSet.add(r.refId); });
+    } else {
+      if (c.framework) fwSet.add(c.framework); if (c.requirementRefId) reqSet.add(c.requirementRefId);
+    }
+  });
 
   if (csSessionData.status === 'exported' && csJustExported) {
     csJustExported = false; // reset the flag
@@ -4754,12 +4735,14 @@ async function loadMergeOptimizer() {
   moExistingControls = [];
   moSessions.filter(s => s.status === 'exported').forEach(s => {
     (s.controls || []).forEach(c => {
+      const reqIds = (c.linkedRequirements || []).map(r => r.refId).filter(Boolean);
+      const fwNames = [...new Set((c.linkedRequirements || []).map(r => r.framework).filter(Boolean))];
       moExistingControls.push({
         id: c.id,
         name: c.name || c.name_ar || '',
         description: c.description || '',
-        requirementIds: [c.requirementRefId].filter(Boolean),
-        frameworkNames: [c.framework].filter(Boolean),
+        requirementIds: reqIds.length > 0 ? reqIds : [c.requirementRefId].filter(Boolean),
+        frameworkNames: fwNames.length > 0 ? fwNames : [c.framework].filter(Boolean),
         exportedAt: s.updated_at || s.created_at || '',
         sessionId: s.id,
       });

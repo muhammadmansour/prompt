@@ -40,6 +40,13 @@ Each control MUST include ALL of these fields:
 11. **evidence_examples**: Array of 2-3 specific evidence items that prove this control is in place
 12. **implementation_guidance**: Brief practical implementation guidance specific to the org's infrastructure and governance (2-3 sentences)
 
+## Reuse Rules (CRITICAL — avoid duplicates)
+
+If an "Existing Applied Controls" section is provided below, you MUST check each existing control before generating new ones.
+- If an existing control ALREADY satisfies this requirement (fully or substantially), DO NOT generate a new control for it. Instead, include a reuse entry with `"reuse": true` and `"reuse_name"` set to the EXACT name of the existing control.
+- Only generate NEW controls for aspects of this requirement that are NOT covered by any existing control.
+- It is perfectly valid to return ONLY reuse entries and zero new controls if existing controls fully cover this requirement.
+
 ## Response Format
 
 CRITICAL: Respond with ONLY valid JSON. No markdown, no explanation. Start with { and end with }.
@@ -61,9 +68,14 @@ CRITICAL: Respond with ONLY valid JSON. No markdown, no explanation. Start with 
         "Example evidence 1",
         "Example evidence 2"
       ],
-      "implementation_guidance": "Practical implementation steps specific to org context..."
+      "implementation_guidance": "Practical implementation steps specific to org context...",
+      "reuse": false
+    },
+    {
+      "reuse": true,
+      "reuse_name": "Exact name of an existing control that covers this requirement"
     }
   ]
 }
 
-Generate between 1 and 3 controls per requirement. More complex requirements or lower-maturity orgs may need more foundational controls.
+Generate between 1 and 3 controls per requirement. More complex requirements or lower-maturity orgs may need more foundational controls. Prefer reusing existing controls over creating near-duplicates.

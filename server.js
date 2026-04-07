@@ -892,8 +892,20 @@ async function generateControlsForRequirement(requirement, orgContext, contextFi
   // Build existing controls context (for reuse detection)
   let existingCtrlsText = '';
   if (existingControls && existingControls.length > 0) {
-    existingCtrlsText = '\n\n## Existing Applied Controls (already generated in this session)\n\nBefore creating new controls, check if any of the following existing controls already satisfy this requirement. If they do, include them with `"reuse": true` instead of generating duplicates.\n\n' +
-      existingControls.map((c, i) => `${i + 1}. **${c.name}** (${c.requirementRefId || 'unknown ref'}) — ${c.description || ''}`).join('\n');
+    // Deduplicate existing controls by name for a cleaner context
+    const uniqueExisting = [];
+    const seenNames = new Set();
+    for (const c of existingControls) {
+      const key = (c.name || '').toLowerCase().trim();
+      if (key && !seenNames.has(key)) {
+        seenNames.add(key);
+        const reqRefs = (c.linkedRequirements || []).map(r => r.refId || 'unknown').join(', ');
+        uniqueExisting.push(`- **${c.name}** (covers: ${reqRefs}) — ${c.description || ''}`);
+      }
+    }
+    if (uniqueExisting.length > 0) {
+      existingCtrlsText = '\n\n## Existing Applied Controls (already generated in this session)\n\n' + uniqueExisting.join('\n');
+    }
   }
 
   const fullPrompt = getControlsGeneratorPrompt()
@@ -948,26 +960,69 @@ async function generateControlsForRequirement(requirement, orgContext, contextFi
 
 async function generateControlsBatch(requirements, orgContext, contextFiles, apiKey) {
   const CONCURRENCY = 3;
-  const allControls = [];
+  const allControls = [];  // Each control has linkedRequirements: [{ refId, name, framework, nodeUrn, nodeId }]
   const progress = { total: requirements.length, completed: 0, failed: 0 };
+
+  // Helper: build a requirement link object
+  const makeReqLink = (req) => ({
+    refId: req.refId || '',
+    name: req.name || req.description || '',
+    framework: req.frameworkName || '',
+    nodeUrn: req.nodeUrn || '',
+    nodeId: req.nodeId || '',
+  });
+
+  // Helper: find existing control by name (case-insensitive fuzzy match)
+  const findExistingByName = (name) => {
+    if (!name) return null;
+    const needle = name.toLowerCase().trim();
+    return allControls.find(c => (c.name || '').toLowerCase().trim() === needle);
+  };
 
   for (let i = 0; i < requirements.length; i += CONCURRENCY) {
     const batch = requirements.slice(i, i + CONCURRENCY);
+    // Process batch sequentially within concurrency window to avoid race conditions on allControls
     const results = await Promise.all(batch.map(async (req, batchIdx) => {
       const idx = i + batchIdx;
       console.log(`[Controls] Generating for req ${idx + 1}/${requirements.length}: ${req.refId || req.name || 'Unknown'}`);
       try {
-        // Pass existing controls so the AI can detect reuse opportunities
         const controls = await generateControlsForRequirement(req, orgContext, contextFiles, apiKey, allControls);
         progress.completed++;
-        return controls.map(c => ({
-          ...c,
-          requirementRefId: req.refId,
-          requirementName: req.name || req.description,
-          framework: req.frameworkName,
-          requirementUrn: req.nodeUrn,
-          requirementNodeId: req.nodeId,
-        }));
+        const reqLink = makeReqLink(req);
+        const newControls = [];
+
+        for (const c of controls) {
+          // Handle reuse: AI returned { reuse: true, reuse_name: "..." }
+          if (c.reuse === true && c.reuse_name) {
+            const existing = findExistingByName(c.reuse_name);
+            if (existing) {
+              // Link the additional requirement to the existing control
+              const alreadyLinked = existing.linkedRequirements.some(r => r.refId === reqLink.refId && r.nodeUrn === reqLink.nodeUrn);
+              if (!alreadyLinked) {
+                existing.linkedRequirements.push(reqLink);
+                console.log(`[Controls] Reuse: "${existing.name}" now covers ${existing.linkedRequirements.length} requirements`);
+              }
+              continue; // Don't create a duplicate
+            } else {
+              console.warn(`[Controls] Reuse requested for "${c.reuse_name}" but not found — treating as new`);
+            }
+          }
+
+          // New control — create with multi-requirement linking
+          newControls.push({
+            ...c,
+            // Multi-requirement linking (array-based)
+            linkedRequirements: [reqLink],
+            // Keep legacy single fields for backward compatibility
+            requirementRefId: req.refId,
+            requirementName: req.name || req.description,
+            framework: req.frameworkName,
+            requirementUrn: req.nodeUrn,
+            requirementNodeId: req.nodeId,
+          });
+        }
+
+        return newControls;
       } catch (err) {
         console.error(`[Controls] Failed req ${idx + 1}:`, err.message);
         progress.failed++;
@@ -977,7 +1032,32 @@ async function generateControlsBatch(requirements, orgContext, contextFiles, api
     allControls.push(...results.flat());
   }
 
-  return { controls: allControls, progress };
+  // Post-processing: deduplicate controls with identical names
+  const deduped = [];
+  const nameMap = new Map(); // lowercase name → index in deduped
+  for (const ctrl of allControls) {
+    const key = (ctrl.name || '').toLowerCase().trim();
+    if (key && nameMap.has(key)) {
+      // Merge requirement links into the first occurrence
+      const existing = deduped[nameMap.get(key)];
+      for (const rl of (ctrl.linkedRequirements || [])) {
+        const alreadyLinked = existing.linkedRequirements.some(r => r.refId === rl.refId && r.nodeUrn === rl.nodeUrn);
+        if (!alreadyLinked) {
+          existing.linkedRequirements.push(rl);
+        }
+      }
+      console.log(`[Controls] Dedup merged: "${ctrl.name}" (now ${existing.linkedRequirements.length} reqs)`);
+    } else {
+      nameMap.set(key, deduped.length);
+      deduped.push(ctrl);
+    }
+  }
+
+  if (deduped.length < allControls.length) {
+    console.log(`[Controls] Deduplication: ${allControls.length} → ${deduped.length} unique controls`);
+  }
+
+  return { controls: deduped, progress };
 }
 
 // ---- Question-to-Control Conversion ----
@@ -1756,6 +1836,11 @@ const server = http.createServer(async (req, res) => {
             body: JSON.stringify(grcBody)
           }, reqToken);
 
+          // Collect requirement node IDs this control is linked to
+          const controlReqNodeIds = (c.linkedRequirements || []).map(r => r.nodeId).filter(Boolean);
+          // Fallback to legacy single field
+          if (controlReqNodeIds.length === 0 && c.requirementNodeId) controlReqNodeIds.push(c.requirementNodeId);
+
           if (grcRes.ok) {
             const created = await grcRes.json();
             results.push({
@@ -1763,9 +1848,7 @@ const server = http.createServer(async (req, res) => {
               grcId: created.id,
               name: grcBody.name,
               success: true,
-              requirementUrn: c.requirementUrn || '',
-              requirementRefId: c.requirementRefId || '',
-              requirementNodeId: c.requirementNodeId || '',
+              requirementNodeIds: controlReqNodeIds,
               linkedRA: []
             });
           } else {
@@ -1783,9 +1866,7 @@ const server = http.createServer(async (req, res) => {
                   name: grcBody.name,
                   success: true,
                   reused: true,
-                  requirementUrn: c.requirementUrn || '',
-                  requirementRefId: c.requirementRefId || '',
-                  requirementNodeId: c.requirementNodeId || '',
+                  requirementNodeIds: controlReqNodeIds,
                   linkedRA: []
                 });
               } else {
@@ -1805,21 +1886,28 @@ const server = http.createServer(async (req, res) => {
       console.log(`[GRC Export] Phase 1 done: ${results.length} controls created, ${errors.length} failed`);
 
       // ── Phase 2: Link applied controls to requirement assessments ──
-      // 1. GET /api/requirement-assessments/?compliance_assessment=<ca-uuid>&page_size=1000
-      // 2. Filter: match RA.requirement to our requirementNodeIds + skip status=done
-      // 3. PATCH /api/requirement-assessments/<ra-uuid>/ { applied_controls: [...existing, ...new] }
+      // Each control is linked ONLY to the requirement(s) it was generated for,
+      // NOT to all requirements indiscriminately.
       let totalLinked = 0;
 
-      // Collect ALL generated control GRC UUIDs (to link all of them to every matching RA)
-      const allControlGrcIds = results.map(r => r.grcId).filter(Boolean);
+      // Build a map: requirementNodeId → [grcId, grcId, ...] (only controls for THAT requirement)
+      const reqNodeToControlGrcIds = new Map();
+      for (const r of results) {
+        if (!r.grcId) continue;
+        for (const nodeId of (r.requirementNodeIds || [])) {
+          if (!nodeId) continue;
+          if (!reqNodeToControlGrcIds.has(nodeId)) reqNodeToControlGrcIds.set(nodeId, []);
+          const list = reqNodeToControlGrcIds.get(nodeId);
+          if (!list.includes(r.grcId)) list.push(r.grcId);
+        }
+      }
 
-      // Collect unique requirement node UUIDs from the generated controls
-      const selectedReqNodeIds = [...new Set(results.map(r => r.requirementNodeId).filter(Boolean))];
+      const selectedReqNodeIds = [...reqNodeToControlGrcIds.keys()];
 
-      if (selectedReqNodeIds.length === 0 || allControlGrcIds.length === 0) {
+      if (selectedReqNodeIds.length === 0) {
         console.log(`[GRC Link] No requirement UUIDs on controls — skipping`);
       } else {
-        console.log(`[GRC Link] Linking ${allControlGrcIds.length} controls to ${selectedReqNodeIds.length} requirement(s)`);
+        console.log(`[GRC Link] Linking controls to ${selectedReqNodeIds.length} requirement(s) (targeted per-requirement)`);
 
         try {
           // Step 1: Fetch ALL compliance assessments
@@ -1853,10 +1941,14 @@ const server = http.createServer(async (req, res) => {
             if (targetRAs.length === 0) continue;
             console.log(`[GRC Link] CA ${ca.name || caId}: ${targetRAs.length} matching RA(s) from ${allRAs.length} total`);
 
-            // Step 4: PATCH each matching RA — link ALL generated controls to each RA
+            // Step 4: PATCH each matching RA — link ONLY the controls generated for that specific requirement
             for (const ra of targetRAs) {
               const raId = ra.id || ra.uuid;
               if (!raId) continue;
+
+              const raReqId = typeof ra.requirement === 'string' ? ra.requirement : (ra.requirement?.id || '');
+              const controlGrcIdsForThisReq = reqNodeToControlGrcIds.get(raReqId) || [];
+              if (controlGrcIdsForThisReq.length === 0) continue;
 
               try {
                 // Preserve existing linked controls
@@ -1864,10 +1956,14 @@ const server = http.createServer(async (req, res) => {
                 const existingIds = existingRaw.map(ac =>
                   typeof ac === 'object' && ac !== null ? (ac.id || ac.uuid || '') : String(ac)
                 ).filter(Boolean);
-                const merged = [...new Set([...existingIds, ...allControlGrcIds])];
+                const merged = [...new Set([...existingIds, ...controlGrcIdsForThisReq])];
 
                 const newCount = merged.length - existingIds.length;
-                console.log(`[GRC Link] PATCH RA ${raId} ← ${newCount} new, ${merged.length} total applied_controls`);
+                if (newCount === 0) {
+                  console.log(`[GRC Link] RA ${raId} — all ${controlGrcIdsForThisReq.length} controls already linked, skipping`);
+                  continue;
+                }
+                console.log(`[GRC Link] PATCH RA ${raId} ← ${newCount} new (${controlGrcIdsForThisReq.length} for this req), ${merged.length} total applied_controls`);
 
                 const patchRes = await grcFetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/`, {
                   method: 'PATCH',
@@ -2103,44 +2199,6 @@ const server = http.createServer(async (req, res) => {
         if (context.query) {
           systemPrompt += `\n---\n## SESSION CONTEXT: User's Initial Query\n"${context.query}"\n`;
           systemPrompt += `\nAddress this query directly in your first response. Tailor all analysis to this specific focus area.\n`;
-        }
-
-        // Inject organization context profile
-        if (context.orgContext) {
-          const org = context.orgContext;
-          systemPrompt += `\n---\n## SESSION CONTEXT: Organization Profile\n`;
-          systemPrompt += `- **Name (EN):** ${org.nameEn || '—'}\n`;
-          if (org.nameAr) systemPrompt += `- **Name (AR):** ${org.nameAr}\n`;
-          systemPrompt += `- **Sector:** ${org.sectorCustom || org.sector || '—'}\n`;
-          systemPrompt += `- **Size:** ${org.size || '—'}\n`;
-          systemPrompt += `- **Compliance Maturity Level:** ${org.complianceMaturity || 1}\n`;
-          if (org.governanceStructure) systemPrompt += `- **Governance Structure:** ${org.governanceStructure}\n`;
-          if (org.dataClassification) systemPrompt += `- **Data Classification:** ${org.dataClassification}\n`;
-          if (org.geographicScope) systemPrompt += `- **Geographic Scope:** ${org.geographicScope}\n`;
-          if (org.itInfrastructure) systemPrompt += `- **IT Infrastructure:** ${org.itInfrastructure}\n`;
-          const fws = org.obligatoryFrameworks || [];
-          if (fws.length) systemPrompt += `- **Obligatory Frameworks:** ${fws.join(', ')}\n`;
-          const mandates = org.regulatoryMandates || [];
-          if (mandates.length) systemPrompt += `- **Regulatory Mandates:** ${mandates.join(', ')}\n`;
-          const policies = org.policies || [];
-          if (policies.length) {
-            const pNames = policies.map(p => typeof p === 'object' ? (p.name + (p.refId ? ` (${p.refId})` : '')) : p);
-            systemPrompt += `- **Policies:** ${pNames.join(', ')}\n`;
-          }
-          const objectives = org.strategicObjectives || [];
-          if (objectives.length) systemPrompt += `- **Strategic Objectives:**\n${objectives.map(o => `  - ${o}`).join('\n')}\n`;
-          const metrics = org.trackingMetrics || [];
-          if (metrics.length) {
-            const mNames = metrics.map(m => typeof m === 'object' ? m.name : m);
-            systemPrompt += `- **Tracking Metrics:** ${mNames.join(', ')}\n`;
-          }
-          const risks = org.riskScenarios || [];
-          if (risks.length) {
-            const rNames = risks.map(r => typeof r === 'object' ? r.name : r);
-            systemPrompt += `- **Risk Scenarios:** ${rNames.join(', ')}\n`;
-          }
-          if (org.notes) systemPrompt += `- **Notes:** ${org.notes}\n`;
-          systemPrompt += `\nUse this organization profile to contextualize all your responses. Tailor your GRC advice to this organization's sector, size, maturity level, frameworks, and regulatory mandates.\n`;
         }
       }
 
