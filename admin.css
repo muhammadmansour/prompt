@@ -5260,6 +5260,16 @@
   flex: 1; height: auto !important; border-radius: 8px;
 }
 
+/* ---- Chain Loading ---- */
+.chain-loading {
+  display: flex; align-items: center; gap: 10px;
+  padding: 18px 0; color: #6366f1; font-size: 13px; font-weight: 500;
+}
+.chain-loading .spinner {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ---- Chain Tabs ---- */
 .chain-tabs {
   display: flex; gap: 2px; margin-bottom: 10px;

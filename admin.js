@@ -2003,13 +2003,16 @@ function renderOrgContextDetail(ctx, idx) {
     <div class="org-detail-card" style="border:1px solid #6366f1;background:linear-gradient(135deg,rgba(99,102,241,.04),rgba(139,92,246,.04))">
       <div class="org-detail-card-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>🔗 Entity Chain</span>
-        <button class="pi-btn pi-btn-primary" style="font-size:12px;padding:5px 14px" onclick="resolveChain('${esc(ctx.id)}')">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="margin-right:4px;vertical-align:-2px"><path d="M2 7h10M9 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Resolve Chain
+        <button class="pi-btn" style="font-size:11px;padding:4px 10px;color:#6366f1;border:1px solid #c7d2fe;background:#eef2ff" onclick="resolveChain('${esc(ctx.id)}')" title="Force re-resolve the chain">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style="margin-right:3px;vertical-align:-1px"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" fill="currentColor"/></svg>
+          Re-resolve
         </button>
       </div>
       <div id="chain-result-${esc(ctx.id)}" class="chain-result-container" style="margin-top:8px;min-height:40px">
-        <span style="color:#9ca3af;font-size:12px">Click "Resolve Chain" to build the full path: Objectives → Frameworks → Requirements → Risks → Controls</span>
+        <div class="chain-loading">
+          <svg class="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#6366f1" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/></svg>
+          <span>Resolving entity chain…</span>
+        </div>
       </div>
     </div>
 
@@ -2042,8 +2045,8 @@ function renderOrgContextDetail(ctx, idx) {
   // Load files for this org context
   orgLoadFiles(ctx.id);
 
-  // Auto-load chain if previously resolved
-  autoLoadChain(ctx.id);
+  // Auto-resolve and render chain
+  autoResolveChain(ctx.id);
 
   // Add floating chat button + chat panel
   renderOrgChatFAB(ctx);
@@ -2440,18 +2443,33 @@ document.addEventListener('keydown', e => {
 });
 
 // Auto-load chain on detail page if previously resolved
-async function autoLoadChain(orgId) {
+async function autoResolveChain(orgId) {
   const container = document.getElementById('chain-result-' + orgId);
   if (!container) return;
+
+  // Show loading indicator
+  container.innerHTML = `<div class="chain-loading">
+    <svg class="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#6366f1" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/></svg>
+    <span>Resolving entity chain…</span>
+  </div>`;
+
   try {
-    const res = await fetch('/api/chain/' + orgId);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.chain && data.chain.length > 0) {
-      await renderChainVisualization(orgId, container);
+    // Resolve (POST) then render
+    const res = await fetch('/api/chain/resolve/' + orgId, { method: 'POST' });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || 'HTTP ' + res.status);
     }
-  } catch (e) { /* ignore */ }
+    await renderChainVisualization(orgId, container);
+  } catch (err) {
+    console.error('Auto-resolve chain error:', err);
+    container.innerHTML = `<div style="color:#ef4444;font-size:13px;display:flex;align-items:center;gap:6px">
+      ❌ <span>${esc(err.message)}</span>
+      <button class="pi-btn" style="font-size:11px;padding:3px 10px;margin-left:8px;color:#6366f1;border:1px solid #c7d2fe;background:#eef2ff" onclick="autoResolveChain('${esc(orgId)}')">Retry</button>
+    </div>`;
+  }
 }
+window.autoResolveChain = autoResolveChain;
 
 // ---- Org Context Chat ----
 
