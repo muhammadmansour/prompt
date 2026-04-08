@@ -2169,6 +2169,7 @@ async function renderChainVisualization(orgId, container) {
       <div class="chain-toolbar-btns">
         <button class="chain-tb-btn" onclick="chainNetFit('${esc(orgId)}')" title="Fit all">⤢ Fit</button>
         <button class="chain-tb-btn" onclick="chainNetTogglePhysics('${esc(orgId)}')" title="Toggle physics">⚡ Physics</button>
+        <button class="chain-tb-btn" onclick="chainNetFullscreen('${esc(orgId)}')" title="Fullscreen" id="chain-fs-btn-${esc(orgId)}">⛶ Fullscreen</button>
       </div>
     </div>`;
 
@@ -2290,12 +2291,51 @@ window.chainNetFit = chainNetFit;
 function chainNetTogglePhysics(orgId) {
   const net = window._chainNets?.[orgId];
   if (!net) return;
-  const opts = net.physics?.options || {};
   const enabled = !net.physics?.physicsEnabled;
   net.setOptions({ physics: { enabled } });
   if (enabled) setTimeout(() => net.setOptions({ physics: { enabled: false } }), 3000);
 }
 window.chainNetTogglePhysics = chainNetTogglePhysics;
+
+function chainNetFullscreen(orgId) {
+  const netEl = document.getElementById('chain-net-' + orgId);
+  if (!netEl) return;
+  const wrapper = netEl.parentElement; // container that holds strip + toolbar + graph
+
+  if (wrapper.classList.contains('chain-fullscreen')) {
+    // Exit fullscreen
+    wrapper.classList.remove('chain-fullscreen');
+    netEl.style.height = '500px';
+    const btn = document.getElementById('chain-fs-btn-' + orgId);
+    if (btn) btn.textContent = '⛶ Fullscreen';
+    document.body.style.overflow = '';
+  } else {
+    // Enter fullscreen
+    wrapper.classList.add('chain-fullscreen');
+    netEl.style.height = 'calc(100vh - 90px)';
+    const btn = document.getElementById('chain-fs-btn-' + orgId);
+    if (btn) btn.textContent = '✕ Exit';
+    document.body.style.overflow = 'hidden';
+  }
+  // Re-fit after resize
+  const net = window._chainNets?.[orgId];
+  if (net) setTimeout(() => { net.redraw(); net.fit({ animation: { duration: 400 } }); }, 100);
+}
+window.chainNetFullscreen = chainNetFullscreen;
+
+// Exit fullscreen on Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const fsEl = document.querySelector('.chain-fullscreen');
+    if (fsEl) {
+      const netEl = fsEl.querySelector('.chain-net-container');
+      if (netEl) {
+        const orgId = netEl.id.replace('chain-net-', '');
+        chainNetFullscreen(orgId);
+      }
+    }
+  }
+});
 
 // Auto-load chain on detail page if previously resolved
 async function autoLoadChain(orgId) {

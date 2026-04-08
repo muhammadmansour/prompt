@@ -5250,6 +5250,16 @@
 }
 .chain-tb-btn:hover { background: #ddd6fe; }
 
+/* Fullscreen overlay */
+.chain-fullscreen {
+  position: fixed !important; top: 0; left: 0; width: 100vw; height: 100vh;
+  z-index: 9999; background: #fff; padding: 16px 20px;
+  display: flex; flex-direction: column; box-sizing: border-box;
+}
+.chain-fullscreen .chain-net-container {
+  flex: 1; height: auto !important; border-radius: 8px;
+}
+
 /* ---- Objective ↔ Framework Mapping Grid ---- */
 .obj-fw-mapping-grid { margin-top: 4px; }
 .obj-fw-map-table { width: 100%; border-collapse: collapse; font-size: 12px; }
