@@ -2238,7 +2238,7 @@ function renderChainNetworkTab(orgId) {
   if (!cache) return;
   const { nodeMap, edgeSet } = cache.parsed;
 
-  // Legend + toolbar
+  // Legend
   const legendHtml = `<div class="chain-legend">
     <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#7c3aed"></span>Objective</span>
     <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#2563eb"></span>Framework</span>
@@ -2247,15 +2247,28 @@ function renderChainNetworkTab(orgId) {
     <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#059669"></span>Control</span>
   </div>`;
 
+  // Search bar
+  const searchHtml = `<div class="chain-search-wrap">
+    <svg class="chain-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M16 16L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <input type="text" class="chain-search-input" id="chain-search-${orgId}" placeholder="Search nodes…" autocomplete="off" />
+    <div class="chain-search-results" id="chain-search-results-${orgId}"></div>
+  </div>`;
+
   panel.innerHTML = `<div class="chain-toolbar">
     ${legendHtml}
-    <div class="chain-toolbar-btns">
-      <button class="chain-tb-btn" onclick="chainNetFit('${esc(orgId)}')" title="Fit all">⤢ Fit</button>
-      <button class="chain-tb-btn" onclick="chainNetTogglePhysics('${esc(orgId)}')" title="Toggle physics">⚡ Physics</button>
-      <button class="chain-tb-btn" onclick="chainNetFullscreen('${esc(orgId)}')" title="Fullscreen" id="chain-fs-btn-${esc(orgId)}">⛶ Fullscreen</button>
+    <div class="chain-toolbar-right">
+      ${searchHtml}
+      <div class="chain-toolbar-btns">
+        <button class="chain-tb-btn" onclick="chainNetFit('${esc(orgId)}')" title="Fit all">⤢ Fit</button>
+        <button class="chain-tb-btn" onclick="chainNetTogglePhysics('${esc(orgId)}')" title="Toggle physics">⚡ Physics</button>
+        <button class="chain-tb-btn" onclick="chainNetFullscreen('${esc(orgId)}')" title="Fullscreen" id="chain-fs-btn-${esc(orgId)}">⛶ Fullscreen</button>
+      </div>
     </div>
   </div>
-  <div id="chain-net-${orgId}" class="chain-net-container"></div>`;
+  <div style="position:relative">
+    <div id="chain-net-${orgId}" class="chain-net-container"></div>
+    <div class="chain-node-info" id="chain-node-info-${orgId}"></div>
+  </div>`;
 
   // Build vis-network
   const nodeStyles = {
@@ -2286,7 +2299,10 @@ function renderChainNetworkTab(orgId) {
   const netEl = document.getElementById('chain-net-' + orgId);
   if (!netEl || typeof vis === 'undefined') return;
 
-  const network = new vis.Network(netEl, { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) }, {
+  const nodesDS = new vis.DataSet(visNodes);
+  const edgesDS = new vis.DataSet(visEdges);
+
+  const network = new vis.Network(netEl, { nodes: nodesDS, edges: edgesDS }, {
     layout: { hierarchical: { enabled: true, direction: 'LR', sortMethod: 'directed', levelSeparation: 220, nodeSpacing: 30, treeSpacing: 40, blockShifting: true, edgeMinimization: true, parentCentralization: true } },
     physics: { enabled: false },
     interaction: { hover: true, tooltipDelay: 150, zoomView: true, dragView: true, navigationButtons: false, keyboard: { enabled: true } },
@@ -2295,7 +2311,83 @@ function renderChainNetworkTab(orgId) {
 
   window._chainNets = window._chainNets || {};
   window._chainNets[orgId] = network;
+  window._chainNodeDS = window._chainNodeDS || {};
+  window._chainNodeDS[orgId] = nodesDS;
   network.once('stabilized', () => { network.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } }); });
+
+  // ── Search functionality ──
+  const searchInput = document.getElementById('chain-search-' + orgId);
+  const resultsEl = document.getElementById('chain-search-results-' + orgId);
+  const allNodes = visNodes.map(n => ({ id: n.id, label: n.label, title: n.title || n.label, group: n.group }));
+
+  const groupIcons = { objective: '🎯', framework: '📋', requirement: '📄', risk: '⚠️', control: '🛡️' };
+  const groupColors = { objective: '#7c3aed', framework: '#2563eb', requirement: '#64748b', risk: '#f59e0b', control: '#059669' };
+
+  let searchTimeout = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+      const q = searchInput.value.trim().toLowerCase();
+      if (q.length < 2) { resultsEl.style.display = 'none'; return; }
+      const hits = allNodes.filter(n => (n.title || '').toLowerCase().includes(q) || (n.label || '').toLowerCase().includes(q)).slice(0, 15);
+      if (!hits.length) {
+        resultsEl.innerHTML = '<div class="chain-sr-empty">No matches</div>';
+      } else {
+        resultsEl.innerHTML = hits.map(h =>
+          `<div class="chain-sr-item" data-nid="${esc(h.id)}">
+            <span class="chain-sr-icon" style="color:${groupColors[h.group] || '#64748b'}">${groupIcons[h.group] || '●'}</span>
+            <span class="chain-sr-label">${esc(h.title || h.label)}</span>
+            <span class="chain-sr-type">${esc(h.group)}</span>
+          </div>`
+        ).join('');
+      }
+      resultsEl.style.display = 'block';
+    }, 150);
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { resultsEl.style.display = 'none'; searchInput.blur(); }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const first = resultsEl.querySelector('.chain-sr-item');
+      if (first) first.focus();
+    }
+  });
+
+  resultsEl.addEventListener('click', (e) => {
+    const item = e.target.closest('.chain-sr-item');
+    if (!item) return;
+    const nid = item.dataset.nid;
+    chainNetNavigateTo(orgId, nid);
+    resultsEl.style.display = 'none';
+    searchInput.value = '';
+  });
+
+  resultsEl.addEventListener('keydown', (e) => {
+    const item = e.target.closest('.chain-sr-item');
+    if (!item) return;
+    if (e.key === 'Enter') { item.click(); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); const next = item.nextElementSibling; if (next) next.focus(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); const prev = item.previousElementSibling; if (prev) prev.focus(); else searchInput.focus(); }
+    if (e.key === 'Escape') { resultsEl.style.display = 'none'; searchInput.focus(); }
+  });
+
+  // Close search results on outside click
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.chain-search-wrap')) resultsEl.style.display = 'none';
+  });
+
+  // ── Node click → info panel ──
+  const infoEl = document.getElementById('chain-node-info-' + orgId);
+  network.on('click', params => {
+    if (params.nodes.length === 1) {
+      const nid = params.nodes[0];
+      showChainNodeInfo(orgId, nid, network, nodesDS, infoEl);
+    } else {
+      infoEl.style.display = 'none';
+    }
+  });
+  network.on('deselectNode', () => { infoEl.style.display = 'none'; });
 }
 
 // ──────────────────────────────────────────
@@ -2449,6 +2541,74 @@ document.addEventListener('keydown', e => {
     }
   }
 });
+
+// ── Navigate to node (zoom + select + highlight neighbors) ──
+function chainNetNavigateTo(orgId, nodeId) {
+  const net = window._chainNets?.[orgId];
+  if (!net) return;
+  net.selectNodes([nodeId]);
+  net.focus(nodeId, { scale: 1.5, animation: { duration: 600, easingFunction: 'easeInOutQuad' } });
+  // Show info panel
+  const nodesDS = window._chainNodeDS?.[orgId];
+  const infoEl = document.getElementById('chain-node-info-' + orgId);
+  if (nodesDS && infoEl) showChainNodeInfo(orgId, nodeId, net, nodesDS, infoEl);
+}
+window.chainNetNavigateTo = chainNetNavigateTo;
+
+// ── Node info panel (appears on click / navigate) ──
+function showChainNodeInfo(orgId, nodeId, network, nodesDS, infoEl) {
+  const node = nodesDS.get(nodeId);
+  if (!node) { infoEl.style.display = 'none'; return; }
+
+  const groupIcons = { objective: '🎯', framework: '📋', requirement: '📄', risk: '⚠️', control: '🛡️' };
+  const groupColors = { objective: '#7c3aed', framework: '#2563eb', requirement: '#64748b', risk: '#f59e0b', control: '#059669' };
+
+  const connNodes = network.getConnectedNodes(nodeId);
+  const incoming = connNodes.filter(c => {
+    const edges = network.getConnectedEdges(c);
+    return edges.some(eid => {
+      const ed = network.body.data.edges.get(eid);
+      return ed && ed.to === nodeId;
+    });
+  });
+  const outgoing = connNodes.filter(c => {
+    const edges = network.getConnectedEdges(c);
+    return edges.some(eid => {
+      const ed = network.body.data.edges.get(eid);
+      return ed && ed.from === nodeId;
+    });
+  });
+
+  const renderConn = (ids, label) => {
+    if (!ids.length) return '';
+    return `<div class="cni-section"><span class="cni-sec-lbl">${esc(label)}</span>` +
+      ids.map(id => {
+        const n = nodesDS.get(id);
+        if (!n) return '';
+        return `<div class="cni-conn" tabindex="0" onclick="chainNetNavigateTo('${esc(orgId)}','${esc(id)}')" title="Navigate to ${esc(n.title || n.label)}">
+          <span style="color:${groupColors[n.group] || '#64748b'}">${groupIcons[n.group] || '●'}</span>
+          <span>${esc(n.title || n.label)}</span>
+        </div>`;
+      }).join('') + '</div>';
+  };
+
+  infoEl.innerHTML = `
+    <div class="cni-header">
+      <span class="cni-icon" style="color:${groupColors[node.group] || '#64748b'}">${groupIcons[node.group] || '●'}</span>
+      <div class="cni-titles">
+        <span class="cni-type">${esc(node.group)}</span>
+        <span class="cni-name">${esc(node.title || node.label)}</span>
+      </div>
+      <button class="cni-close" onclick="this.closest('.chain-node-info').style.display='none'" title="Close">✕</button>
+    </div>
+    <div class="cni-body">
+      ${renderConn(incoming, '← Incoming')}
+      ${renderConn(outgoing, '→ Outgoing')}
+      ${!connNodes.length ? '<span class="cni-empty">No connections</span>' : ''}
+    </div>`;
+  infoEl.style.display = 'block';
+}
+window.showChainNodeInfo = showChainNodeInfo;
 
 // Auto-load chain on detail page if previously resolved
 async function autoResolveChain(orgId) {
