@@ -210,16 +210,59 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_policy_gen_history_collection ON policy_generation_history(collection_id);
+
+  CREATE TABLE IF NOT EXISTS ciso_entity_cache (
+    id          TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    name        TEXT,
+    ref_id      TEXT,
+    status      TEXT,
+    data        TEXT,
+    fetched_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(id, entity_type)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cache_type ON ciso_entity_cache(entity_type);
+
+  CREATE TABLE IF NOT EXISTS org_context_chain (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_context_id              TEXT NOT NULL,
+    objective_uuid              TEXT,
+    framework_uuid              TEXT,
+    requirement_uuid            TEXT,
+    compliance_assessment_uuid  TEXT,
+    requirement_assessment_uuid TEXT,
+    risk_scenario_uuid          TEXT,
+    applied_control_uuid        TEXT,
+    resolved_at                 TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (org_context_id) REFERENCES org_contexts(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_chain_org ON org_context_chain(org_context_id);
+  CREATE INDEX IF NOT EXISTS idx_chain_fw  ON org_context_chain(framework_uuid);
 `);
 
-// Migrate policy_generation_history: add extraction_data column if missing
+// Migrate policy_generation_history: add extraction_data and policy_uuid columns if missing
 try {
   const histCols = db.pragma('table_info(policy_generation_history)').map(c => c.name);
   if (!histCols.includes('extraction_data')) {
     db.exec(`ALTER TABLE policy_generation_history ADD COLUMN extraction_data TEXT DEFAULT NULL`);
     console.log('[Migration] Added extraction_data column to policy_generation_history');
   }
+  if (!histCols.includes('policy_uuid')) {
+    db.exec(`ALTER TABLE policy_generation_history ADD COLUMN policy_uuid TEXT`);
+    console.log('[Migration] Added policy_uuid column to policy_generation_history');
+  }
 } catch (migErr) { console.warn('policy_generation_history migration:', migErr.message); }
+
+// Migrate policy_collections: add policy_uuid column if missing
+try {
+  const pcCols = db.pragma('table_info(policy_collections)').map(c => c.name);
+  if (!pcCols.includes('policy_uuid')) {
+    db.exec(`ALTER TABLE policy_collections ADD COLUMN policy_uuid TEXT`);
+    console.log('[Migration] Added policy_uuid column to policy_collections');
+  }
+} catch (migErr) { console.warn('policy_collections migration:', migErr.message); }
 
 // Migrate policy_files: add gemini_file_name and gemini_file_uri columns if missing
 try {
