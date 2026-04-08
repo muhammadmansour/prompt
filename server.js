@@ -568,19 +568,23 @@ async function resolveOrgContextChain(orgContextId, localToken) {
   }
 
   // 6. For each compliance assessment, fetch requirement assessments (+ their linked controls)
+  //    Force fresh fetch (skip cache) to pick up any recently-linked controls
   const reqToRA = new Map(); // requirement_uuid → { ra, caUuid }
   for (const [fwUuid, cas] of fwComplianceAssessments) {
     for (const ca of cas) {
       const caId = ca.id || ca.uuid;
       const ras = await fetchPaginatedList(`/api/requirement-assessments/?compliance_assessment=${caId}&page_size=1000`, localToken);
       cacheEntities('requirement_assessment', ras);
+      let raWithControls = 0;
       for (const ra of ras) {
         const reqId = typeof ra.requirement === 'string' ? ra.requirement : (ra.requirement?.id || '');
         if (reqId) {
           reqToRA.set(reqId, { ra, caUuid: caId });
+          const acCount = Array.isArray(ra.applied_controls) ? ra.applied_controls.length : 0;
+          if (acCount > 0) raWithControls++;
         }
       }
-      console.log(`[Chain] CA "${ca.name || caId}": ${ras.length} requirement assessments`);
+      console.log(`[Chain] CA "${ca.name || caId}": ${ras.length} requirement assessments (${raWithControls} have controls)`);
     }
   }
 
@@ -627,6 +631,54 @@ async function resolveOrgContextChain(orgContextId, localToken) {
     }
   }
 
+  // 10b. Build requirement → control mapping from Controls Studio sessions
+  //      This bridges the gap when controls were generated but RA linkage hasn't propagated yet
+  const csReqToControls = new Map(); // requirement_uuid → [control_uuid]
+  try {
+    const csSessions = db.prepare(
+      `SELECT controls, grc_export_result FROM cs_sessions WHERE org_context_id = ? ORDER BY updated_at DESC LIMIT 5`
+    ).all(orgContextId);
+    for (const sess of csSessions) {
+      const ctrls = JSON.parse(sess.controls || '[]');
+      const exportResult = JSON.parse(sess.grc_export_result || '{}');
+      const exportedControls = exportResult.results || [];
+
+      // Build name → grcId from export result
+      const nameToGrcId = new Map();
+      for (const ec of exportedControls) {
+        if (ec.grcId && ec.name) nameToGrcId.set(ec.name.toLowerCase().trim(), ec.grcId);
+      }
+
+      for (const ctrl of ctrls) {
+        // Get GRC UUID for this control
+        let grcId = ctrl.grcId || null;
+        if (!grcId && ctrl.name) grcId = nameToGrcId.get(ctrl.name.toLowerCase().trim()) || null;
+        if (!grcId) continue;
+
+        // Map each linked requirement → this control
+        const linkedReqs = ctrl.linkedRequirements || [];
+        for (const lr of linkedReqs) {
+          const reqNodeId = lr.nodeId || '';
+          if (!reqNodeId) continue;
+          if (!csReqToControls.has(reqNodeId)) csReqToControls.set(reqNodeId, []);
+          const list = csReqToControls.get(reqNodeId);
+          if (!list.includes(grcId)) list.push(grcId);
+          // Also ensure this control is in allControlUuids for caching
+          allControlUuids.add(grcId);
+        }
+      }
+    }
+    if (csReqToControls.size > 0) {
+      console.log(`[Chain] CS sessions: found ${csReqToControls.size} requirements mapped to controls`);
+      // Fetch any new control UUIDs discovered
+      for (const uuid of allControlUuids) {
+        await fetchCachedEntity('applied_control', uuid, `/api/applied-controls/${uuid}/`, localToken);
+      }
+    }
+  } catch (csErr) {
+    console.warn('[Chain] Error reading CS sessions for req→control mapping:', csErr.message);
+  }
+
   // 11. Clear existing chain rows and build new ones
   dbDeleteChainByOrg.run(orgContextId);
 
@@ -660,9 +712,15 @@ async function resolveOrgContextChain(orgContextId, localToken) {
         const raUuid = raInfo ? (raInfo.ra.id || raInfo.ra.uuid || null) : null;
 
         // Get controls linked to this requirement assessment
-        const raControls = raInfo && Array.isArray(raInfo.ra.applied_controls)
+        let raControls = raInfo && Array.isArray(raInfo.ra.applied_controls)
           ? raInfo.ra.applied_controls.map(ac => typeof ac === 'string' ? ac : (ac?.id || ac?.uuid || '')).filter(Boolean)
           : [];
+
+        // Also check if any org-level controls mention this requirement via CS session data
+        if (raControls.length === 0 && csReqToControls.size > 0) {
+          const csCtrlIds = csReqToControls.get(reqId) || [];
+          if (csCtrlIds.length > 0) raControls = csCtrlIds;
+        }
 
         for (const obj of fwObjectives) {
           if (raControls.length > 0) {
@@ -677,7 +735,7 @@ async function resolveOrgContextChain(orgContextId, localToken) {
                   chainCount++;
                 }
               } else {
-                // GAP 3 FIX: Control exists but no risk linked via it — still include org-level risks
+                // Control exists but no risk linked via it — include org-level risks
                 if (riskScenarios.length > 0) {
                   for (const rs of riskScenarios) {
                     dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, rs.uuid, ctrlUuid);
@@ -690,7 +748,7 @@ async function resolveOrgContextChain(orgContextId, localToken) {
               }
             }
           } else {
-            // Requirement has NO controls yet — GAP 3 FIX: always include org-level risks
+            // Requirement has NO controls — include org-level risks if any
             if (riskScenarios.length > 0) {
               for (const rs of riskScenarios) {
                 dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, rs.uuid, null);

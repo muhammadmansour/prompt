@@ -2400,14 +2400,26 @@ function renderChainAccordionTab(orgId) {
   if (!cache) return;
   const { tree } = cache.parsed;
 
-  let html = '<div class="chain-tree">';
+  // Filter control
+  let html = `<div class="ct-filter-bar">
+    <span class="ct-filter-label">Show:</span>
+    <button class="ct-filter-btn active" data-filter="all" onclick="chainAccFilter('${esc(orgId)}','all',this)">All</button>
+    <button class="ct-filter-btn" data-filter="covered" onclick="chainAccFilter('${esc(orgId)}','covered',this)">✅ With Controls</button>
+    <button class="ct-filter-btn" data-filter="gaps" onclick="chainAccFilter('${esc(orgId)}','gaps',this)">⚠️ Gaps Only</button>
+  </div>`;
+
+  html += '<div class="chain-tree" id="chain-tree-' + orgId + '">';
 
   for (const [objKey, objNode] of tree) {
-    let objReqC = 0;
+    let objReqC = 0, objCoveredC = 0, objGapC = 0;
     const objCtrlS = new Set(), objRiskS = new Set();
     for (const fw of objNode.frameworks.values()) {
       objReqC += fw.requirements.size;
-      for (const rq of fw.requirements.values()) { rq.controls.forEach((_, k) => objCtrlS.add(k)); rq.risks.forEach((_, k) => objRiskS.add(k)); }
+      for (const rq of fw.requirements.values()) {
+        rq.controls.forEach((_, k) => objCtrlS.add(k));
+        rq.risks.forEach((_, k) => objRiskS.add(k));
+        if (rq.controls.size > 0) objCoveredC++; else objGapC++;
+      }
     }
 
     html += `<div class="ct-node ct-obj open">
@@ -2426,10 +2438,14 @@ function renderChainAccordionTab(orgId) {
 
     for (const [, fwNode] of objNode.frameworks) {
       const fwCtrlS = new Set(), fwRiskS = new Set();
-      for (const rq of fwNode.requirements.values()) { rq.controls.forEach((_, k) => fwCtrlS.add(k)); rq.risks.forEach((_, k) => fwRiskS.add(k)); }
-      const coveredReqs = [...fwNode.requirements.values()].filter(rq => rq.controls.size > 0).length;
+      const coveredArr = [], gapArr = [];
+      for (const rq of fwNode.requirements.values()) {
+        rq.controls.forEach((_, k) => fwCtrlS.add(k));
+        rq.risks.forEach((_, k) => fwRiskS.add(k));
+        if (rq.controls.size > 0) coveredArr.push(rq); else gapArr.push(rq);
+      }
       const totalReqs = fwNode.requirements.size;
-      const pct = totalReqs ? Math.round((coveredReqs / totalReqs) * 100) : 0;
+      const pct = totalReqs ? Math.round((coveredArr.length / totalReqs) * 100) : 0;
 
       html += `<div class="ct-node ct-fw">
         <div class="ct-header ct-fw-hdr" onclick="this.parentElement.classList.toggle('open')">
@@ -2438,19 +2454,28 @@ function renderChainAccordionTab(orgId) {
           <span class="ct-lbl">${esc(fwNode.name)}</span>
           <div class="ct-badges">
             <span class="ct-b ct-b-req">${totalReqs} req</span>
+            <span class="ct-b ${fwRiskS.size ? 'ct-b-risk' : 'ct-b-dim'}">${fwRiskS.size} risks</span>
             <span class="ct-b ${fwCtrlS.size ? 'ct-b-ctrl' : 'ct-b-dim'}">${fwCtrlS.size} ctrls</span>
           </div>
-          <div class="ct-progress" title="${coveredReqs}/${totalReqs} requirements covered (${pct}%)">
+          <div class="ct-progress" title="${coveredArr.length}/${totalReqs} requirements covered (${pct}%)">
             <div class="ct-progress-bar" style="width:${pct}%"></div>
             <span class="ct-progress-txt">${pct}%</span>
           </div>
         </div>
         <div class="ct-children">`;
 
+      // Coverage summary banner inside framework
+      html += `<div class="ct-coverage-banner">
+        <div class="ct-cov-stat ct-cov-ok"><span>${coveredArr.length}</span> covered</div>
+        <div class="ct-cov-stat ct-cov-gap"><span>${gapArr.length}</span> gaps</div>
+        <div class="ct-cov-stat ct-cov-risk"><span>${fwRiskS.size}</span> risks</div>
+        <div class="ct-cov-stat ct-cov-ctrl"><span>${fwCtrlS.size}</span> controls</div>
+      </div>`;
+
       for (const [, reqNode] of fwNode.requirements) {
         const hasCtrls = reqNode.controls.size > 0, hasRisks = reqNode.risks.size > 0, hasKids = hasCtrls || hasRisks;
 
-        html += `<div class="ct-node ct-req ${hasCtrls ? 'ct-covered' : 'ct-gap'}">
+        html += `<div class="ct-node ct-req ${hasCtrls ? 'ct-covered' : 'ct-gap'}" data-coverage="${hasCtrls ? 'covered' : 'gap'}">
           <div class="ct-header ct-req-hdr" ${hasKids ? 'onclick="this.parentElement.classList.toggle(\'open\')"' : ''}>
             ${hasKids ? '<svg class="ct-chev" width="9" height="9" viewBox="0 0 10 10"><path d="M3 1.5L7 5L3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '<span class="ct-dot"></span>'}
             <span class="ct-req-ref">${esc(reqNode.refId || '—')}</span>
@@ -2480,6 +2505,24 @@ function renderChainAccordionTab(orgId) {
   html += '</div>';
   panel.innerHTML = html;
 }
+
+// Accordion filter: all / covered / gaps
+function chainAccFilter(orgId, filter, btn) {
+  // Toggle active button
+  const bar = btn.parentElement;
+  bar.querySelectorAll('.ct-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const tree = document.getElementById('chain-tree-' + orgId);
+  if (!tree) return;
+  const reqs = tree.querySelectorAll('.ct-req[data-coverage]');
+  for (const r of reqs) {
+    if (filter === 'all') { r.style.display = ''; }
+    else if (filter === 'covered') { r.style.display = r.dataset.coverage === 'covered' ? '' : 'none'; }
+    else if (filter === 'gaps') { r.style.display = r.dataset.coverage === 'gap' ? '' : 'none'; }
+  }
+}
+window.chainAccFilter = chainAccFilter;
 
 function truncLabel(text, max) {
   if (!text) return '—';

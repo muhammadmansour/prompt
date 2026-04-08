@@ -5351,6 +5351,27 @@
 .chain-panel { }
 
 /* ---- Chain Accordion Tree ---- */
+.ct-filter-bar {
+  display: flex; align-items: center; gap: 6px; padding: 6px 0 10px;
+  border-bottom: 1px solid #f1f5f9; margin-bottom: 8px;
+}
+.ct-filter-label { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+.ct-filter-btn {
+  font-size: 11px; font-weight: 600; padding: 4px 10px; border: 1px solid #e2e8f0;
+  border-radius: 6px; background: #fff; color: #64748b; cursor: pointer; transition: all 0.12s;
+}
+.ct-filter-btn:hover { border-color: #c7d2fe; color: #6366f1; }
+.ct-filter-btn.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+.ct-coverage-banner {
+  display: flex; gap: 12px; padding: 8px 12px; margin: 2px 0 6px;
+  background: #f8fafc; border-radius: 6px; border: 1px solid #f1f5f9;
+}
+.ct-cov-stat { font-size: 11px; color: #64748b; display: flex; align-items: center; gap: 4px; }
+.ct-cov-stat span { font-weight: 700; font-size: 13px; }
+.ct-cov-ok span { color: #059669; }
+.ct-cov-gap span { color: #f97316; }
+.ct-cov-risk span { color: #eab308; }
+.ct-cov-ctrl span { color: #2563eb; }
 .chain-tree { margin-top: 4px; }
 .ct-node { border-left: 2px solid transparent; }
 .ct-children { display: none; padding-left: 20px; }
