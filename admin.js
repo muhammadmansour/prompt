@@ -739,7 +739,7 @@ async function loadOrgContexts(subId) {
     const idx = orgContexts.findIndex(c => c.id === subId);
     if (idx >= 0) {
       orgDetailCtxId = subId;
-      renderOrgContextDetail(orgContexts[idx], idx);
+      await renderOrgContextDetail(orgContexts[idx], idx);
       return; // detail page renders its own FAB
     }
   }
@@ -1831,12 +1831,12 @@ window.deleteOrgContext = deleteOrgContext;
 // ─── Org Context Detail Page ─────────────────────────────────
 let orgDetailCtxId = null;
 
-function openOrgContextDetail(idx) {
+async function openOrgContextDetail(idx) {
   const ctx = orgContexts[idx];
   if (!ctx) return;
   orgDetailCtxId = ctx.id;
   updateRoute('org-contexts', ctx.id);
-  renderOrgContextDetail(ctx, idx);
+  await renderOrgContextDetail(ctx, idx);
 }
 window.openOrgContextDetail = openOrgContextDetail;
 
@@ -1853,8 +1853,15 @@ function orgBackToList() {
 }
 window.orgBackToList = orgBackToList;
 
-function renderOrgContextDetail(ctx, idx) {
+async function renderOrgContextDetail(ctx, idx) {
   const container = document.getElementById('page-org-contexts').querySelector('.page-container');
+
+  // Pre-fetch GRC caches in parallel for UUID → name resolution
+  await Promise.all([
+    !grcFrameworksCache ? fetch('/api/grc/frameworks').then(r => r.json()).then(d => { grcFrameworksCache = (d.success && Array.isArray(d.results)) ? d.results : []; }).catch(() => { grcFrameworksCache = []; }) : Promise.resolve(),
+    !grcObjectivesCache ? fetchGrcObjectives() : Promise.resolve(),
+    !grcRiskScenariosCache ? fetchGrcRiskScenarios() : Promise.resolve(),
+  ]);
 
   // Hide list sections
   const header = container.querySelector('.page-header');
@@ -1910,9 +1917,10 @@ function renderOrgContextDetail(ctx, idx) {
     return `<span class="org-fw-pill" style="color:#4338ca;background:#eef2ff;border-color:#c7d2fe">${esc(pName)}${refId}</span>`;
   }).join('') || '<span style="color:#9ca3af">None</span>';
 
-  const objHtml = objectives.length
-    ? `<ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(resolveUuid(o, grcObjectivesCache))}</li>`).join('')}</ul>`
-    : '<span style="color:#9ca3af">None</span>';
+  const objPills = objectives.map(o => {
+    const oName = resolveUuid(o, grcObjectivesCache);
+    return `<span class="org-fw-pill" style="color:#7c3aed;background:#ede9fe;border-color:#c4b5fd">${esc(oName)}</span>`;
+  }).join('') || '<span style="color:#9ca3af">None</span>';
 
   const metricPills = trackingMetrics.map(m => {
     const mName = typeof m === 'object' ? m.name : m;
@@ -1986,7 +1994,7 @@ function renderOrgContextDetail(ctx, idx) {
 
     <div class="org-detail-card">
       <div class="org-detail-card-title">Strategic Objectives</div>
-      <div class="org-detail-section-body">${objHtml}</div>
+      <div class="org-detail-pills">${objPills}</div>
     </div>
 
     <div class="org-detail-card">
