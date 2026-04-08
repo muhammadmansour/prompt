@@ -946,7 +946,7 @@ async function populateMandatesFromFrameworks() {
     return;
   }
   container.innerHTML = fwList.map(fw =>
-    `<label class="mandate-chip-option"><input type="checkbox" value="${esc(fw.id)}" data-name="${esc(fw.name)}"> ${esc(fw.name)}</label>`
+    `<label class="mandate-chip-option"><input type="checkbox" value="${esc(fw.id)}" data-name="${esc(fw.name)}" onchange="renderObjFwMappingGrid()"> ${esc(fw.name)}</label>`
   ).join('');
 }
 
@@ -1088,6 +1088,8 @@ function updateObjectivesLabel() {
       }).join('');
     }
   }
+  // Re-render Objective ↔ Framework mapping grid when objectives change
+  renderObjFwMappingGrid();
 }
 window.updateObjectivesLabel = updateObjectivesLabel;
 
@@ -1456,6 +1458,71 @@ function getSelectedRiskScenarioIds() {
   return Array.from(checkboxes).map(cb => cb.value);
 }
 
+// ── Objective ↔ Framework Mapping ──
+let _objFwMapState = {}; // { objUuid: [fwUuid, ...] }
+
+function renderObjFwMappingGrid() {
+  const section = document.getElementById('obj-fw-mapping-section');
+  const grid = document.getElementById('obj-fw-mapping-grid');
+  if (!section || !grid) return;
+
+  const objIds = getSelectedObjectives();
+  const fwCbs = document.querySelectorAll('#org-mandates-options input[type="checkbox"]:checked');
+  const fws = Array.from(fwCbs).map(cb => ({
+    id: cb.value,
+    name: cb.getAttribute('data-name') || cb.parentElement?.textContent?.trim() || cb.value
+  }));
+
+  if (objIds.length === 0 || fws.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  const objs = objIds.map(id => {
+    const cached = (grcObjectivesCache || []).find(o => o.id === id);
+    return { id, name: cached ? cached.name : id.substring(0, 8) + '…' };
+  });
+
+  let html = '<table class="obj-fw-map-table"><thead><tr><th>Objective</th>';
+  fws.forEach(fw => { html += `<th title="${esc(fw.name)}">${esc(fw.name.length > 20 ? fw.name.substring(0, 18) + '…' : fw.name)}</th>`; });
+  html += '</tr></thead><tbody>';
+
+  objs.forEach(obj => {
+    html += `<tr><td title="${esc(obj.name)}">${esc(obj.name.length > 30 ? obj.name.substring(0, 28) + '…' : obj.name)}</td>`;
+    fws.forEach(fw => {
+      const checked = (_objFwMapState[obj.id] || []).includes(fw.id) ? 'checked' : '';
+      html += `<td style="text-align:center"><input type="checkbox" ${checked} data-obj="${esc(obj.id)}" data-fw="${esc(fw.id)}" onchange="updateObjFwMap(this)" /></td>`;
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+  grid.innerHTML = html;
+}
+
+function updateObjFwMap(cb) {
+  const objId = cb.getAttribute('data-obj');
+  const fwId = cb.getAttribute('data-fw');
+  if (!_objFwMapState[objId]) _objFwMapState[objId] = [];
+  if (cb.checked) {
+    if (!_objFwMapState[objId].includes(fwId)) _objFwMapState[objId].push(fwId);
+  } else {
+    _objFwMapState[objId] = _objFwMapState[objId].filter(f => f !== fwId);
+  }
+}
+window.updateObjFwMap = updateObjFwMap;
+window.renderObjFwMappingGrid = renderObjFwMappingGrid;
+
+function getObjectiveFrameworkMap() {
+  // Clean: remove empty arrays
+  const clean = {};
+  for (const [k, v] of Object.entries(_objFwMapState)) {
+    if (Array.isArray(v) && v.length > 0) clean[k] = v;
+  }
+  return clean;
+}
+
 // ── Add Objective Modal ──
 const addObjModal = document.getElementById('add-obj-modal-overlay');
 
@@ -1565,6 +1632,9 @@ function clearOrgForm() {
   renderPoliciesCheckboxes([]);
   renderMetricsCheckboxes([]);
   renderRiskScenariosCheckboxes([]);
+  _objFwMapState = {};
+  const mapSection = document.getElementById('obj-fw-mapping-section');
+  if (mapSection) mapSection.style.display = 'none';
   document.getElementById('org-notes').value = '';
 }
 
@@ -1639,6 +1709,7 @@ orgModalSave.addEventListener('click', async () => {
     policies: getSelectedPolicies(),
     trackingMetrics: getSelectedMetrics(),
     riskScenarios: getSelectedRiskScenarios(),     // UUID array
+    objectiveFrameworkMap: getObjectiveFrameworkMap(), // Objective → Framework mapping
     notes,
     isActive: true,
   };
@@ -1731,6 +1802,10 @@ async function editOrgContext(idx) {
     return match ? match.id : null;
   }).filter(Boolean);
   renderRiskScenariosCheckboxes(rsSelectedIds);
+
+  // Restore Objective ↔ Framework mapping
+  _objFwMapState = ctx.objectiveFrameworkMap || {};
+  renderObjFwMappingGrid();
 
   document.getElementById('org-name-en').focus();
 }

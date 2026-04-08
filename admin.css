@@ -5239,3 +5239,11 @@
 .chain-table th { background: #f3f4f6; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; padding: 8px 10px; text-align: left; font-size: 10px; }
 .chain-table td { padding: 7px 10px; border-bottom: 1px solid #f3f4f6; color: #374151; }
 .chain-table tr:hover td { background: #f9fafb; }
+
+/* ---- Objective ↔ Framework Mapping Grid ---- */
+.obj-fw-mapping-grid { margin-top: 4px; }
+.obj-fw-map-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.obj-fw-map-table th { background: #f3f4f6; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; padding: 8px 10px; text-align: left; font-size: 10px; border-bottom: 1px solid #e5e7eb; }
+.obj-fw-map-table td { padding: 7px 10px; border-bottom: 1px solid #f3f4f6; color: #374151; }
+.obj-fw-map-table tr:hover td { background: #f9fafb; }
+.obj-fw-map-table input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #6366f1; }

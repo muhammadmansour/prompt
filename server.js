@@ -301,6 +301,7 @@ try {
   addCol('tracking_metrics', "TEXT DEFAULT '[]'");
   addCol('risk_scenarios', "TEXT DEFAULT '[]'");
   addCol('controls', "TEXT DEFAULT '[]'");
+  addCol('objective_framework_map', "TEXT DEFAULT '{}'");
   addCol('store_id', "TEXT DEFAULT ''");
 } catch (migErr) { console.warn('Org profile migration:', migErr.message); }
 
@@ -347,11 +348,11 @@ const dbUpdateLocalPrompt = db.prepare(`
 const dbListOrgContexts = db.prepare(`SELECT * FROM org_contexts ORDER BY created_at DESC`);
 const dbGetOrgContext = db.prepare(`SELECT * FROM org_contexts WHERE id = ?`);
 const dbInsertOrgContext = db.prepare(`
-  INSERT INTO org_contexts (id, name_en, name_ar, sector, sector_custom, size, compliance_maturity, regulatory_mandates, governance_structure, data_classification, geographic_scope, it_infrastructure, strategic_objectives, obligatory_frameworks, policies, tracking_metrics, risk_scenarios, notes, is_active, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO org_contexts (id, name_en, name_ar, sector, sector_custom, size, compliance_maturity, regulatory_mandates, governance_structure, data_classification, geographic_scope, it_infrastructure, strategic_objectives, obligatory_frameworks, policies, tracking_metrics, risk_scenarios, objective_framework_map, notes, is_active, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const dbUpdateOrgContext = db.prepare(`
-  UPDATE org_contexts SET name_en = ?, name_ar = ?, sector = ?, sector_custom = ?, size = ?, compliance_maturity = ?, regulatory_mandates = ?, governance_structure = ?, data_classification = ?, geographic_scope = ?, it_infrastructure = ?, strategic_objectives = ?, obligatory_frameworks = ?, policies = ?, tracking_metrics = ?, risk_scenarios = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?
+  UPDATE org_contexts SET name_en = ?, name_ar = ?, sector = ?, sector_custom = ?, size = ?, compliance_maturity = ?, regulatory_mandates = ?, governance_structure = ?, data_classification = ?, geographic_scope = ?, it_infrastructure = ?, strategic_objectives = ?, obligatory_frameworks = ?, policies = ?, tracking_metrics = ?, risk_scenarios = ?, objective_framework_map = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?
 `);
 const dbDeleteOrgContext = db.prepare(`DELETE FROM org_contexts WHERE id = ?`);
 
@@ -490,11 +491,15 @@ async function resolveOrgContextChain(orgContextId, localToken) {
   const objectiveUuids = JSON.parse(orgRow.strategic_objectives || '[]').filter(v => typeof v === 'string' && v.includes('-'));
   const frameworkUuids = JSON.parse(orgRow.obligatory_frameworks || '[]').filter(v => typeof v === 'string' && v.includes('-'));
   const riskUuids = JSON.parse(orgRow.risk_scenarios || '[]').filter(v => typeof v === 'string' && v.includes('-'));
+  // Objective → Framework mapping (user-defined)
+  let objFwMap = {};
+  try { objFwMap = JSON.parse(orgRow.objective_framework_map || '{}'); } catch {}
   // controls field may be used for applied_control UUIDs
   let controlUuids = [];
   try { controlUuids = JSON.parse(orgRow.controls || '[]').filter(v => typeof v === 'string' && v.includes('-')); } catch {}
 
   console.log(`[Chain] UUIDs — objectives: ${objectiveUuids.length}, frameworks: ${frameworkUuids.length}, risks: ${riskUuids.length}, controls: ${controlUuids.length}`);
+  console.log(`[Chain] Objective-Framework map keys: ${Object.keys(objFwMap).length}`);
 
   // 2. Fetch objectives
   const objectives = [];
@@ -523,17 +528,47 @@ async function resolveOrgContextChain(orgContextId, localToken) {
     console.log(`[Chain] Framework "${fw.name}": ${assessable.length} assessable requirements (${reqs.length} total)`);
   }
 
-  // 5. For each framework, fetch compliance assessments
+  // 5. For each framework, fetch compliance assessments — AUTO-CREATE if none exist (Gap 2)
   const fwComplianceAssessments = new Map(); // framework_uuid → [compliance assessments]
   for (const fw of frameworks) {
-    const cas = await fetchPaginatedList(`/api/compliance-assessments/?framework=${fw.uuid}&page_size=100`, localToken);
+    let cas = await fetchPaginatedList(`/api/compliance-assessments/?framework=${fw.uuid}&page_size=100`, localToken);
     cacheEntities('compliance_assessment', cas);
+
+    // GAP 2 FIX: Auto-create a compliance assessment if none exists for this framework
+    if (cas.length === 0) {
+      console.log(`[Chain] No compliance assessment found for "${fw.name}" — auto-creating one...`);
+      try {
+        const caName = `Auto-Assessment: ${fw.name || fw.ref_id || fw.uuid}`;
+        const createRes = await grcFetch(`${GRC_API_URL}/api/compliance-assessments/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: caName,
+            framework: fw.uuid,
+            description: `Auto-created by chain resolver for framework: ${fw.name || fw.uuid}`,
+          })
+        }, localToken);
+
+        if (createRes.ok) {
+          const newCA = await createRes.json();
+          console.log(`[Chain] Auto-created compliance assessment: ${newCA.id} ("${caName}")`);
+          cacheEntities('compliance_assessment', [newCA]);
+          cas = [newCA];
+        } else {
+          const errText = await createRes.text().catch(() => '');
+          console.warn(`[Chain] Failed to auto-create CA for "${fw.name}": ${createRes.status} ${errText}`);
+        }
+      } catch (caErr) {
+        console.warn(`[Chain] Error auto-creating CA for "${fw.name}":`, caErr.message);
+      }
+    }
+
     fwComplianceAssessments.set(fw.uuid, cas);
     console.log(`[Chain] Framework "${fw.name}": ${cas.length} compliance assessment(s)`);
   }
 
   // 6. For each compliance assessment, fetch requirement assessments (+ their linked controls)
-  const reqToRA = new Map(); // requirement_uuid → { ra, ca }
+  const reqToRA = new Map(); // requirement_uuid → { ra, caUuid }
   for (const [fwUuid, cas] of fwComplianceAssessments) {
     for (const ca of cas) {
       const caId = ca.id || ca.uuid;
@@ -583,13 +618,40 @@ async function resolveOrgContextChain(orgContextId, localToken) {
   }
   console.log(`[Chain] Cached ${allControlUuids.size} applied controls`);
 
-  // 10. Clear existing chain rows and build new ones
+  // 10. Build reverse mapping: control → [risk_uuids] for quick lookup
+  const controlToRisks = new Map();
+  for (const [riskUuid, ctrls] of riskToControls) {
+    for (const c of ctrls) {
+      if (!controlToRisks.has(c)) controlToRisks.set(c, []);
+      controlToRisks.get(c).push(riskUuid);
+    }
+  }
+
+  // 11. Clear existing chain rows and build new ones
   dbDeleteChainByOrg.run(orgContextId);
 
   let chainCount = 0;
   const insertChain = db.transaction(() => {
     for (const fw of frameworks) {
       const reqs = fwRequirements.get(fw.uuid) || [];
+
+      // GAP 1 FIX: Use objective_framework_map for targeted Objective ↔ Framework linking
+      // Build list of objectives that map to this framework
+      let fwObjectives = [];
+      if (Object.keys(objFwMap).length > 0) {
+        // User-defined mapping: only include objectives that explicitly map to this framework
+        for (const [objUuid, fwUuids] of Object.entries(objFwMap)) {
+          if (Array.isArray(fwUuids) && fwUuids.includes(fw.uuid)) {
+            const obj = objectives.find(o => o.uuid === objUuid);
+            if (obj) fwObjectives.push(obj);
+          }
+        }
+        // If no mapping found for this framework, still create rows with null objective
+        if (fwObjectives.length === 0) fwObjectives = [{ uuid: null }];
+      } else {
+        // No mapping defined: fall back to linking all objectives (cross-product)
+        fwObjectives = objectives.length > 0 ? objectives : [{ uuid: null }];
+      }
 
       for (const req of reqs) {
         const reqId = req.id || req.uuid;
@@ -602,29 +664,12 @@ async function resolveOrgContextChain(orgContextId, localToken) {
           ? raInfo.ra.applied_controls.map(ac => typeof ac === 'string' ? ac : (ac?.id || ac?.uuid || '')).filter(Boolean)
           : [];
 
-        // Determine which objectives link to this framework
-        // (For now, link all objectives since the org_context associates them at the top level)
-        const linkedObjectives = objectives.length > 0 ? objectives : [{ uuid: null }];
-
-        // Determine which risks relate to this requirement's controls
-        const relatedRiskUuids = new Set();
-        for (const [riskUuid, riskCtrls] of riskToControls) {
-          if (raControls.some(c => riskCtrls.includes(c))) {
-            relatedRiskUuids.add(riskUuid);
-          }
-        }
-        // If no risk found via controls, check if any risk exists (link all)
-        if (relatedRiskUuids.size === 0 && riskScenarios.length > 0) {
-          // Don't force-link unrelated risks
-        }
-
-        for (const obj of linkedObjectives) {
+        for (const obj of fwObjectives) {
           if (raControls.length > 0) {
+            // Requirement HAS controls
             for (const ctrlUuid of raControls) {
-              // Find related risks for this specific control
-              const ctrlRisks = [...riskToControls.entries()]
-                .filter(([, ctrls]) => ctrls.includes(ctrlUuid))
-                .map(([riskUuid]) => riskUuid);
+              // Find risks linked to this specific control
+              const ctrlRisks = controlToRisks.get(ctrlUuid) || [];
 
               if (ctrlRisks.length > 0) {
                 for (const riskUuid of ctrlRisks) {
@@ -632,17 +677,23 @@ async function resolveOrgContextChain(orgContextId, localToken) {
                   chainCount++;
                 }
               } else {
-                // Control with no linked risk
-                dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, null, ctrlUuid);
-                chainCount++;
+                // GAP 3 FIX: Control exists but no risk linked via it — still include org-level risks
+                if (riskScenarios.length > 0) {
+                  for (const rs of riskScenarios) {
+                    dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, rs.uuid, ctrlUuid);
+                    chainCount++;
+                  }
+                } else {
+                  dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, null, ctrlUuid);
+                  chainCount++;
+                }
               }
             }
           } else {
-            // Requirement with no controls yet
-            const reqRisks = [...relatedRiskUuids];
-            if (reqRisks.length > 0) {
-              for (const riskUuid of reqRisks) {
-                dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, riskUuid, null);
+            // Requirement has NO controls yet — GAP 3 FIX: always include org-level risks
+            if (riskScenarios.length > 0) {
+              for (const rs of riskScenarios) {
+                dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, rs.uuid, null);
                 chainCount++;
               }
             } else {
@@ -688,6 +739,7 @@ function orgContextToJSON(r) {
     policies: JSON.parse(r.policies || '[]'),
     trackingMetrics: JSON.parse(r.tracking_metrics || '[]'),
     riskScenarios: JSON.parse(r.risk_scenarios || '[]'),
+    objectiveFrameworkMap: JSON.parse(r.objective_framework_map || '{}'),
     notes: r.notes,
     storeId: r.store_id || '',
     isActive: !!r.is_active,
@@ -3031,6 +3083,7 @@ const server = http.createServer(async (req, res) => {
         JSON.stringify(body.policies || []),
         JSON.stringify(body.trackingMetrics || []),
         JSON.stringify(body.riskScenarios || []),
+        JSON.stringify(body.objectiveFrameworkMap || {}),
         body.notes || '',
         body.isActive !== undefined ? (body.isActive ? 1 : 0) : 1,
         now,
@@ -3086,6 +3139,7 @@ const server = http.createServer(async (req, res) => {
         body.policies !== undefined ? JSON.stringify(body.policies) : (row.policies || '[]'),
         body.trackingMetrics !== undefined ? JSON.stringify(body.trackingMetrics) : (row.tracking_metrics || '[]'),
         body.riskScenarios !== undefined ? JSON.stringify(body.riskScenarios) : (row.risk_scenarios || '[]'),
+        body.objectiveFrameworkMap !== undefined ? JSON.stringify(body.objectiveFrameworkMap) : (row.objective_framework_map || '{}'),
         body.notes !== undefined ? body.notes : row.notes,
         body.isActive !== undefined ? (body.isActive ? 1 : 0) : row.is_active,
         now,
