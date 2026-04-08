@@ -2082,7 +2082,7 @@ window.resolveChain = resolveChain;
 
 async function renderChainVisualization(orgId, container) {
   try {
-    // Fetch chain data
+    // Fetch chain data + summary
     const [chainRes, summaryRes] = await Promise.all([
       fetch('/api/chain/' + orgId),
       fetch('/api/chain/' + orgId + '/summary')
@@ -2097,83 +2097,155 @@ async function renderChainVisualization(orgId, container) {
       return;
     }
 
-    // Summary cards
-    let summaryHtml = '';
-    if (summaryData) {
-      const cpf = summaryData.controlsPerFramework || [];
-      const cpo = summaryData.coveragePerObjective || [];
-      const unm = summaryData.unmitigatedRisks || [];
+    // ── Build hierarchical tree from flat rows ──
+    const tree = new Map(); // objKey → { name, frameworks: Map }
+    const uniqRisks = new Set(), uniqCtrls = new Set(), uniqReqs = new Set(), uniqFws = new Set();
 
-      const totals = summaryData.totals || {};
-      summaryHtml = `<div class="chain-summary-row">
-        <div class="chain-summary-card">
-          <div class="chain-summary-num">${totals.chainRows || rows.length}</div>
-          <div class="chain-summary-label">Total Paths</div>
-        </div>
-        <div class="chain-summary-card">
-          <div class="chain-summary-num">${totals.frameworks || cpf.length}</div>
-          <div class="chain-summary-label">Frameworks</div>
-        </div>
-        <div class="chain-summary-card">
-          <div class="chain-summary-num">${totals.appliedControls || cpf.reduce((a, c) => a + (c.controlCount || 0), 0)}</div>
-          <div class="chain-summary-label">Controls Linked</div>
-        </div>
-        <div class="chain-summary-card" style="${unm.length ? 'border-color:#ef4444;color:#ef4444' : ''}">
-          <div class="chain-summary-num">${unm.length}</div>
-          <div class="chain-summary-label">Unmitigated Risks</div>
-        </div>
-      </div>`;
+    for (const r of rows) {
+      const objKey  = r.objective?.uuid || '_none_';
+      const objName = r.objective?.name || 'No Objective Linked';
+      const fwKey   = r.framework?.uuid || '_none_';
+      const fwName  = r.framework?.name || 'No Framework';
+      const reqKey  = r.requirement?.uuid || r.requirement?.refId || '_none_';
+      const reqRef  = r.requirement?.refId || '';
+      const reqName = r.requirement?.name || reqRef || 'Unknown Requirement';
+      const riskN   = r.riskScenario?.name || null;
+      const riskU   = r.riskScenario?.uuid || null;
+      const ctrlN   = r.control?.name || null;
+      const ctrlU   = r.control?.uuid || null;
+      const ctrlSt  = r.control?.status || null;
 
-      // Controls per framework
-      if (cpf.length) {
-        const maxCtrl = Math.max(...cpf.map(f => f.controlCount || 0), 1);
-        summaryHtml += `<div style="margin-top:10px"><strong style="font-size:12px;color:#6b7280">Controls per Framework</strong>
-          <div class="chain-fw-bars">${cpf.map(f => `<div class="chain-fw-bar-row">
-            <span class="chain-fw-bar-name">${esc(f.framework || 'Unknown')}</span>
-            <div class="chain-fw-bar-track"><div class="chain-fw-bar-fill" style="width:${Math.round(((f.controlCount || 0) / maxCtrl) * 100)}%"></div></div>
-            <span class="chain-fw-bar-count">${f.controlCount || 0}</span>
-          </div>`).join('')}</div>
-        </div>`;
-      }
+      if (fwKey !== '_none_')  uniqFws.add(fwKey);
+      if (reqKey !== '_none_') uniqReqs.add(reqKey);
+      if (riskU) uniqRisks.add(riskU);
+      if (ctrlU) uniqCtrls.add(ctrlU);
 
-      // Coverage per objective
-      if (cpo.length) {
-        summaryHtml += `<div style="margin-top:10px"><strong style="font-size:12px;color:#6b7280">Coverage per Objective</strong>
-          <div class="chain-obj-coverage">${cpo.map(o => `<div class="chain-obj-row">
-            <span class="chain-obj-name">${esc(o.objective || 'Unknown')}</span>
-            <span class="chain-obj-stats">${o.frameworks || 0} fw · ${o.requirements || 0} req · ${o.risks || 0} risks · ${o.controls || 0} ctrls</span>
-          </div>`).join('')}</div>
-        </div>`;
-      }
+      if (!tree.has(objKey)) tree.set(objKey, { name: objName, frameworks: new Map() });
+      const objN = tree.get(objKey);
+      if (!objN.frameworks.has(fwKey)) objN.frameworks.set(fwKey, { name: fwName, requirements: new Map() });
+      const fwN = objN.frameworks.get(fwKey);
+      if (!fwN.requirements.has(reqKey)) fwN.requirements.set(reqKey, { refId: reqRef, name: reqName, risks: new Map(), controls: new Map() });
+      const rqN = fwN.requirements.get(reqKey);
+      if (riskN && riskU) rqN.risks.set(riskU, riskN);
+      if (ctrlN && ctrlU) rqN.controls.set(ctrlU, { name: ctrlN, status: ctrlSt });
     }
 
-    // Chain table
-    const tableHtml = `<div class="chain-table-wrapper">
-      <table class="chain-table">
-        <thead><tr>
-          <th>#</th>
-          <th>Objective</th>
-          <th>Framework</th>
-          <th>Requirement</th>
-          <th>Risk Scenario</th>
-          <th>Control</th>
-        </tr></thead>
-        <tbody>${rows.map((r, i) => `<tr>
-          <td>${i + 1}</td>
-          <td>${esc(r.objective?.name || '—')}</td>
-          <td>${esc(r.framework?.name || '—')}</td>
-          <td>${esc(r.requirement?.name || r.requirement?.refId || '—')}</td>
-          <td>${esc(r.riskScenario?.name || '—')}</td>
-          <td>${esc(r.control?.name || '—')}</td>
-        </tr>`).join('')}</tbody>
-      </table>
+    // ── Summary strip ──
+    const unm = summaryData?.unmitigatedRisks || [];
+    const summaryHtml = `<div class="chain-strip">
+      <div class="chain-strip-item"><span class="chain-strip-num">${tree.size}</span><span class="chain-strip-txt">Objectives</span></div>
+      <div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>
+      <div class="chain-strip-item"><span class="chain-strip-num">${uniqFws.size}</span><span class="chain-strip-txt">Frameworks</span></div>
+      <div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>
+      <div class="chain-strip-item"><span class="chain-strip-num">${uniqReqs.size}</span><span class="chain-strip-txt">Requirements</span></div>
+      <div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>
+      <div class="chain-strip-item"><span class="chain-strip-num">${uniqRisks.size}</span><span class="chain-strip-txt">Risks</span></div>
+      <div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>
+      <div class="chain-strip-item ${uniqCtrls.size ? '' : 'chain-strip-warn'}"><span class="chain-strip-num">${uniqCtrls.size}</span><span class="chain-strip-txt">Controls</span></div>
+      ${unm.length ? `<div class="chain-strip-sep">|</div><div class="chain-strip-item chain-strip-warn"><span class="chain-strip-num">${unm.length}</span><span class="chain-strip-txt">Unmitigated</span></div>` : ''}
     </div>`;
 
-    container.innerHTML = summaryHtml + `
-      <details style="margin-top:12px">
-        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#6366f1">Show Full Chain Table (${rows.length} rows)</summary>
-        ${tableHtml}
-      </details>`;
+    // ── Build tree HTML ──
+    let treeHtml = '<div class="chain-tree">';
+
+    for (const [objKey, objNode] of tree) {
+      // Aggregate counts for objective level
+      let objReqC = 0;
+      const objCtrlS = new Set(), objRiskS = new Set();
+      for (const fwNode of objNode.frameworks.values()) {
+        objReqC += fwNode.requirements.size;
+        for (const rq of fwNode.requirements.values()) {
+          rq.controls.forEach((_, k) => objCtrlS.add(k));
+          rq.risks.forEach((_, k) => objRiskS.add(k));
+        }
+      }
+
+      treeHtml += `
+      <div class="ct-node ct-obj open">
+        <div class="ct-header ct-obj-hdr" onclick="this.parentElement.classList.toggle('open')">
+          <svg class="ct-chev" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1.5L7 5L3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="ct-icon">🎯</span>
+          <span class="ct-lbl">${esc(objNode.name)}</span>
+          <div class="ct-badges">
+            <span class="ct-b ct-b-fw">${objNode.frameworks.size} fw</span>
+            <span class="ct-b ct-b-req">${objReqC} req</span>
+            <span class="ct-b ${objRiskS.size ? 'ct-b-risk' : 'ct-b-dim'}">${objRiskS.size} risks</span>
+            <span class="ct-b ${objCtrlS.size ? 'ct-b-ctrl' : 'ct-b-dim'}">${objCtrlS.size} ctrls</span>
+          </div>
+        </div>
+        <div class="ct-children">`;
+
+      for (const [fwKey, fwNode] of objNode.frameworks) {
+        const fwCtrlS = new Set(), fwRiskS = new Set();
+        for (const rq of fwNode.requirements.values()) {
+          rq.controls.forEach((_, k) => fwCtrlS.add(k));
+          rq.risks.forEach((_, k) => fwRiskS.add(k));
+        }
+
+        // Progress: how many requirements have at least 1 control
+        const coveredReqs = [...fwNode.requirements.values()].filter(rq => rq.controls.size > 0).length;
+        const totalReqs = fwNode.requirements.size;
+        const pct = totalReqs ? Math.round((coveredReqs / totalReqs) * 100) : 0;
+
+        treeHtml += `
+        <div class="ct-node ct-fw">
+          <div class="ct-header ct-fw-hdr" onclick="this.parentElement.classList.toggle('open')">
+            <svg class="ct-chev" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1.5L7 5L3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="ct-icon">📋</span>
+            <span class="ct-lbl">${esc(fwNode.name)}</span>
+            <div class="ct-badges">
+              <span class="ct-b ct-b-req">${totalReqs} req</span>
+              <span class="ct-b ${fwCtrlS.size ? 'ct-b-ctrl' : 'ct-b-dim'}">${fwCtrlS.size} ctrls</span>
+            </div>
+            <div class="ct-progress" title="${coveredReqs}/${totalReqs} requirements covered (${pct}%)">
+              <div class="ct-progress-bar" style="width:${pct}%"></div>
+              <span class="ct-progress-txt">${pct}%</span>
+            </div>
+          </div>
+          <div class="ct-children">`;
+
+        // Requirements list
+        for (const [reqKey, reqNode] of fwNode.requirements) {
+          const hasCtrls = reqNode.controls.size > 0;
+          const hasRisks = reqNode.risks.size > 0;
+          const hasChildren = hasCtrls || hasRisks;
+
+          treeHtml += `
+          <div class="ct-node ct-req ${hasCtrls ? 'ct-covered' : 'ct-gap'}">
+            <div class="ct-header ct-req-hdr" ${hasChildren ? 'onclick="this.parentElement.classList.toggle(\'open\')"' : ''}>
+              ${hasChildren ? '<svg class="ct-chev" width="9" height="9" viewBox="0 0 10 10"><path d="M3 1.5L7 5L3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '<span class="ct-dot"></span>'}
+              <span class="ct-req-ref">${esc(reqNode.refId || '—')}</span>
+              <span class="ct-lbl ct-req-name" title="${esc(reqNode.name)}">${esc(reqNode.name)}</span>`;
+
+          if (hasCtrls) treeHtml += `<span class="ct-b ct-b-ctrl ct-b-sm">${reqNode.controls.size} 🛡️</span>`;
+          if (hasRisks) treeHtml += `<span class="ct-b ct-b-risk ct-b-sm">${reqNode.risks.size} ⚠️</span>`;
+          if (!hasCtrls) treeHtml += `<span class="ct-gap-tag">no control</span>`;
+
+          treeHtml += `</div>`;
+
+          if (hasChildren) {
+            treeHtml += `<div class="ct-children ct-leaves">`;
+            for (const [, ctrl] of reqNode.controls) {
+              const stCls = ctrl.status === 'active' ? 'ct-st-active' : (ctrl.status === 'in_progress' ? 'ct-st-prog' : 'ct-st-todo');
+              treeHtml += `<div class="ct-leaf ct-leaf-ctrl"><span class="ct-leaf-ic">🛡️</span><span>${esc(ctrl.name)}</span><span class="ct-st ${stCls}">${esc(ctrl.status || 'to_do')}</span></div>`;
+            }
+            for (const [, riskName] of reqNode.risks) {
+              treeHtml += `<div class="ct-leaf ct-leaf-risk"><span class="ct-leaf-ic">⚠️</span><span>${esc(riskName)}</span></div>`;
+            }
+            treeHtml += `</div>`;
+          }
+
+          treeHtml += `</div>`; // close ct-req
+        }
+
+        treeHtml += `</div></div>`; // close ct-children + ct-fw
+      }
+
+      treeHtml += `</div></div>`; // close ct-children + ct-obj
+    }
+    treeHtml += '</div>';
+
+    container.innerHTML = summaryHtml + treeHtml;
 
   } catch (err) {
     console.error('Chain visualization error:', err);
