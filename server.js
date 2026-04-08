@@ -866,7 +866,10 @@ function buildOrgProfileText(orgContext) {
   return p.join('\n');
 }
 
-async function generateControlsForRequirement(requirement, orgContext, contextFiles, apiKey, existingControls) {
+// ---- Batch Controls Generation (single or chunked API calls) ----
+const CHUNK_SIZE = 15; // Max requirements per API call (keeps output under token limit)
+
+async function callGeminiForChunk(chunkRequirements, orgContext, contextFiles, apiKey) {
   const orgContextText = buildOrgProfileText(orgContext);
 
   // Build reference files text
@@ -880,39 +883,25 @@ async function generateControlsForRequirement(requirement, orgContext, contextFi
     }).join('\n\n');
   }
 
-  // Build requirement text
-  const reqText = [
-    `Framework: ${requirement.frameworkName || 'Unknown'}`,
-    requirement.refId ? `Ref ID: ${requirement.refId}` : '',
-    `Name: ${requirement.name || ''}`,
-    `Description: ${requirement.description || ''}`,
-    requirement.depth !== undefined ? `Depth: ${requirement.depth}` : '',
-  ].filter(Boolean).join('\n');
-
-  // Build existing controls context (for reuse detection)
-  let existingCtrlsText = '';
-  if (existingControls && existingControls.length > 0) {
-    // Deduplicate existing controls by name for a cleaner context
-    const uniqueExisting = [];
-    const seenNames = new Set();
-    for (const c of existingControls) {
-      const key = (c.name || '').toLowerCase().trim();
-      if (key && !seenNames.has(key)) {
-        seenNames.add(key);
-        const reqRefs = (c.linkedRequirements || []).map(r => r.refId || 'unknown').join(', ');
-        uniqueExisting.push(`- **${c.name}** (covers: ${reqRefs}) — ${c.description || ''}`);
-      }
-    }
-    if (uniqueExisting.length > 0) {
-      existingCtrlsText = '\n\n## Existing Applied Controls (already generated in this session)\n\n' + uniqueExisting.join('\n');
-    }
-  }
+  // Build ALL requirements text (numbered list)
+  const reqsText = chunkRequirements.map((req, i) => {
+    return [
+      `### Requirement ${i + 1}`,
+      `- **Ref ID**: ${req.refId || 'N/A'}`,
+      `- **Framework**: ${req.frameworkName || 'Unknown'}`,
+      `- **Name**: ${req.name || ''}`,
+      `- **Description**: ${req.description || ''}`,
+      req.depth !== undefined ? `- **Depth**: ${req.depth}` : '',
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
 
   const fullPrompt = getControlsGeneratorPrompt()
     .replace('{{ORG_CONTEXT}}', orgContextText)
     .replace('{{REFERENCE_FILES}}', refFilesText)
-    .replace('{{REQUIREMENT}}', reqText)
-    + existingCtrlsText;
+    .replace('{{REQUIREMENTS}}', reqsText);
+
+  // Scale output tokens based on number of requirements (~1500 tokens per requirement)
+  const outputTokens = Math.min(65536, Math.max(8192, chunkRequirements.length * 1500));
 
   const requestBody = {
     contents: [{ parts: [{ text: fullPrompt }] }],
@@ -920,9 +909,11 @@ async function generateControlsForRequirement(requirement, orgContext, contextFi
       temperature: 0.7,
       topK: 40,
       topP: 0.95,
-      maxOutputTokens: 8192,
+      maxOutputTokens: outputTokens,
     }
   };
+
+  console.log(`[Controls] Calling Gemini for ${chunkRequirements.length} requirements (maxOutput: ${outputTokens} tokens)`);
 
   const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
     method: 'POST',
@@ -960,86 +951,108 @@ async function generateControlsForRequirement(requirement, orgContext, contextFi
 }
 
 async function generateControlsBatch(requirements, orgContext, contextFiles, apiKey) {
-  const CONCURRENCY = 3;
-  const allControls = [];  // Each control has linkedRequirements: [{ refId, name, framework, nodeUrn, nodeId }]
+  const allControls = [];
   const progress = { total: requirements.length, completed: 0, failed: 0 };
 
-  // Helper: build a requirement link object
-  const makeReqLink = (req) => ({
-    refId: req.refId || '',
-    name: req.name || req.description || '',
-    framework: req.frameworkName || '',
-    nodeUrn: req.nodeUrn || '',
-    nodeId: req.nodeId || '',
-  });
-
-  // Helper: find existing control by name (case-insensitive fuzzy match)
-  const findExistingByName = (name) => {
-    if (!name) return null;
-    const needle = name.toLowerCase().trim();
-    return allControls.find(c => (c.name || '').toLowerCase().trim() === needle);
-  };
-
-  for (let i = 0; i < requirements.length; i += CONCURRENCY) {
-    const batch = requirements.slice(i, i + CONCURRENCY);
-    // Process batch sequentially within concurrency window to avoid race conditions on allControls
-    const results = await Promise.all(batch.map(async (req, batchIdx) => {
-      const idx = i + batchIdx;
-      console.log(`[Controls] Generating for req ${idx + 1}/${requirements.length}: ${req.refId || req.name || 'Unknown'}`);
-      try {
-        const controls = await generateControlsForRequirement(req, orgContext, contextFiles, apiKey, allControls);
-        progress.completed++;
-        const reqLink = makeReqLink(req);
-        const newControls = [];
-
-        for (const c of controls) {
-          // Handle reuse: AI returned { reuse: true, reuse_name: "..." }
-          if (c.reuse === true && c.reuse_name) {
-            const existing = findExistingByName(c.reuse_name);
-            if (existing) {
-              // Link the additional requirement to the existing control
-              const alreadyLinked = existing.linkedRequirements.some(r => r.refId === reqLink.refId && r.nodeUrn === reqLink.nodeUrn);
-              if (!alreadyLinked) {
-                existing.linkedRequirements.push(reqLink);
-                console.log(`[Controls] Reuse: "${existing.name}" now covers ${existing.linkedRequirements.length} requirements`);
-              }
-              continue; // Don't create a duplicate
-            } else {
-              console.warn(`[Controls] Reuse requested for "${c.reuse_name}" but not found — treating as new`);
-            }
-          }
-
-          // New control — create with multi-requirement linking
-          newControls.push({
-            ...c,
-            // Multi-requirement linking (array-based)
-            linkedRequirements: [reqLink],
-            // Keep legacy single fields for backward compatibility
-            requirementRefId: req.refId,
-            requirementName: req.name || req.description,
-            framework: req.frameworkName,
-            requirementUrn: req.nodeUrn,
-            requirementNodeId: req.nodeId,
-          });
-        }
-
-        return newControls;
-      } catch (err) {
-        console.error(`[Controls] Failed req ${idx + 1}:`, err.message);
-        progress.failed++;
-        return [];
-      }
-    }));
-    allControls.push(...results.flat());
+  // Build a lookup map: refId → requirement metadata
+  const reqLookup = new Map();
+  for (const req of requirements) {
+    const key = (req.refId || '').toLowerCase().trim();
+    if (key) {
+      reqLookup.set(key, {
+        refId: req.refId || '',
+        name: req.name || req.description || '',
+        framework: req.frameworkName || '',
+        nodeUrn: req.nodeUrn || '',
+        nodeId: req.nodeId || '',
+      });
+    }
   }
 
-  // Post-processing: deduplicate controls with identical names
+  // Split requirements into chunks of CHUNK_SIZE
+  const chunks = [];
+  for (let i = 0; i < requirements.length; i += CHUNK_SIZE) {
+    chunks.push(requirements.slice(i, i + CHUNK_SIZE));
+  }
+
+  console.log(`[Controls] Processing ${requirements.length} requirements in ${chunks.length} chunk(s) of up to ${CHUNK_SIZE}`);
+
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci];
+    console.log(`[Controls] Chunk ${ci + 1}/${chunks.length}: ${chunk.length} requirements (${chunk.map(r => r.refId || '?').join(', ')})`);
+
+    try {
+      const rawControls = await callGeminiForChunk(chunk, orgContext, contextFiles, apiKey);
+      console.log(`[Controls] Chunk ${ci + 1} returned ${rawControls.length} controls`);
+
+      // Map AI response controls to linkedRequirements using for_requirements
+      for (const ctrl of rawControls) {
+        const forReqs = ctrl.for_requirements || [];
+        const linkedRequirements = [];
+
+        for (const refId of forReqs) {
+          const key = (refId || '').toLowerCase().trim();
+          const reqMeta = reqLookup.get(key);
+          if (reqMeta) {
+            linkedRequirements.push({ ...reqMeta });
+          } else {
+            // Fuzzy fallback: try to find requirement that contains this refId
+            const fallback = requirements.find(r => (r.refId || '').toLowerCase().includes(key) || key.includes((r.refId || '').toLowerCase()));
+            if (fallback) {
+              linkedRequirements.push({
+                refId: fallback.refId || '',
+                name: fallback.name || fallback.description || '',
+                framework: fallback.frameworkName || '',
+                nodeUrn: fallback.nodeUrn || '',
+                nodeId: fallback.nodeId || '',
+              });
+            } else {
+              console.warn(`[Controls] Unknown refId "${refId}" in for_requirements — skipping`);
+            }
+          }
+        }
+
+        // If AI didn't return for_requirements, link to all requirements in this chunk (fallback)
+        if (linkedRequirements.length === 0) {
+          console.warn(`[Controls] Control "${ctrl.name}" has no valid for_requirements — linking to all chunk requirements`);
+          for (const req of chunk) {
+            linkedRequirements.push({
+              refId: req.refId || '',
+              name: req.name || req.description || '',
+              framework: req.frameworkName || '',
+              nodeUrn: req.nodeUrn || '',
+              nodeId: req.nodeId || '',
+            });
+          }
+        }
+
+        // Clean up AI-only fields, add linkedRequirements
+        const { for_requirements, ...controlData } = ctrl;
+        allControls.push({
+          ...controlData,
+          linkedRequirements,
+          // Legacy fields for backward compatibility (use first linked requirement)
+          requirementRefId: linkedRequirements[0]?.refId || '',
+          requirementName: linkedRequirements[0]?.name || '',
+          framework: linkedRequirements[0]?.framework || '',
+          requirementUrn: linkedRequirements[0]?.nodeUrn || '',
+          requirementNodeId: linkedRequirements[0]?.nodeId || '',
+        });
+      }
+
+      progress.completed += chunk.length;
+    } catch (err) {
+      console.error(`[Controls] Chunk ${ci + 1} failed:`, err.message);
+      progress.failed += chunk.length;
+    }
+  }
+
+  // Post-processing: deduplicate controls with identical names (across chunks)
   const deduped = [];
-  const nameMap = new Map(); // lowercase name → index in deduped
+  const nameMap = new Map();
   for (const ctrl of allControls) {
     const key = (ctrl.name || '').toLowerCase().trim();
     if (key && nameMap.has(key)) {
-      // Merge requirement links into the first occurrence
       const existing = deduped[nameMap.get(key)];
       for (const rl of (ctrl.linkedRequirements || [])) {
         const alreadyLinked = existing.linkedRequirements.some(r => r.refId === rl.refId && r.nodeUrn === rl.nodeUrn);
@@ -1058,6 +1071,7 @@ async function generateControlsBatch(requirements, orgContext, contextFiles, api
     console.log(`[Controls] Deduplication: ${allControls.length} → ${deduped.length} unique controls`);
   }
 
+  console.log(`[Controls] Final: ${deduped.length} unique controls covering ${requirements.length} requirements`);
   return { controls: deduped, progress };
 }
 
