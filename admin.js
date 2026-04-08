@@ -2080,6 +2080,9 @@ async function resolveChain(orgId) {
 }
 window.resolveChain = resolveChain;
 
+// ── Chain data cache for tab switching ──
+window._chainCache = window._chainCache || {};
+
 async function renderChainVisualization(orgId, container) {
   try {
     const [chainRes, summaryRes] = await Promise.all([
@@ -2096,184 +2099,283 @@ async function renderChainVisualization(orgId, container) {
       return;
     }
 
-    // ── Deduplicate nodes + collect edges ──
-    const nodeMap = new Map(); // id → node data
-    const edgeSet = new Set(); // "from|to" dedup
-
-    const addNode = (id, label, group, title) => {
-      if (!id || nodeMap.has(id)) return;
-      nodeMap.set(id, { id, label, group, title });
-    };
-    const addEdge = (from, to) => {
-      if (!from || !to) return;
-      const key = from + '|' + to;
-      if (edgeSet.has(key)) return;
-      edgeSet.add(key);
-    };
-
-    const uniqObj = new Set(), uniqFw = new Set(), uniqReq = new Set(), uniqRisk = new Set(), uniqCtrl = new Set();
-
-    for (const r of rows) {
-      const objId = r.objective?.uuid;
-      const fwId  = r.framework?.uuid;
-      const reqId = r.requirement?.uuid;
-      const rskId = r.riskScenario?.uuid;
-      const ctlId = r.control?.uuid;
-
-      if (objId) { uniqObj.add(objId);  addNode('obj-' + objId,  truncLabel(r.objective.name, 24),  'objective',  r.objective.name); }
-      if (fwId)  { uniqFw.add(fwId);    addNode('fw-' + fwId,    truncLabel(r.framework.name, 24),  'framework',  r.framework.name); }
-      if (reqId) { uniqReq.add(reqId);   addNode('req-' + reqId,  r.requirement.refId || truncLabel(r.requirement.name, 18), 'requirement', (r.requirement.refId ? r.requirement.refId + ': ' : '') + r.requirement.name); }
-      if (rskId) { uniqRisk.add(rskId);  addNode('rsk-' + rskId,  truncLabel(r.riskScenario.name, 22), 'risk', r.riskScenario.name); }
-      if (ctlId) { uniqCtrl.add(ctlId);  addNode('ctl-' + ctlId,  truncLabel(r.control.name, 22),  'control', r.control.name + (r.control.status ? ' [' + r.control.status + ']' : '')); }
-
-      // Edges
-      if (objId && fwId)  addEdge('obj-' + objId, 'fw-'  + fwId);
-      if (fwId && reqId)  addEdge('fw-'  + fwId,  'req-' + reqId);
-      if (reqId && rskId) addEdge('req-' + reqId,  'rsk-' + rskId);
-      if (reqId && ctlId) addEdge('req-' + reqId,  'ctl-' + ctlId);
-      if (rskId && ctlId) addEdge('rsk-' + rskId,  'ctl-' + ctlId);
-    }
-
-    // If no objectives, link frameworks directly
-    if (uniqObj.size === 0) {
-      // no-op, frameworks are root
-    }
-
-    // ── Summary strip ──
+    // ── Parse rows into shared structures ──
+    const parsed = parseChainRows(rows);
+    const { uniqObj, uniqFw, uniqReq, uniqRisk, uniqCtrl, tree, nodeMap, edgeSet } = parsed;
     const unm = summaryData?.unmitigatedRisks || [];
-    const summaryHtml = `<div class="chain-strip">
-      <div class="chain-strip-item"><span class="chain-strip-num">${uniqObj.size || '—'}</span><span class="chain-strip-txt">Objectives</span></div>
-      <div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>
-      <div class="chain-strip-item"><span class="chain-strip-num">${uniqFw.size}</span><span class="chain-strip-txt">Frameworks</span></div>
-      <div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>
-      <div class="chain-strip-item"><span class="chain-strip-num">${uniqReq.size}</span><span class="chain-strip-txt">Requirements</span></div>
-      <div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>
-      <div class="chain-strip-item"><span class="chain-strip-num">${uniqRisk.size}</span><span class="chain-strip-txt">Risks</span></div>
-      <div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>
-      <div class="chain-strip-item ${uniqCtrl.size ? '' : 'chain-strip-warn'}"><span class="chain-strip-num">${uniqCtrl.size}</span><span class="chain-strip-txt">Controls</span></div>
-      ${unm.length ? `<div class="chain-strip-sep">|</div><div class="chain-strip-item chain-strip-warn"><span class="chain-strip-num">${unm.length}</span><span class="chain-strip-txt">Unmitigated</span></div>` : ''}
+
+    // Cache for tab switching
+    window._chainCache[orgId] = { rows, parsed, summaryData, unm };
+
+    // ── Summary strip (shared between tabs) ──
+    const summaryHtml = buildChainSummaryStrip(uniqObj, uniqFw, uniqReq, uniqRisk, uniqCtrl, unm);
+
+    // ── Tabs ──
+    const tabsHtml = `<div class="chain-tabs">
+      <button class="chain-tab active" id="chain-tab-net-${esc(orgId)}" onclick="switchChainTab('${esc(orgId)}','network')">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="3" cy="3" r="1.5" fill="currentColor"/><circle cx="11" cy="3" r="1.5" fill="currentColor"/><circle cx="7" cy="11" r="1.5" fill="currentColor"/><path d="M3 3L11 3M3 3L7 11M11 3L7 11" stroke="currentColor" stroke-width="0.8"/></svg>
+        Network
+      </button>
+      <button class="chain-tab" id="chain-tab-acc-${esc(orgId)}" onclick="switchChainTab('${esc(orgId)}','accordion')">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 3h10M2 7h10M2 11h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M4 5L6 7L4 9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Accordion
+      </button>
     </div>`;
 
-    // ── Legend ──
-    const legendHtml = `<div class="chain-legend">
-      <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#7c3aed"></span>Objective</span>
-      <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#2563eb"></span>Framework</span>
-      <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#475569"></span>Requirement</span>
-      <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#f59e0b"></span>Risk</span>
-      <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#059669"></span>Control</span>
-    </div>`;
+    // ── Tab panels ──
+    container.innerHTML = summaryHtml + tabsHtml + `
+      <div id="chain-panel-net-${orgId}" class="chain-panel active"></div>
+      <div id="chain-panel-acc-${orgId}" class="chain-panel" style="display:none"></div>`;
 
-    // ── Toolbar ──
-    const toolbarHtml = `<div class="chain-toolbar">
-      ${legendHtml}
-      <div class="chain-toolbar-btns">
-        <button class="chain-tb-btn" onclick="chainNetFit('${esc(orgId)}')" title="Fit all">⤢ Fit</button>
-        <button class="chain-tb-btn" onclick="chainNetTogglePhysics('${esc(orgId)}')" title="Toggle physics">⚡ Physics</button>
-        <button class="chain-tb-btn" onclick="chainNetFullscreen('${esc(orgId)}')" title="Fullscreen" id="chain-fs-btn-${esc(orgId)}">⛶ Fullscreen</button>
-      </div>
-    </div>`;
-
-    // ── Network container ──
-    container.innerHTML = summaryHtml + toolbarHtml + `<div id="chain-net-${orgId}" class="chain-net-container"></div>`;
-
-    // ── Build vis-network ──
-    const nodeStyles = {
-      objective:   { color: { background: '#ede9fe', border: '#7c3aed', highlight: { background: '#ddd6fe', border: '#6d28d9' } }, font: { color: '#4c1d95', size: 14, face: 'Inter, system-ui, sans-serif', bold: { color: '#4c1d95' } }, shape: 'box', borderWidth: 2, margin: 10 },
-      framework:   { color: { background: '#dbeafe', border: '#2563eb', highlight: { background: '#bfdbfe', border: '#1d4ed8' } }, font: { color: '#1e3a5f', size: 13, face: 'Inter, system-ui, sans-serif' }, shape: 'box', borderWidth: 2, margin: 8 },
-      requirement: { color: { background: '#f1f5f9', border: '#94a3b8', highlight: { background: '#e2e8f0', border: '#64748b' } }, font: { color: '#334155', size: 11, face: 'Inter, system-ui, sans-serif' }, shape: 'box', borderWidth: 1, margin: 6 },
-      risk:        { color: { background: '#fef3c7', border: '#f59e0b', highlight: { background: '#fde68a', border: '#d97706' } }, font: { color: '#78350f', size: 11, face: 'Inter, system-ui, sans-serif' }, shape: 'diamond', borderWidth: 2, margin: 8 },
-      control:     { color: { background: '#d1fae5', border: '#059669', highlight: { background: '#a7f3d0', border: '#047857' } }, font: { color: '#064e3b', size: 11, face: 'Inter, system-ui, sans-serif' }, shape: 'box', borderWidth: 2, margin: 7, shapeProperties: { borderRadius: 12 } },
-    };
-
-    const visNodes = [];
-    for (const n of nodeMap.values()) {
-      const style = nodeStyles[n.group] || nodeStyles.requirement;
-      visNodes.push({
-        id: n.id,
-        label: n.label,
-        title: n.title,
-        group: n.group,
-        ...style,
-        level: n.group === 'objective' ? 0 : n.group === 'framework' ? 1 : n.group === 'requirement' ? 2 : n.group === 'risk' ? 3 : 4,
-      });
-    }
-
-    const edgeColorMap = {
-      obj: '#a78bfa', fw: '#60a5fa', req: '#94a3b8', rsk: '#fbbf24', ctl: '#34d399'
-    };
-    const visEdges = [];
-    for (const key of edgeSet) {
-      const [from, to] = key.split('|');
-      const prefix = from.split('-')[0];
-      visEdges.push({
-        from, to,
-        color: { color: edgeColorMap[prefix] || '#d1d5db', highlight: '#6366f1', opacity: 0.7 },
-        arrows: { to: { enabled: true, scaleFactor: 0.5, type: 'arrow' } },
-        smooth: { type: 'cubicBezier', roundness: 0.4 },
-        width: 1.5,
-      });
-    }
-
-    const netContainer = document.getElementById('chain-net-' + orgId);
-    if (!netContainer || typeof vis === 'undefined') {
-      container.innerHTML += '<p style="color:#ef4444;font-size:12px">vis-network library not loaded.</p>';
-      return;
-    }
-
-    const network = new vis.Network(netContainer, {
-      nodes: new vis.DataSet(visNodes),
-      edges: new vis.DataSet(visEdges),
-    }, {
-      layout: {
-        hierarchical: {
-          enabled: true,
-          direction: 'LR',
-          sortMethod: 'directed',
-          levelSeparation: 220,
-          nodeSpacing: 30,
-          treeSpacing: 40,
-          blockShifting: true,
-          edgeMinimization: true,
-          parentCentralization: true,
-        }
-      },
-      physics: {
-        enabled: false,
-      },
-      interaction: {
-        hover: true,
-        tooltipDelay: 150,
-        zoomView: true,
-        dragView: true,
-        navigationButtons: false,
-        keyboard: { enabled: true },
-      },
-      edges: {
-        smooth: { type: 'cubicBezier', roundness: 0.4 },
-      },
-    });
-
-    // Store reference for toolbar buttons
-    window._chainNets = window._chainNets || {};
-    window._chainNets[orgId] = network;
-
-    // Fit after stabilization
-    network.once('stabilized', () => { network.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } }); });
-
-    // Highlight connected nodes on click
-    network.on('click', params => {
-      if (params.nodes.length === 1) {
-        const nodeId = params.nodes[0];
-        const connected = network.getConnectedNodes(nodeId);
-        const connEdges = network.getConnectedEdges(nodeId);
-        // Let vis handle highlighting via selection
-      }
-    });
+    // Render network tab immediately
+    renderChainNetworkTab(orgId);
 
   } catch (err) {
     console.error('Chain visualization error:', err);
     container.innerHTML = `<span style="color:#ef4444;font-size:12px">Error loading chain: ${esc(err.message)}</span>`;
   }
+}
+
+// ── Parse chain rows into tree + graph structures ──
+function parseChainRows(rows) {
+  const tree = new Map();
+  const nodeMap = new Map();
+  const edgeSet = new Set();
+  const uniqObj = new Set(), uniqFw = new Set(), uniqReq = new Set(), uniqRisk = new Set(), uniqCtrl = new Set();
+
+  const addNode = (id, label, group, title) => { if (!id || nodeMap.has(id)) return; nodeMap.set(id, { id, label, group, title }); };
+  const addEdge = (from, to) => { if (!from || !to) return; const k = from + '|' + to; if (!edgeSet.has(k)) edgeSet.add(k); };
+
+  for (const r of rows) {
+    const objId = r.objective?.uuid, fwId = r.framework?.uuid, reqId = r.requirement?.uuid, rskId = r.riskScenario?.uuid, ctlId = r.control?.uuid;
+
+    if (objId) { uniqObj.add(objId); addNode('obj-' + objId, truncLabel(r.objective.name, 24), 'objective', r.objective.name); }
+    if (fwId)  { uniqFw.add(fwId);   addNode('fw-' + fwId, truncLabel(r.framework.name, 24), 'framework', r.framework.name); }
+    if (reqId) { uniqReq.add(reqId);  addNode('req-' + reqId, r.requirement.refId || truncLabel(r.requirement.name, 18), 'requirement', (r.requirement.refId ? r.requirement.refId + ': ' : '') + r.requirement.name); }
+    if (rskId) { uniqRisk.add(rskId); addNode('rsk-' + rskId, truncLabel(r.riskScenario.name, 22), 'risk', r.riskScenario.name); }
+    if (ctlId) { uniqCtrl.add(ctlId); addNode('ctl-' + ctlId, truncLabel(r.control.name, 22), 'control', r.control.name + (r.control.status ? ' [' + r.control.status + ']' : '')); }
+
+    if (objId && fwId) addEdge('obj-' + objId, 'fw-' + fwId);
+    if (fwId && reqId) addEdge('fw-' + fwId, 'req-' + reqId);
+    if (reqId && rskId) addEdge('req-' + reqId, 'rsk-' + rskId);
+    if (reqId && ctlId) addEdge('req-' + reqId, 'ctl-' + ctlId);
+    if (rskId && ctlId) addEdge('rsk-' + rskId, 'ctl-' + ctlId);
+
+    // Build tree (for accordion)
+    const objKey = objId || '_none_', objName = r.objective?.name || 'No Objective Linked';
+    const fwKey = fwId || '_none_', fwName = r.framework?.name || 'No Framework';
+    const reqKey = reqId || '_none_', reqRef = r.requirement?.refId || '', reqName = r.requirement?.name || reqRef || 'Unknown';
+
+    if (!tree.has(objKey)) tree.set(objKey, { name: objName, frameworks: new Map() });
+    const oN = tree.get(objKey);
+    if (!oN.frameworks.has(fwKey)) oN.frameworks.set(fwKey, { name: fwName, requirements: new Map() });
+    const fN = oN.frameworks.get(fwKey);
+    if (!fN.requirements.has(reqKey)) fN.requirements.set(reqKey, { refId: reqRef, name: reqName, risks: new Map(), controls: new Map() });
+    const rN = fN.requirements.get(reqKey);
+    if (r.riskScenario?.name && rskId) rN.risks.set(rskId, r.riskScenario.name);
+    if (r.control?.name && ctlId) rN.controls.set(ctlId, { name: r.control.name, status: r.control.status });
+  }
+
+  return { tree, nodeMap, edgeSet, uniqObj, uniqFw, uniqReq, uniqRisk, uniqCtrl };
+}
+
+function buildChainSummaryStrip(uniqObj, uniqFw, uniqReq, uniqRisk, uniqCtrl, unm) {
+  const sep = `<div class="chain-strip-sep"><svg width="8" height="10" viewBox="0 0 8 10"><path d="M1 1L6 5L1 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></div>`;
+  return `<div class="chain-strip">
+    <div class="chain-strip-item"><span class="chain-strip-num">${uniqObj.size || '—'}</span><span class="chain-strip-txt">Objectives</span></div>${sep}
+    <div class="chain-strip-item"><span class="chain-strip-num">${uniqFw.size}</span><span class="chain-strip-txt">Frameworks</span></div>${sep}
+    <div class="chain-strip-item"><span class="chain-strip-num">${uniqReq.size}</span><span class="chain-strip-txt">Requirements</span></div>${sep}
+    <div class="chain-strip-item"><span class="chain-strip-num">${uniqRisk.size}</span><span class="chain-strip-txt">Risks</span></div>${sep}
+    <div class="chain-strip-item ${uniqCtrl.size ? '' : 'chain-strip-warn'}"><span class="chain-strip-num">${uniqCtrl.size}</span><span class="chain-strip-txt">Controls</span></div>
+    ${unm.length ? `<div class="chain-strip-sep">|</div><div class="chain-strip-item chain-strip-warn"><span class="chain-strip-num">${unm.length}</span><span class="chain-strip-txt">Unmitigated</span></div>` : ''}
+  </div>`;
+}
+
+// ── Tab switching ──
+function switchChainTab(orgId, tab) {
+  const netTab = document.getElementById('chain-tab-net-' + orgId);
+  const accTab = document.getElementById('chain-tab-acc-' + orgId);
+  const netPanel = document.getElementById('chain-panel-net-' + orgId);
+  const accPanel = document.getElementById('chain-panel-acc-' + orgId);
+  if (!netTab || !accTab || !netPanel || !accPanel) return;
+
+  if (tab === 'network') {
+    netTab.classList.add('active'); accTab.classList.remove('active');
+    netPanel.style.display = ''; accPanel.style.display = 'none';
+    // Re-fit network
+    const net = window._chainNets?.[orgId];
+    if (net) setTimeout(() => { net.redraw(); net.fit({ animation: { duration: 300 } }); }, 50);
+  } else {
+    accTab.classList.add('active'); netTab.classList.remove('active');
+    accPanel.style.display = ''; netPanel.style.display = 'none';
+    // Lazy-render accordion on first switch
+    if (!accPanel.dataset.rendered) {
+      renderChainAccordionTab(orgId);
+      accPanel.dataset.rendered = '1';
+    }
+  }
+}
+window.switchChainTab = switchChainTab;
+
+// ──────────────────────────────────────────
+// TAB 1: Network Graph
+// ──────────────────────────────────────────
+function renderChainNetworkTab(orgId) {
+  const panel = document.getElementById('chain-panel-net-' + orgId);
+  if (!panel) return;
+  const cache = window._chainCache[orgId];
+  if (!cache) return;
+  const { nodeMap, edgeSet } = cache.parsed;
+
+  // Legend + toolbar
+  const legendHtml = `<div class="chain-legend">
+    <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#7c3aed"></span>Objective</span>
+    <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#2563eb"></span>Framework</span>
+    <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#475569"></span>Requirement</span>
+    <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#f59e0b"></span>Risk</span>
+    <span class="chain-legend-item"><span class="chain-legend-dot" style="background:#059669"></span>Control</span>
+  </div>`;
+
+  panel.innerHTML = `<div class="chain-toolbar">
+    ${legendHtml}
+    <div class="chain-toolbar-btns">
+      <button class="chain-tb-btn" onclick="chainNetFit('${esc(orgId)}')" title="Fit all">⤢ Fit</button>
+      <button class="chain-tb-btn" onclick="chainNetTogglePhysics('${esc(orgId)}')" title="Toggle physics">⚡ Physics</button>
+      <button class="chain-tb-btn" onclick="chainNetFullscreen('${esc(orgId)}')" title="Fullscreen" id="chain-fs-btn-${esc(orgId)}">⛶ Fullscreen</button>
+    </div>
+  </div>
+  <div id="chain-net-${orgId}" class="chain-net-container"></div>`;
+
+  // Build vis-network
+  const nodeStyles = {
+    objective:   { color: { background: '#ede9fe', border: '#7c3aed', highlight: { background: '#ddd6fe', border: '#6d28d9' } }, font: { color: '#4c1d95', size: 14, face: 'Inter, system-ui, sans-serif', bold: { color: '#4c1d95' } }, shape: 'box', borderWidth: 2, margin: 10 },
+    framework:   { color: { background: '#dbeafe', border: '#2563eb', highlight: { background: '#bfdbfe', border: '#1d4ed8' } }, font: { color: '#1e3a5f', size: 13, face: 'Inter, system-ui, sans-serif' }, shape: 'box', borderWidth: 2, margin: 8 },
+    requirement: { color: { background: '#f1f5f9', border: '#94a3b8', highlight: { background: '#e2e8f0', border: '#64748b' } }, font: { color: '#334155', size: 11, face: 'Inter, system-ui, sans-serif' }, shape: 'box', borderWidth: 1, margin: 6 },
+    risk:        { color: { background: '#fef3c7', border: '#f59e0b', highlight: { background: '#fde68a', border: '#d97706' } }, font: { color: '#78350f', size: 11, face: 'Inter, system-ui, sans-serif' }, shape: 'diamond', borderWidth: 2, margin: 8 },
+    control:     { color: { background: '#d1fae5', border: '#059669', highlight: { background: '#a7f3d0', border: '#047857' } }, font: { color: '#064e3b', size: 11, face: 'Inter, system-ui, sans-serif' }, shape: 'box', borderWidth: 2, margin: 7, shapeProperties: { borderRadius: 12 } },
+  };
+
+  const visNodes = [];
+  for (const n of nodeMap.values()) {
+    const style = nodeStyles[n.group] || nodeStyles.requirement;
+    visNodes.push({ id: n.id, label: n.label, title: n.title, group: n.group, ...style,
+      level: n.group === 'objective' ? 0 : n.group === 'framework' ? 1 : n.group === 'requirement' ? 2 : n.group === 'risk' ? 3 : 4 });
+  }
+
+  const edgeColorMap = { obj: '#a78bfa', fw: '#60a5fa', req: '#94a3b8', rsk: '#fbbf24', ctl: '#34d399' };
+  const visEdges = [];
+  for (const key of edgeSet) {
+    const [from, to] = key.split('|');
+    visEdges.push({ from, to,
+      color: { color: edgeColorMap[from.split('-')[0]] || '#d1d5db', highlight: '#6366f1', opacity: 0.7 },
+      arrows: { to: { enabled: true, scaleFactor: 0.5, type: 'arrow' } },
+      smooth: { type: 'cubicBezier', roundness: 0.4 }, width: 1.5 });
+  }
+
+  const netEl = document.getElementById('chain-net-' + orgId);
+  if (!netEl || typeof vis === 'undefined') return;
+
+  const network = new vis.Network(netEl, { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) }, {
+    layout: { hierarchical: { enabled: true, direction: 'LR', sortMethod: 'directed', levelSeparation: 220, nodeSpacing: 30, treeSpacing: 40, blockShifting: true, edgeMinimization: true, parentCentralization: true } },
+    physics: { enabled: false },
+    interaction: { hover: true, tooltipDelay: 150, zoomView: true, dragView: true, navigationButtons: false, keyboard: { enabled: true } },
+    edges: { smooth: { type: 'cubicBezier', roundness: 0.4 } },
+  });
+
+  window._chainNets = window._chainNets || {};
+  window._chainNets[orgId] = network;
+  network.once('stabilized', () => { network.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } }); });
+}
+
+// ──────────────────────────────────────────
+// TAB 2: Accordion Tree
+// ──────────────────────────────────────────
+function renderChainAccordionTab(orgId) {
+  const panel = document.getElementById('chain-panel-acc-' + orgId);
+  if (!panel) return;
+  const cache = window._chainCache[orgId];
+  if (!cache) return;
+  const { tree } = cache.parsed;
+
+  let html = '<div class="chain-tree">';
+
+  for (const [objKey, objNode] of tree) {
+    let objReqC = 0;
+    const objCtrlS = new Set(), objRiskS = new Set();
+    for (const fw of objNode.frameworks.values()) {
+      objReqC += fw.requirements.size;
+      for (const rq of fw.requirements.values()) { rq.controls.forEach((_, k) => objCtrlS.add(k)); rq.risks.forEach((_, k) => objRiskS.add(k)); }
+    }
+
+    html += `<div class="ct-node ct-obj open">
+      <div class="ct-header ct-obj-hdr" onclick="this.parentElement.classList.toggle('open')">
+        <svg class="ct-chev" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1.5L7 5L3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="ct-icon">🎯</span>
+        <span class="ct-lbl">${esc(objNode.name)}</span>
+        <div class="ct-badges">
+          <span class="ct-b ct-b-fw">${objNode.frameworks.size} fw</span>
+          <span class="ct-b ct-b-req">${objReqC} req</span>
+          <span class="ct-b ${objRiskS.size ? 'ct-b-risk' : 'ct-b-dim'}">${objRiskS.size} risks</span>
+          <span class="ct-b ${objCtrlS.size ? 'ct-b-ctrl' : 'ct-b-dim'}">${objCtrlS.size} ctrls</span>
+        </div>
+      </div>
+      <div class="ct-children">`;
+
+    for (const [, fwNode] of objNode.frameworks) {
+      const fwCtrlS = new Set(), fwRiskS = new Set();
+      for (const rq of fwNode.requirements.values()) { rq.controls.forEach((_, k) => fwCtrlS.add(k)); rq.risks.forEach((_, k) => fwRiskS.add(k)); }
+      const coveredReqs = [...fwNode.requirements.values()].filter(rq => rq.controls.size > 0).length;
+      const totalReqs = fwNode.requirements.size;
+      const pct = totalReqs ? Math.round((coveredReqs / totalReqs) * 100) : 0;
+
+      html += `<div class="ct-node ct-fw">
+        <div class="ct-header ct-fw-hdr" onclick="this.parentElement.classList.toggle('open')">
+          <svg class="ct-chev" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1.5L7 5L3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="ct-icon">📋</span>
+          <span class="ct-lbl">${esc(fwNode.name)}</span>
+          <div class="ct-badges">
+            <span class="ct-b ct-b-req">${totalReqs} req</span>
+            <span class="ct-b ${fwCtrlS.size ? 'ct-b-ctrl' : 'ct-b-dim'}">${fwCtrlS.size} ctrls</span>
+          </div>
+          <div class="ct-progress" title="${coveredReqs}/${totalReqs} requirements covered (${pct}%)">
+            <div class="ct-progress-bar" style="width:${pct}%"></div>
+            <span class="ct-progress-txt">${pct}%</span>
+          </div>
+        </div>
+        <div class="ct-children">`;
+
+      for (const [, reqNode] of fwNode.requirements) {
+        const hasCtrls = reqNode.controls.size > 0, hasRisks = reqNode.risks.size > 0, hasKids = hasCtrls || hasRisks;
+
+        html += `<div class="ct-node ct-req ${hasCtrls ? 'ct-covered' : 'ct-gap'}">
+          <div class="ct-header ct-req-hdr" ${hasKids ? 'onclick="this.parentElement.classList.toggle(\'open\')"' : ''}>
+            ${hasKids ? '<svg class="ct-chev" width="9" height="9" viewBox="0 0 10 10"><path d="M3 1.5L7 5L3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '<span class="ct-dot"></span>'}
+            <span class="ct-req-ref">${esc(reqNode.refId || '—')}</span>
+            <span class="ct-lbl ct-req-name" title="${esc(reqNode.name)}">${esc(reqNode.name)}</span>
+            ${hasCtrls ? `<span class="ct-b ct-b-ctrl ct-b-sm">${reqNode.controls.size} 🛡️</span>` : ''}
+            ${hasRisks ? `<span class="ct-b ct-b-risk ct-b-sm">${reqNode.risks.size} ⚠️</span>` : ''}
+            ${!hasCtrls ? '<span class="ct-gap-tag">no control</span>' : ''}
+          </div>`;
+
+        if (hasKids) {
+          html += `<div class="ct-children ct-leaves">`;
+          for (const [, ctrl] of reqNode.controls) {
+            const stCls = ctrl.status === 'active' ? 'ct-st-active' : (ctrl.status === 'in_progress' ? 'ct-st-prog' : 'ct-st-todo');
+            html += `<div class="ct-leaf ct-leaf-ctrl"><span class="ct-leaf-ic">🛡️</span><span>${esc(ctrl.name)}</span><span class="ct-st ${stCls}">${esc(ctrl.status || 'to_do')}</span></div>`;
+          }
+          for (const [, riskName] of reqNode.risks) {
+            html += `<div class="ct-leaf ct-leaf-risk"><span class="ct-leaf-ic">⚠️</span><span>${esc(riskName)}</span></div>`;
+          }
+          html += `</div>`;
+        }
+        html += `</div>`; // ct-req
+      }
+      html += `</div></div>`; // ct-fw
+    }
+    html += `</div></div>`; // ct-obj
+  }
+  html += '</div>';
+  panel.innerHTML = html;
 }
 
 function truncLabel(text, max) {
