@@ -5225,97 +5225,30 @@
 .chain-strip-warn .chain-strip-num { color: #ef4444; }
 .chain-strip-warn .chain-strip-txt { color: #ef4444; }
 
-/* ---- Chain Resolution: Tree ---- */
-.chain-tree { margin-top: 4px; }
-
-/* Generic node */
-.ct-node { border-left: 2px solid transparent; }
-.ct-children { display: none; padding-left: 20px; }
-.ct-node.open > .ct-children { display: block; }
-.ct-chev { flex-shrink: 0; transition: transform 0.15s ease; color: #94a3b8; }
-.ct-node.open > .ct-header > .ct-chev { transform: rotate(90deg); }
-.ct-icon { font-size: 14px; flex-shrink: 0; }
-.ct-lbl { font-size: 13px; font-weight: 500; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* Badges */
-.ct-badges { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
-.ct-b { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 8px; white-space: nowrap; line-height: 1.4; }
-.ct-b-fw   { background: #ede9fe; color: #7c3aed; }
-.ct-b-req  { background: #dbeafe; color: #2563eb; }
-.ct-b-risk { background: #fef3c7; color: #b45309; }
-.ct-b-ctrl { background: #d1fae5; color: #059669; }
-.ct-b-dim  { background: #f1f5f9; color: #94a3b8; }
-.ct-b-sm   { font-size: 9px; padding: 1px 5px; border-radius: 6px; }
-
-/* Objective level */
-.ct-obj { border-left-color: #6366f1; margin-bottom: 6px; border-radius: 0 10px 10px 0; }
-.ct-obj-hdr {
-  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-  cursor: pointer; border-radius: 0 10px 10px 0;
-  background: linear-gradient(90deg, rgba(99,102,241,.06), transparent);
-  transition: background 0.15s;
+/* ---- Chain Resolution: Network Graph ---- */
+.chain-net-container {
+  width: 100%; height: 500px; border: 1px solid #e2e8f0; border-radius: 12px;
+  background: #fafbfc; overflow: hidden;
 }
-.ct-obj-hdr:hover { background: linear-gradient(90deg, rgba(99,102,241,.12), transparent); }
-
-/* Framework level */
-.ct-fw { border-left-color: #8b5cf6; margin: 2px 0; border-radius: 0 8px 8px 0; }
-.ct-fw-hdr {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-  cursor: pointer; border-radius: 0 8px 8px 0;
-  background: linear-gradient(90deg, rgba(139,92,246,.04), transparent);
-  transition: background 0.15s;
+.chain-legend {
+  display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
 }
-.ct-fw-hdr:hover { background: linear-gradient(90deg, rgba(139,92,246,.10), transparent); }
-
-/* Progress bar inside framework header */
-.ct-progress {
-  display: flex; align-items: center; gap: 4px;
-  width: 80px; height: 6px; background: #e5e7eb; border-radius: 3px; overflow: visible; position: relative;
-  flex-shrink: 0; margin-left: 6px;
+.chain-legend-item {
+  display: flex; align-items: center; gap: 5px; font-size: 11px; color: #64748b; font-weight: 500;
 }
-.ct-progress-bar { height: 100%; background: linear-gradient(90deg, #22c55e, #16a34a); border-radius: 3px; transition: width 0.4s; min-width: 0; }
-.ct-progress-txt { font-size: 9px; font-weight: 700; color: #64748b; position: absolute; right: -28px; white-space: nowrap; }
-
-/* Requirement level */
-.ct-req { margin: 1px 0; border-left-color: #e5e7eb; }
-.ct-req.ct-covered { border-left-color: #22c55e; }
-.ct-req.ct-gap { border-left-color: #f97316; }
-.ct-req-hdr {
-  display: flex; align-items: center; gap: 6px; padding: 5px 10px;
-  cursor: pointer; border-radius: 6px;
-  transition: background 0.12s;
+.chain-legend-dot {
+  width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
 }
-.ct-req-hdr:hover { background: #f8fafc; }
-.ct-req-ref {
-  font-size: 10px; font-weight: 700; color: #6366f1; background: #eef2ff;
-  padding: 1px 6px; border-radius: 4px; white-space: nowrap; flex-shrink: 0;
+.chain-toolbar {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 8px; margin-bottom: 8px; padding: 0 2px;
 }
-.ct-req-name { font-size: 12px; color: #475569; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ct-dot { width: 6px; height: 6px; border-radius: 50%; background: #d1d5db; flex-shrink: 0; margin: 0 2px; }
-.ct-gap-tag {
-  font-size: 9px; font-weight: 600; color: #f97316; background: #fff7ed;
-  padding: 1px 6px; border-radius: 4px; margin-left: auto; white-space: nowrap; flex-shrink: 0;
+.chain-toolbar-btns { display: flex; gap: 6px; }
+.chain-tb-btn {
+  font-size: 11px; font-weight: 600; color: #6366f1; background: #eef2ff; border: 1px solid #c7d2fe;
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; transition: background 0.15s;
 }
-
-/* Leaf items (controls / risks) */
-.ct-leaves { padding-left: 24px; padding-bottom: 4px; }
-.ct-leaf {
-  display: flex; align-items: center; gap: 6px; padding: 3px 8px;
-  font-size: 12px; color: #475569; border-radius: 5px;
-}
-.ct-leaf:hover { background: #f1f5f9; }
-.ct-leaf-ic { font-size: 12px; flex-shrink: 0; }
-.ct-leaf-ctrl { }
-.ct-leaf-risk { color: #92400e; }
-
-/* Status badge on controls */
-.ct-st {
-  font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 4px;
-  margin-left: auto; white-space: nowrap; text-transform: uppercase;
-}
-.ct-st-active { background: #d1fae5; color: #059669; }
-.ct-st-prog { background: #dbeafe; color: #2563eb; }
-.ct-st-todo { background: #f1f5f9; color: #94a3b8; }
+.chain-tb-btn:hover { background: #ddd6fe; }
 
 /* ---- Objective ↔ Framework Mapping Grid ---- */
 .obj-fw-mapping-grid { margin-top: 4px; }
