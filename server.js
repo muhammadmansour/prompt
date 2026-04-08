@@ -300,6 +300,7 @@ try {
   addCol('policies', "TEXT DEFAULT '[]'");
   addCol('tracking_metrics', "TEXT DEFAULT '[]'");
   addCol('risk_scenarios', "TEXT DEFAULT '[]'");
+  addCol('controls', "TEXT DEFAULT '[]'");
   addCol('store_id', "TEXT DEFAULT ''");
 } catch (migErr) { console.warn('Org profile migration:', migErr.message); }
 

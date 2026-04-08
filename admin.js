@@ -937,16 +937,16 @@ async function populateMandatesFromFrameworks() {
     }
   }
 
-  const fwNames = grcFrameworksCache
-    .map(fw => fw.name || fw.ref_id || '')
-    .filter(Boolean);
+  const fwList = grcFrameworksCache
+    .filter(fw => fw.id || fw.uuid)
+    .map(fw => ({ id: fw.id || fw.uuid, name: fw.name || fw.ref_id || '' }));
 
-  if (!fwNames.length) {
+  if (!fwList.length) {
     container.innerHTML = '<span class="admin-form-hint" style="color:#9ca3af">No frameworks loaded. Please check your connection.</span>';
     return;
   }
-  container.innerHTML = fwNames.map(n =>
-    `<label class="mandate-chip-option"><input type="checkbox" value="${esc(n)}"> ${esc(n)}</label>`
+  container.innerHTML = fwList.map(fw =>
+    `<label class="mandate-chip-option"><input type="checkbox" value="${esc(fw.id)}" data-name="${esc(fw.name)}"> ${esc(fw.name)}</label>`
   ).join('');
 }
 
@@ -1098,13 +1098,9 @@ function removeObjectiveById(id) {
 window.removeObjectiveById = removeObjectiveById;
 
 function getSelectedObjectives() {
+  // Returns UUID array for chain resolution
   const checkboxes = document.querySelectorAll('#org-objectives-options input[type="checkbox"]:checked');
-  const selected = [];
-  checkboxes.forEach(cb => {
-    const obj = grcObjectivesCache?.find(o => o.id === cb.value);
-    if (obj) selected.push(obj.name);
-  });
-  return selected;
+  return Array.from(checkboxes).map(cb => cb.value).filter(Boolean);
 }
 
 function getSelectedObjectiveIds() {
@@ -1450,13 +1446,9 @@ function removeRiskScenarioById(id) {
 window.removeRiskScenarioById = removeRiskScenarioById;
 
 function getSelectedRiskScenarios() {
+  // Returns UUID array for chain resolution
   const checkboxes = document.querySelectorAll('#org-risk-scenarios-options input[type="checkbox"]:checked');
-  const selected = [];
-  checkboxes.forEach(cb => {
-    const r = grcRiskScenariosCache?.find(rs => rs.id === cb.value);
-    if (r) selected.push({ id: r.id, name: r.name });
-  });
-  return selected;
+  return Array.from(checkboxes).map(cb => cb.value).filter(Boolean);
 }
 
 function getSelectedRiskScenarioIds() {
@@ -1612,7 +1604,14 @@ orgModalSave.addEventListener('click', async () => {
   const size = document.getElementById('org-size').value;
   const maturity = parseInt(document.getElementById('org-maturity').value) || 1;
   const mandates = [];
-  document.querySelectorAll('#org-mandates-options input[type="checkbox"]:checked').forEach(c => mandates.push(c.value));
+  const frameworkUuids = []; // UUIDs for chain resolution
+  const frameworkNames = []; // Names for display / regulatory mandates
+  document.querySelectorAll('#org-mandates-options input[type="checkbox"]:checked').forEach(c => {
+    mandates.push(c.value); // value is now a UUID
+    frameworkUuids.push(c.value);
+    const fwName = c.getAttribute('data-name') || c.parentElement?.textContent?.trim() || c.value;
+    frameworkNames.push(fwName);
+  });
   const governance = document.getElementById('org-governance').value;
   const dataCls = document.getElementById('org-data-classification').value;
   const geo = document.getElementById('org-geographic').value;
@@ -1630,16 +1629,16 @@ orgModalSave.addEventListener('click', async () => {
     sectorCustom: sector === 'custom' ? sectorCustom : '',
     size,
     complianceMaturity: maturity,
-    regulatoryMandates: mandates,
+    regulatoryMandates: frameworkNames, // Display names for backward compat
     governanceStructure: governance,
     dataClassification: dataCls,
     geographicScope: geo,
     itInfrastructure: itInfra,
-    strategicObjectives: getSelectedObjectives(),
-    obligatoryFrameworks: mandates,
+    strategicObjectives: getSelectedObjectives(), // UUID array
+    obligatoryFrameworks: frameworkUuids,          // UUID array
     policies: getSelectedPolicies(),
     trackingMetrics: getSelectedMetrics(),
-    riskScenarios: getSelectedRiskScenarios(),
+    riskScenarios: getSelectedRiskScenarios(),     // UUID array
     notes,
     isActive: true,
   };
@@ -1688,17 +1687,23 @@ async function editOrgContext(idx) {
   document.getElementById('org-notes').value = ctx.notes || '';
   await openOrgModal(); // populates mandate checkboxes from frameworks first + fetches objectives
 
-  // Pre-select saved objectives by matching name → id
-  const savedObjNames = ctx.strategicObjectives || [];
-  const selectedIds = (grcObjectivesCache || [])
-    .filter(o => savedObjNames.includes(o.name))
-    .map(o => o.id);
-  renderObjectivesCheckboxes(selectedIds);
+  // Pre-select saved objectives (supports both UUID array and legacy name array)
+  const savedObjs = ctx.strategicObjectives || [];
+  const objSelectedIds = savedObjs.map(v => {
+    if (typeof v === 'string' && v.includes('-')) return v; // Already a UUID
+    // Legacy: match by name → id
+    const match = (grcObjectivesCache || []).find(o => o.name === v);
+    return match ? match.id : null;
+  }).filter(Boolean);
+  renderObjectivesCheckboxes(objSelectedIds);
 
-  // Now set mandates checkboxes after they've been populated
-  const mandates = ctx.regulatoryMandates || [];
+  // Now set mandates/frameworks checkboxes (supports both UUID and legacy name)
+  const savedFws = ctx.obligatoryFrameworks || [];
+  const savedMandates = ctx.regulatoryMandates || [];
   document.querySelectorAll('#org-mandates-options input[type="checkbox"]').forEach(c => {
-    c.checked = mandates.includes(c.value);
+    const fwName = c.getAttribute('data-name') || '';
+    // Match by UUID (new format) or by name (old format)
+    c.checked = savedFws.includes(c.value) || savedMandates.includes(c.value) || savedMandates.includes(fwName);
   });
 
   // Pre-select saved policies by matching id
@@ -1716,15 +1721,16 @@ async function editOrgContext(idx) {
   const allMetricIds = [...new Set([...savedMetricIds, ...metricIdsByName])];
   renderMetricsCheckboxes(allMetricIds);
 
-  // Pre-select saved risk scenarios by matching id or name → id
+  // Pre-select saved risk scenarios (supports UUID array, {id,name} objects, and legacy name strings)
   const savedRiskScenarios = ctx.riskScenarios || [];
-  const savedRsIds = savedRiskScenarios.map(r => typeof r === 'object' ? r.id : r).filter(Boolean);
-  // Also match by name if stored as strings
-  const rsIdsByName = (grcRiskScenariosCache || [])
-    .filter(rs => savedRiskScenarios.includes(rs.name))
-    .map(rs => rs.id);
-  const allRsIds = [...new Set([...savedRsIds, ...rsIdsByName])];
-  renderRiskScenariosCheckboxes(allRsIds);
+  const rsSelectedIds = savedRiskScenarios.map(r => {
+    if (typeof r === 'object' && r.id) return r.id; // Legacy {id, name} object
+    if (typeof r === 'string' && r.includes('-')) return r; // UUID
+    // Legacy: match by name → id
+    const match = (grcRiskScenariosCache || []).find(rs => rs.name === r);
+    return match ? match.id : null;
+  }).filter(Boolean);
+  renderRiskScenariosCheckboxes(rsSelectedIds);
 
   document.getElementById('org-name-en').focus();
 }
@@ -1808,7 +1814,20 @@ function renderOrgContextDetail(ctx, idx) {
   const docs = ctx.documents || [];
   const notes = ctx.notes || '';
 
-  const fwPills = fws.map(f => `<span class="org-fw-pill">${esc(f)}</span>`).join('') || '<span style="color:#9ca3af">None</span>';
+  // Resolve UUIDs to names for display (falls back to raw value if not a UUID)
+  const resolveUuid = (val, cache) => {
+    if (typeof val === 'object' && val.name) return val.name;
+    if (typeof val === 'string' && val.includes('-') && cache) {
+      const match = cache.find(c => c.id === val);
+      return match ? match.name : val;
+    }
+    return val;
+  };
+
+  const fwPills = fws.map(f => {
+    const fwName = resolveUuid(f, grcFrameworksCache?.map(fw => ({ id: fw.id || fw.uuid, name: fw.name || fw.ref_id })));
+    return `<span class="org-fw-pill">${esc(fwName)}</span>`;
+  }).join('') || '<span style="color:#9ca3af">None</span>';
   const mandPills = mandates.map(m => `<span class="org-fw-pill" style="color:#b45309;background:#fffbeb;border-color:#fde68a">${esc(m)}</span>`).join('') || '<span style="color:#9ca3af">None</span>';
   const policyPills = policies.map(p => {
     const pName = typeof p === 'object' ? p.name : p;
@@ -1817,7 +1836,7 @@ function renderOrgContextDetail(ctx, idx) {
   }).join('') || '<span style="color:#9ca3af">None</span>';
 
   const objHtml = objectives.length
-    ? `<ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(o)}</li>`).join('')}</ul>`
+    ? `<ul class="org-ctx-objectives">${objectives.map(o => `<li>${esc(resolveUuid(o, grcObjectivesCache))}</li>`).join('')}</ul>`
     : '<span style="color:#9ca3af">None</span>';
 
   const metricPills = trackingMetrics.map(m => {
@@ -1826,7 +1845,7 @@ function renderOrgContextDetail(ctx, idx) {
   }).join('') || '<span style="color:#9ca3af">None</span>';
 
   const riskScenarioPills = riskScenarios.map(r => {
-    const rName = typeof r === 'object' ? r.name : r;
+    const rName = resolveUuid(r, grcRiskScenariosCache);
     return `<span class="org-fw-pill" style="color:#dc2626;background:#fef2f2;border-color:#fecaca">${esc(rName)}</span>`;
   }).join('') || '<span style="color:#9ca3af">None</span>';
 
@@ -1905,6 +1924,20 @@ function renderOrgContextDetail(ctx, idx) {
       <div class="org-detail-pills">${riskScenarioPills}</div>
     </div>
 
+    <!-- Chain Resolution -->
+    <div class="org-detail-card" style="border:1px solid #6366f1;background:linear-gradient(135deg,rgba(99,102,241,.04),rgba(139,92,246,.04))">
+      <div class="org-detail-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>🔗 Entity Chain</span>
+        <button class="pi-btn pi-btn-primary" style="font-size:12px;padding:5px 14px" onclick="resolveChain('${esc(ctx.id)}')">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="margin-right:4px;vertical-align:-2px"><path d="M2 7h10M9 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Resolve Chain
+        </button>
+      </div>
+      <div id="chain-result-${esc(ctx.id)}" class="chain-result-container" style="margin-top:8px;min-height:40px">
+        <span style="color:#9ca3af;font-size:12px">Click "Resolve Chain" to build the full path: Objectives → Frameworks → Requirements → Risks → Controls</span>
+      </div>
+    </div>
+
     ${docs.length ? `<div class="org-detail-card">
       <div class="org-detail-card-title">Documents</div>
       <div class="org-detail-section-body">${docsHtml}</div>
@@ -1934,8 +1967,157 @@ function renderOrgContextDetail(ctx, idx) {
   // Load files for this org context
   orgLoadFiles(ctx.id);
 
+  // Auto-load chain if previously resolved
+  autoLoadChain(ctx.id);
+
   // Add floating chat button + chat panel
   renderOrgChatFAB(ctx);
+}
+
+// ---- Chain Resolution UI ----
+
+async function resolveChain(orgId) {
+  const container = document.getElementById('chain-result-' + orgId);
+  if (!container) return;
+
+  container.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:#9ca3af;font-size:13px">
+    <svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.2"/><path d="M12 2C17.5 2 22 6.5 22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    Resolving chain — fetching from CISO Assistant…
+  </div>`;
+
+  try {
+    const res = await fetch('/api/chain/resolve/' + orgId, { method: 'POST' });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || 'HTTP ' + res.status);
+    }
+    const data = await res.json();
+    const rowCount = data.data?.chainRows || data.rowsInserted || 0;
+    toast('success', 'Chain Resolved', `${rowCount} chain paths resolved.`);
+
+    // Now fetch and render the chain
+    await renderChainVisualization(orgId, container);
+  } catch (err) {
+    console.error('Chain resolve error:', err);
+    container.innerHTML = `<div style="color:#ef4444;font-size:13px">❌ Failed: ${esc(err.message)}</div>`;
+    toast('error', 'Chain Error', err.message);
+  }
+}
+window.resolveChain = resolveChain;
+
+async function renderChainVisualization(orgId, container) {
+  try {
+    // Fetch chain data
+    const [chainRes, summaryRes] = await Promise.all([
+      fetch('/api/chain/' + orgId),
+      fetch('/api/chain/' + orgId + '/summary')
+    ]);
+    if (!chainRes.ok) throw new Error('Failed to load chain');
+    const chainData = await chainRes.json();
+    const summaryData = summaryRes.ok ? await summaryRes.json() : null;
+
+    const rows = chainData.chain || [];
+    if (!rows.length) {
+      container.innerHTML = '<span style="color:#9ca3af;font-size:12px">No chain paths found. Make sure objectives, frameworks, and controls are configured.</span>';
+      return;
+    }
+
+    // Summary cards
+    let summaryHtml = '';
+    if (summaryData) {
+      const cpf = summaryData.controlsPerFramework || [];
+      const cpo = summaryData.coveragePerObjective || [];
+      const unm = summaryData.unmitigatedRisks || [];
+
+      const totals = summaryData.totals || {};
+      summaryHtml = `<div class="chain-summary-row">
+        <div class="chain-summary-card">
+          <div class="chain-summary-num">${totals.chainRows || rows.length}</div>
+          <div class="chain-summary-label">Total Paths</div>
+        </div>
+        <div class="chain-summary-card">
+          <div class="chain-summary-num">${totals.frameworks || cpf.length}</div>
+          <div class="chain-summary-label">Frameworks</div>
+        </div>
+        <div class="chain-summary-card">
+          <div class="chain-summary-num">${totals.appliedControls || cpf.reduce((a, c) => a + (c.controlCount || 0), 0)}</div>
+          <div class="chain-summary-label">Controls Linked</div>
+        </div>
+        <div class="chain-summary-card" style="${unm.length ? 'border-color:#ef4444;color:#ef4444' : ''}">
+          <div class="chain-summary-num">${unm.length}</div>
+          <div class="chain-summary-label">Unmitigated Risks</div>
+        </div>
+      </div>`;
+
+      // Controls per framework
+      if (cpf.length) {
+        const maxCtrl = Math.max(...cpf.map(f => f.controlCount || 0), 1);
+        summaryHtml += `<div style="margin-top:10px"><strong style="font-size:12px;color:#6b7280">Controls per Framework</strong>
+          <div class="chain-fw-bars">${cpf.map(f => `<div class="chain-fw-bar-row">
+            <span class="chain-fw-bar-name">${esc(f.framework || 'Unknown')}</span>
+            <div class="chain-fw-bar-track"><div class="chain-fw-bar-fill" style="width:${Math.round(((f.controlCount || 0) / maxCtrl) * 100)}%"></div></div>
+            <span class="chain-fw-bar-count">${f.controlCount || 0}</span>
+          </div>`).join('')}</div>
+        </div>`;
+      }
+
+      // Coverage per objective
+      if (cpo.length) {
+        summaryHtml += `<div style="margin-top:10px"><strong style="font-size:12px;color:#6b7280">Coverage per Objective</strong>
+          <div class="chain-obj-coverage">${cpo.map(o => `<div class="chain-obj-row">
+            <span class="chain-obj-name">${esc(o.objective || 'Unknown')}</span>
+            <span class="chain-obj-stats">${o.frameworks || 0} fw · ${o.requirements || 0} req · ${o.risks || 0} risks · ${o.controls || 0} ctrls</span>
+          </div>`).join('')}</div>
+        </div>`;
+      }
+    }
+
+    // Chain table
+    const tableHtml = `<div class="chain-table-wrapper">
+      <table class="chain-table">
+        <thead><tr>
+          <th>#</th>
+          <th>Objective</th>
+          <th>Framework</th>
+          <th>Requirement</th>
+          <th>Risk Scenario</th>
+          <th>Control</th>
+        </tr></thead>
+        <tbody>${rows.map((r, i) => `<tr>
+          <td>${i + 1}</td>
+          <td>${esc(r.objective?.name || '—')}</td>
+          <td>${esc(r.framework?.name || '—')}</td>
+          <td>${esc(r.requirement?.name || r.requirement?.refId || '—')}</td>
+          <td>${esc(r.riskScenario?.name || '—')}</td>
+          <td>${esc(r.control?.name || '—')}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+
+    container.innerHTML = summaryHtml + `
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#6366f1">Show Full Chain Table (${rows.length} rows)</summary>
+        ${tableHtml}
+      </details>`;
+
+  } catch (err) {
+    console.error('Chain visualization error:', err);
+    container.innerHTML = `<span style="color:#ef4444;font-size:12px">Error loading chain: ${esc(err.message)}</span>`;
+  }
+}
+
+// Auto-load chain on detail page if previously resolved
+async function autoLoadChain(orgId) {
+  const container = document.getElementById('chain-result-' + orgId);
+  if (!container) return;
+  try {
+    const res = await fetch('/api/chain/' + orgId);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.chain && data.chain.length > 0) {
+      await renderChainVisualization(orgId, container);
+    }
+  } catch (e) { /* ignore */ }
 }
 
 // ---- Org Context Chat ----
@@ -4745,6 +4927,23 @@ async function csDoExport() {
       await csSaveSession(csSessionData);
       csJustExported = true;
       csRenderWizard();
+
+      // Auto-resolve chain for the org context after successful GRC export
+      const orgCtx = csSessionData.orgContext;
+      const orgId = typeof orgCtx === 'object' ? orgCtx.id : orgCtx;
+      if (orgId) {
+        try {
+          console.log(`[Export] Auto-resolving chain for org: ${orgId}`);
+          const chainRes = await fetch('/api/chain/resolve/' + orgId, { method: 'POST' });
+          if (chainRes.ok) {
+            const chainData = await chainRes.json();
+            console.log(`[Export] Chain auto-resolved: ${chainData.data?.chainRows || 0} paths`);
+            toast('info', 'Chain Updated', `Entity chain auto-resolved (${chainData.data?.chainRows || 0} paths).`);
+          }
+        } catch (chainErr) {
+          console.warn('[Export] Chain auto-resolve failed (non-critical):', chainErr.message);
+        }
+      }
 
     } catch (err) {
       console.error('[Export] GRC export error:', err);
