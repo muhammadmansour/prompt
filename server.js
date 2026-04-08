@@ -356,6 +356,318 @@ const dbDeleteOrgContext = db.prepare(`DELETE FROM org_contexts WHERE id = ?`);
 
 const dbUpdateOrgContextStoreId = db.prepare(`UPDATE org_contexts SET store_id = ?, updated_at = ? WHERE id = ?`);
 
+// ---- CISO Entity Cache DB helpers ----
+const dbGetCachedEntity = db.prepare(`SELECT * FROM ciso_entity_cache WHERE id = ? AND entity_type = ?`);
+const dbUpsertCachedEntity = db.prepare(`
+  INSERT INTO ciso_entity_cache (id, entity_type, name, ref_id, status, data, fetched_at)
+  VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(id, entity_type) DO UPDATE SET
+    name = excluded.name, ref_id = excluded.ref_id, status = excluded.status,
+    data = excluded.data, fetched_at = excluded.fetched_at
+`);
+const dbGetCachedEntitiesByType = db.prepare(`SELECT * FROM ciso_entity_cache WHERE entity_type = ?`);
+const dbClearCacheByType = db.prepare(`DELETE FROM ciso_entity_cache WHERE entity_type = ?`);
+
+// ---- Org Context Chain DB helpers ----
+const dbInsertChainRow = db.prepare(`
+  INSERT INTO org_context_chain (org_context_id, objective_uuid, framework_uuid, requirement_uuid, compliance_assessment_uuid, requirement_assessment_uuid, risk_scenario_uuid, applied_control_uuid, resolved_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+`);
+const dbDeleteChainByOrg = db.prepare(`DELETE FROM org_context_chain WHERE org_context_id = ?`);
+const dbGetChainByOrg = db.prepare(`
+  SELECT
+    c.id AS chain_id,
+    c.org_context_id,
+    c.objective_uuid,
+    c.framework_uuid,
+    c.requirement_uuid,
+    c.compliance_assessment_uuid,
+    c.requirement_assessment_uuid,
+    c.risk_scenario_uuid,
+    c.applied_control_uuid,
+    c.resolved_at,
+    obj.name AS objective_name, obj.ref_id AS objective_ref,
+    fw.name AS framework_name, fw.ref_id AS framework_ref,
+    req.name AS requirement_name, req.ref_id AS requirement_ref,
+    ca.name AS compliance_assessment_name,
+    ra.name AS requirement_assessment_name, ra.status AS requirement_assessment_status,
+    rs.name AS risk_scenario_name, rs.ref_id AS risk_scenario_ref, rs.status AS risk_scenario_status,
+    ac.name AS control_name, ac.ref_id AS control_ref, ac.status AS control_status
+  FROM org_context_chain c
+  LEFT JOIN ciso_entity_cache obj ON obj.id = c.objective_uuid AND obj.entity_type = 'objective'
+  LEFT JOIN ciso_entity_cache fw  ON fw.id  = c.framework_uuid AND fw.entity_type = 'framework'
+  LEFT JOIN ciso_entity_cache req ON req.id = c.requirement_uuid AND req.entity_type = 'requirement'
+  LEFT JOIN ciso_entity_cache ca  ON ca.id  = c.compliance_assessment_uuid AND ca.entity_type = 'compliance_assessment'
+  LEFT JOIN ciso_entity_cache ra  ON ra.id  = c.requirement_assessment_uuid AND ra.entity_type = 'requirement_assessment'
+  LEFT JOIN ciso_entity_cache rs  ON rs.id  = c.risk_scenario_uuid AND rs.entity_type = 'risk_scenario'
+  LEFT JOIN ciso_entity_cache ac  ON ac.id  = c.applied_control_uuid AND ac.entity_type = 'applied_control'
+  WHERE c.org_context_id = ?
+  ORDER BY c.id
+`);
+
+// ==========================================
+// Chain Resolution Engine
+// ==========================================
+
+// Fetch a single CISO Assistant entity, using cache with TTL
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+async function fetchCachedEntity(entityType, uuid, apiPath, localToken) {
+  if (!uuid) return null;
+
+  // Check cache first
+  const cached = dbGetCachedEntity.get(uuid, entityType);
+  if (cached) {
+    const age = Date.now() - new Date(cached.fetched_at).getTime();
+    if (age < CACHE_TTL_MS) {
+      return JSON.parse(cached.data || '{}');
+    }
+  }
+
+  // Fetch from CISO Assistant API
+  try {
+    const res = await grcFetch(`${GRC_API_URL}${apiPath}`, {}, localToken);
+    if (!res.ok) {
+      console.warn(`[Chain] Failed to fetch ${entityType} ${uuid}: ${res.status}`);
+      return cached ? JSON.parse(cached.data || '{}') : null; // Return stale cache if available
+    }
+    const data = await res.json();
+    const name = data.name || data.ref_id || '';
+    const refId = data.ref_id || '';
+    const status = data.status || '';
+    dbUpsertCachedEntity.run(uuid, entityType, name, refId, status, JSON.stringify(data));
+    return data;
+  } catch (err) {
+    console.error(`[Chain] Error fetching ${entityType} ${uuid}:`, err.message);
+    return cached ? JSON.parse(cached.data || '{}') : null;
+  }
+}
+
+// Fetch a paginated list from CISO Assistant API
+async function fetchPaginatedList(apiPath, localToken) {
+  const results = [];
+  let url = `${GRC_API_URL}${apiPath}`;
+  while (url) {
+    try {
+      const res = await grcFetch(url, {}, localToken);
+      if (!res.ok) { console.warn(`[Chain] Paginated fetch failed: ${res.status} for ${url}`); break; }
+      const data = await res.json();
+      const items = Array.isArray(data.results) ? data.results : (Array.isArray(data) ? data : []);
+      results.push(...items);
+      url = data.next || null;
+    } catch (err) {
+      console.error(`[Chain] Paginated fetch error:`, err.message);
+      break;
+    }
+  }
+  return results;
+}
+
+// Cache a batch of entities
+function cacheEntities(entityType, entities) {
+  for (const e of entities) {
+    const id = e.id || e.uuid;
+    if (!id) continue;
+    dbUpsertCachedEntity.run(
+      id, entityType,
+      e.name || e.ref_id || '',
+      e.ref_id || '',
+      e.status || '',
+      JSON.stringify(e)
+    );
+  }
+}
+
+// Main chain resolution function
+async function resolveOrgContextChain(orgContextId, localToken) {
+  console.log(`[Chain] Resolving chain for org_context: ${orgContextId}`);
+
+  // 1. Load org_context
+  const orgRow = dbGetOrgContext.get(orgContextId);
+  if (!orgRow) throw new Error(`Org context not found: ${orgContextId}`);
+
+  const objectiveUuids = JSON.parse(orgRow.strategic_objectives || '[]').filter(v => typeof v === 'string' && v.includes('-'));
+  const frameworkUuids = JSON.parse(orgRow.obligatory_frameworks || '[]').filter(v => typeof v === 'string' && v.includes('-'));
+  const riskUuids = JSON.parse(orgRow.risk_scenarios || '[]').filter(v => typeof v === 'string' && v.includes('-'));
+  // controls field may be used for applied_control UUIDs
+  let controlUuids = [];
+  try { controlUuids = JSON.parse(orgRow.controls || '[]').filter(v => typeof v === 'string' && v.includes('-')); } catch {}
+
+  console.log(`[Chain] UUIDs — objectives: ${objectiveUuids.length}, frameworks: ${frameworkUuids.length}, risks: ${riskUuids.length}, controls: ${controlUuids.length}`);
+
+  // 2. Fetch objectives
+  const objectives = [];
+  for (const uuid of objectiveUuids) {
+    const obj = await fetchCachedEntity('objective', uuid, `/api/organisation-objectives/${uuid}/`, localToken);
+    if (obj) objectives.push({ uuid, ...obj });
+  }
+  console.log(`[Chain] Fetched ${objectives.length} objectives`);
+
+  // 3. Fetch frameworks
+  const frameworks = [];
+  for (const uuid of frameworkUuids) {
+    const fw = await fetchCachedEntity('framework', uuid, `/api/frameworks/${uuid}/`, localToken);
+    if (fw) frameworks.push({ uuid, ...fw });
+  }
+  console.log(`[Chain] Fetched ${frameworks.length} frameworks`);
+
+  // 4. For each framework, fetch requirement nodes
+  const fwRequirements = new Map(); // framework_uuid → [requirement nodes]
+  for (const fw of frameworks) {
+    const reqs = await fetchPaginatedList(`/api/requirement-nodes/?framework=${fw.uuid}&page_size=500`, localToken);
+    cacheEntities('requirement', reqs);
+    // Only keep assessable (leaf) requirements
+    const assessable = reqs.filter(r => r.assessable !== false);
+    fwRequirements.set(fw.uuid, assessable);
+    console.log(`[Chain] Framework "${fw.name}": ${assessable.length} assessable requirements (${reqs.length} total)`);
+  }
+
+  // 5. For each framework, fetch compliance assessments
+  const fwComplianceAssessments = new Map(); // framework_uuid → [compliance assessments]
+  for (const fw of frameworks) {
+    const cas = await fetchPaginatedList(`/api/compliance-assessments/?framework=${fw.uuid}&page_size=100`, localToken);
+    cacheEntities('compliance_assessment', cas);
+    fwComplianceAssessments.set(fw.uuid, cas);
+    console.log(`[Chain] Framework "${fw.name}": ${cas.length} compliance assessment(s)`);
+  }
+
+  // 6. For each compliance assessment, fetch requirement assessments (+ their linked controls)
+  const reqToRA = new Map(); // requirement_uuid → { ra, ca }
+  for (const [fwUuid, cas] of fwComplianceAssessments) {
+    for (const ca of cas) {
+      const caId = ca.id || ca.uuid;
+      const ras = await fetchPaginatedList(`/api/requirement-assessments/?compliance_assessment=${caId}&page_size=1000`, localToken);
+      cacheEntities('requirement_assessment', ras);
+      for (const ra of ras) {
+        const reqId = typeof ra.requirement === 'string' ? ra.requirement : (ra.requirement?.id || '');
+        if (reqId) {
+          reqToRA.set(reqId, { ra, caUuid: caId });
+        }
+      }
+      console.log(`[Chain] CA "${ca.name || caId}": ${ras.length} requirement assessments`);
+    }
+  }
+
+  // 7. Fetch risk scenarios
+  const riskScenarios = [];
+  for (const uuid of riskUuids) {
+    const rs = await fetchCachedEntity('risk_scenario', uuid, `/api/risk-scenarios/${uuid}/`, localToken);
+    if (rs) riskScenarios.push({ uuid, ...rs });
+  }
+  console.log(`[Chain] Fetched ${riskScenarios.length} risk scenarios`);
+
+  // 8. Build risk → controls mapping from risk scenario data
+  const riskToControls = new Map(); // risk_uuid → [control_uuids]
+  for (const rs of riskScenarios) {
+    const linkedControls = Array.isArray(rs.applied_controls) ? rs.applied_controls.map(ac =>
+      typeof ac === 'string' ? ac : (ac?.id || ac?.uuid || '')
+    ).filter(Boolean) : [];
+    riskToControls.set(rs.uuid, linkedControls);
+  }
+
+  // 9. Fetch and cache applied controls
+  const allControlUuids = new Set([...controlUuids]);
+  // Add controls from risk scenarios
+  for (const ctrls of riskToControls.values()) ctrls.forEach(c => allControlUuids.add(c));
+  // Add controls from requirement assessments
+  for (const { ra } of reqToRA.values()) {
+    const raControls = Array.isArray(ra.applied_controls) ? ra.applied_controls.map(ac =>
+      typeof ac === 'string' ? ac : (ac?.id || ac?.uuid || '')
+    ).filter(Boolean) : [];
+    raControls.forEach(c => allControlUuids.add(c));
+  }
+
+  for (const uuid of allControlUuids) {
+    await fetchCachedEntity('applied_control', uuid, `/api/applied-controls/${uuid}/`, localToken);
+  }
+  console.log(`[Chain] Cached ${allControlUuids.size} applied controls`);
+
+  // 10. Clear existing chain rows and build new ones
+  dbDeleteChainByOrg.run(orgContextId);
+
+  let chainCount = 0;
+  const insertChain = db.transaction(() => {
+    for (const fw of frameworks) {
+      const reqs = fwRequirements.get(fw.uuid) || [];
+
+      for (const req of reqs) {
+        const reqId = req.id || req.uuid;
+        const raInfo = reqToRA.get(reqId);
+        const caUuid = raInfo?.caUuid || null;
+        const raUuid = raInfo ? (raInfo.ra.id || raInfo.ra.uuid || null) : null;
+
+        // Get controls linked to this requirement assessment
+        const raControls = raInfo && Array.isArray(raInfo.ra.applied_controls)
+          ? raInfo.ra.applied_controls.map(ac => typeof ac === 'string' ? ac : (ac?.id || ac?.uuid || '')).filter(Boolean)
+          : [];
+
+        // Determine which objectives link to this framework
+        // (For now, link all objectives since the org_context associates them at the top level)
+        const linkedObjectives = objectives.length > 0 ? objectives : [{ uuid: null }];
+
+        // Determine which risks relate to this requirement's controls
+        const relatedRiskUuids = new Set();
+        for (const [riskUuid, riskCtrls] of riskToControls) {
+          if (raControls.some(c => riskCtrls.includes(c))) {
+            relatedRiskUuids.add(riskUuid);
+          }
+        }
+        // If no risk found via controls, check if any risk exists (link all)
+        if (relatedRiskUuids.size === 0 && riskScenarios.length > 0) {
+          // Don't force-link unrelated risks
+        }
+
+        for (const obj of linkedObjectives) {
+          if (raControls.length > 0) {
+            for (const ctrlUuid of raControls) {
+              // Find related risks for this specific control
+              const ctrlRisks = [...riskToControls.entries()]
+                .filter(([, ctrls]) => ctrls.includes(ctrlUuid))
+                .map(([riskUuid]) => riskUuid);
+
+              if (ctrlRisks.length > 0) {
+                for (const riskUuid of ctrlRisks) {
+                  dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, riskUuid, ctrlUuid);
+                  chainCount++;
+                }
+              } else {
+                // Control with no linked risk
+                dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, null, ctrlUuid);
+                chainCount++;
+              }
+            }
+          } else {
+            // Requirement with no controls yet
+            const reqRisks = [...relatedRiskUuids];
+            if (reqRisks.length > 0) {
+              for (const riskUuid of reqRisks) {
+                dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, riskUuid, null);
+                chainCount++;
+              }
+            } else {
+              dbInsertChainRow.run(orgContextId, obj.uuid || null, fw.uuid, reqId, caUuid, raUuid, null, null);
+              chainCount++;
+            }
+          }
+        }
+      }
+    }
+  });
+
+  insertChain();
+  console.log(`[Chain] Resolution complete: ${chainCount} chain rows inserted for ${orgContextId}`);
+
+  return {
+    orgContextId,
+    objectives: objectives.length,
+    frameworks: frameworks.length,
+    requirements: [...fwRequirements.values()].reduce((sum, arr) => sum + arr.length, 0),
+    riskScenarios: riskScenarios.length,
+    appliedControls: allControlUuids.size,
+    chainRows: chainCount,
+  };
+}
+
 function orgContextToJSON(r) {
   return {
     id: r.id,
@@ -4301,6 +4613,142 @@ const server = http.createServer(async (req, res) => {
       console.error('Collections API Error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- Chain Resolution API ----
+
+  // POST /api/chain/resolve/:orgContextId — Trigger full chain resolution
+  const chainResolveMatch = url.pathname.match(/^\/api\/chain\/resolve\/([^\/]+)$/);
+  if (chainResolveMatch && req.method === 'POST') {
+    try {
+      const orgContextId = chainResolveMatch[1];
+      console.log(`[Chain API] Resolve request for org: ${orgContextId}`);
+      const result = await resolveOrgContextChain(orgContextId, reqToken);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, data: result }));
+    } catch (error) {
+      console.error('[Chain API] Resolve error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: error.message }));
+    }
+    return;
+  }
+
+  // GET /api/chain/:orgContextId — Get full resolved chain
+  const chainGetMatch = url.pathname.match(/^\/api\/chain\/([^\/]+)$/);
+  if (chainGetMatch && req.method === 'GET') {
+    try {
+      const orgContextId = chainGetMatch[1];
+      const rows = dbGetChainByOrg.all(orgContextId);
+      const orgRow = dbGetOrgContext.get(orgContextId);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        orgContext: orgRow ? { id: orgRow.id, nameEn: orgRow.name_en, nameAr: orgRow.name_ar } : null,
+        chainRows: rows.length,
+        chain: rows.map(r => ({
+          chainId: r.chain_id,
+          objective: r.objective_uuid ? { uuid: r.objective_uuid, name: r.objective_name, refId: r.objective_ref } : null,
+          framework: r.framework_uuid ? { uuid: r.framework_uuid, name: r.framework_name, refId: r.framework_ref } : null,
+          requirement: r.requirement_uuid ? { uuid: r.requirement_uuid, name: r.requirement_name, refId: r.requirement_ref } : null,
+          complianceAssessment: r.compliance_assessment_uuid ? { uuid: r.compliance_assessment_uuid, name: r.compliance_assessment_name } : null,
+          requirementAssessment: r.requirement_assessment_uuid ? { uuid: r.requirement_assessment_uuid, name: r.requirement_assessment_name, status: r.requirement_assessment_status } : null,
+          riskScenario: r.risk_scenario_uuid ? { uuid: r.risk_scenario_uuid, name: r.risk_scenario_name, refId: r.risk_scenario_ref, status: r.risk_scenario_status } : null,
+          control: r.applied_control_uuid ? { uuid: r.applied_control_uuid, name: r.control_name, refId: r.control_ref, status: r.control_status } : null,
+          resolvedAt: r.resolved_at,
+        })),
+      }));
+    } catch (error) {
+      console.error('[Chain API] Get chain error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: error.message }));
+    }
+    return;
+  }
+
+  // GET /api/chain/:orgContextId/summary — Aggregate stats
+  const chainSummaryMatch = url.pathname.match(/^\/api\/chain\/([^\/]+)\/summary$/);
+  if (chainSummaryMatch && req.method === 'GET') {
+    try {
+      const orgContextId = chainSummaryMatch[1];
+      const rows = dbGetChainByOrg.all(orgContextId);
+      const orgRow = dbGetOrgContext.get(orgContextId);
+
+      // Aggregate: controls per framework
+      const fwControlMap = {};
+      // Aggregate: coverage per objective
+      const objCoverageMap = {};
+      // Aggregate: unmitigated risks
+      const unmitigatedRisks = new Set();
+      // Track unique entities
+      const uniqueObjectives = new Set();
+      const uniqueFrameworks = new Set();
+      const uniqueRequirements = new Set();
+      const uniqueRisks = new Set();
+      const uniqueControls = new Set();
+
+      for (const r of rows) {
+        if (r.objective_uuid) uniqueObjectives.add(r.objective_uuid);
+        if (r.framework_uuid) uniqueFrameworks.add(r.framework_uuid);
+        if (r.requirement_uuid) uniqueRequirements.add(r.requirement_uuid);
+        if (r.risk_scenario_uuid) uniqueRisks.add(r.risk_scenario_uuid);
+        if (r.applied_control_uuid) uniqueControls.add(r.applied_control_uuid);
+
+        // Controls per framework
+        if (r.framework_uuid && r.applied_control_uuid) {
+          const fwKey = r.framework_name || r.framework_uuid;
+          if (!fwControlMap[fwKey]) fwControlMap[fwKey] = new Set();
+          fwControlMap[fwKey].add(r.applied_control_uuid);
+        }
+
+        // Coverage per objective
+        if (r.objective_uuid) {
+          const objKey = r.objective_name || r.objective_uuid;
+          if (!objCoverageMap[objKey]) objCoverageMap[objKey] = { frameworks: new Set(), requirements: new Set(), risks: new Set(), controls: new Set() };
+          if (r.framework_uuid) objCoverageMap[objKey].frameworks.add(r.framework_uuid);
+          if (r.requirement_uuid) objCoverageMap[objKey].requirements.add(r.requirement_uuid);
+          if (r.risk_scenario_uuid) objCoverageMap[objKey].risks.add(r.risk_scenario_uuid);
+          if (r.applied_control_uuid) objCoverageMap[objKey].controls.add(r.applied_control_uuid);
+        }
+
+        // Unmitigated risks
+        if (r.risk_scenario_uuid && !r.applied_control_uuid) {
+          unmitigatedRisks.add(r.risk_scenario_name || r.risk_scenario_uuid);
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        orgContext: orgRow ? { id: orgRow.id, nameEn: orgRow.name_en } : null,
+        totals: {
+          chainRows: rows.length,
+          objectives: uniqueObjectives.size,
+          frameworks: uniqueFrameworks.size,
+          requirements: uniqueRequirements.size,
+          riskScenarios: uniqueRisks.size,
+          appliedControls: uniqueControls.size,
+        },
+        controlsPerFramework: Object.entries(fwControlMap).map(([fw, ctrls]) => ({
+          framework: fw,
+          controlCount: ctrls.size,
+        })),
+        coveragePerObjective: Object.entries(objCoverageMap).map(([obj, sets]) => ({
+          objective: obj,
+          frameworks: sets.frameworks.size,
+          requirements: sets.requirements.size,
+          risks: sets.risks.size,
+          controls: sets.controls.size,
+        })),
+        unmitigatedRisks: [...unmitigatedRisks],
+      }));
+    } catch (error) {
+      console.error('[Chain API] Summary error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: error.message }));
     }
     return;
   }
