@@ -23,8 +23,8 @@ const API = {
   sessions: '/api/chat/sessions',
   collections: '/api/collections',
   localPrompts: '/api/local-prompts',
-  prompts: 'https://muraji-api.wathbahs.com/api/prompts',
-  libraries: 'https://muraji-api.wathbahs.com/api/libraries',
+  prompts: 'https://muraji-api.wathbah.dev/api/prompts',
+  libraries: 'https://muraji-api.wathbah.dev/api/libraries',
   orgContexts: '/api/org-contexts',
   csSessions: '/api/cs-sessions',
   controlsGenerate: '/api/controls/generate',
@@ -60,6 +60,7 @@ const PAGE_NAMES = {
   'org-contexts': 'Organization Contexts',
   'prompts': 'Prompts',
   'file-collections': 'File Collections',
+  'workbench': 'Workbench',
 };
 const VALID_PAGES = Object.keys(PAGE_NAMES);
 let currentPage = null;
@@ -108,6 +109,7 @@ function navigateTo(page, pushState = true, subId = null) {
   if (page === 'controls-studio') loadControlsStudio();
   if (page === 'merge-optimizer') loadMergeOptimizer();
   if (page === 'policy-ingestion') loadPolicyIngestion(subId);
+  if (page === 'workbench') loadWorkbench(subId);
 
   // Scroll to top
   window.scrollTo(0, 0);
@@ -3189,7 +3191,7 @@ if (orgSearch) {
 
 // ─── Prompts Page ────────────────────────────────────────────
 
-const PROMPTS_API_URL = 'https://muraji-api.wathbahs.com/api/prompts';
+const PROMPTS_API_URL = 'https://muraji-api.wathbah.dev/api/prompts';
 const LOCAL_PROMPTS_URL = '/api/local-prompts';
 const PROMPTS_HIDDEN_IDS = ['64d28cc6-e8c2-4de1-8842-e1f9c65e9173'];
 
@@ -8136,6 +8138,787 @@ function piRenderSuccess() {
         <button class="pi-success-back" onclick="piBackToCollections()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L3 6L8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Back to Admin</button>
       </div>
     </div>`;
+}
+
+// ─── Workbench ────────────────────────────────────────────────
+
+const MURAJI_API = 'https://muraji-api.wathbah.dev/api/libraries';
+let wbLibraries = [];
+let wbCurrentLibrary = null;
+let wbCurrentNode = null;
+let wbDirty = false;
+const wbIconEye = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 7 3 3 7 3C11 3 13 7 13 7C13 7 11 11 7 11C3 11 1 7 1 7Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.3"/></svg>';
+const wbIconEyeOff = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 7 3 3 7 3C11 3 13 7 13 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M2 12L12 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+
+function wbShowView(view) {
+  document.getElementById('wb-content').style.display = view === 'grid' ? '' : 'none';
+  document.getElementById('wb-detail').style.display = view === 'tree' ? '' : 'none';
+  document.getElementById('wb-req-detail').style.display = view === 'req' ? '' : 'none';
+}
+
+async function loadWorkbench(subId) {
+  if (subId) {
+    await loadWorkbenchDetail(subId);
+  } else {
+    wbShowView('grid');
+    await loadWorkbenchFrameworks();
+  }
+}
+
+async function loadWorkbenchFrameworks() {
+  const grid = document.getElementById('wb-frameworks-grid');
+  const loading = document.getElementById('wb-frameworks-loading');
+  grid.innerHTML = '';
+  loading.style.display = 'flex';
+  try {
+    const res = await fetch(MURAJI_API);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const json = await res.json();
+    wbLibraries = json.data || json;
+    loading.style.display = 'none';
+    if (!wbLibraries.length) {
+      grid.innerHTML = '<div class="wb-empty"><p>No frameworks found.</p></div>';
+      return;
+    }
+    grid.innerHTML = wbLibraries.map(lib => {
+      const fw = (lib.content && lib.content.framework) || lib.framework || {};
+      const reqCount = (fw.requirement_nodes || []).length;
+      const assessableCount = (fw.requirement_nodes || []).filter(n => n.assessable).length;
+      const questionsCount = (fw.requirement_nodes || []).reduce((sum, n) => sum + Object.keys(n.questions || {}).length, 0);
+      return `<div class="wb-framework-card" data-lib-id="${lib._id || lib.id}">
+        <div class="wb-card-header">
+          <span class="wb-card-tab">${escapeHtml(fw.tab || fw.ref_id || '')}</span>
+        </div>
+        <h3 class="wb-card-title">${escapeHtml(fw.name || lib.name || 'Unnamed Framework')}</h3>
+        <p class="wb-card-ref">${escapeHtml(fw.ref_id || '')}</p>
+        <p class="wb-card-desc">${escapeHtml((fw.description || lib.description || '').substring(0, 150))}${(fw.description || lib.description || '').length > 150 ? '...' : ''}</p>
+        <div class="wb-card-stats">
+          <span class="wb-stat"><strong>${reqCount}</strong> nodes</span>
+          <span class="wb-stat"><strong>${assessableCount}</strong> assessable</span>
+          <span class="wb-stat"><strong>${questionsCount}</strong> questions</span>
+        </div>
+      </div>`;
+    }).join('');
+    grid.querySelectorAll('.wb-framework-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const libId = card.dataset.libId;
+        navigateTo('workbench', true, libId);
+      });
+    });
+  } catch (e) {
+    loading.style.display = 'none';
+    grid.innerHTML = `<div class="wb-empty"><p>Failed to load frameworks: ${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+async function loadWorkbenchDetail(libId) {
+  wbShowView('tree');
+
+  let lib = wbLibraries.find(l => (l._id || l.id) === libId);
+  if (!lib) {
+    try {
+      const res = await fetch(MURAJI_API);
+      if (res.ok) {
+        const json = await res.json();
+        wbLibraries = json.data || json;
+        lib = wbLibraries.find(l => (l._id || l.id) === libId);
+      }
+    } catch (_) {}
+  }
+  if (!lib) {
+    document.getElementById('wb-tree-container').innerHTML = '<div class="wb-empty"><p>Framework not found.</p></div>';
+    return;
+  }
+  wbCurrentLibrary = lib;
+  const fw = (lib.content && lib.content.framework) || lib.framework || {};
+  document.getElementById('wb-detail-title').textContent = fw.name || 'Framework';
+  document.getElementById('wb-detail-subtitle').textContent = fw.description || '';
+  const assessableCount = (fw.requirement_nodes || []).filter(n => n.assessable).length;
+  const questionsCount = (fw.requirement_nodes || []).reduce((sum, n) => sum + Object.keys(n.questions || {}).length, 0);
+  document.getElementById('wb-detail-meta').innerHTML = `
+    <span class="wb-meta-chip">${escapeHtml(fw.ref_id || '')}</span>
+    <span class="wb-meta-chip">${assessableCount} assessable</span>
+    <span class="wb-meta-chip">${questionsCount} questions</span>`;
+
+  document.getElementById('wb-back-btn').onclick = () => navigateTo('workbench', true, null);
+
+  const searchInput = document.getElementById('wb-search-input');
+  searchInput.value = '';
+  searchInput.oninput = () => renderWbTree(fw.requirement_nodes || [], searchInput.value.trim().toLowerCase());
+
+  renderWbTree(fw.requirement_nodes || [], '');
+}
+
+function buildNodeTree(nodes) {
+  const map = {};
+  const roots = [];
+  nodes.forEach(n => { map[n.urn] = { ...n, children: [] }; });
+  nodes.forEach(n => {
+    if (n.parent_urn && map[n.parent_urn]) {
+      map[n.parent_urn].children.push(map[n.urn]);
+    } else {
+      roots.push(map[n.urn]);
+    }
+  });
+  return roots;
+}
+
+function nodeMatchesSearch(node, query) {
+  if (!query) return true;
+  const fields = [node.name, node.ref_id, node.description, node.typical_evidence].filter(Boolean);
+  if (fields.some(f => f.toLowerCase().includes(query))) return true;
+  if (node.questions) {
+    for (const q of Object.values(node.questions)) {
+      if (q.text && q.text.toLowerCase().includes(query)) return true;
+    }
+  }
+  return false;
+}
+
+function treeHasMatch(node, query) {
+  if (nodeMatchesSearch(node, query)) return true;
+  return (node.children || []).some(c => treeHasMatch(c, query));
+}
+
+function renderWbTree(nodes, query) {
+  const container = document.getElementById('wb-tree-container');
+  const tree = buildNodeTree(nodes);
+  const filtered = query ? tree.filter(n => treeHasMatch(n, query)) : tree;
+  if (!filtered.length) {
+    container.innerHTML = '<div class="wb-empty"><p>No matching requirements found.</p></div>';
+    return;
+  }
+  container.innerHTML = filtered.map(n => renderWbNode(n, query)).join('');
+  container.querySelectorAll('.wb-node-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const children = btn.closest('.wb-node').querySelector('.wb-node-children');
+      if (children) {
+        children.classList.toggle('collapsed');
+        btn.classList.toggle('collapsed');
+      }
+    });
+  });
+  container.querySelectorAll('.wb-open-req-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRequirementDetail(btn.dataset.urn);
+    });
+  });
+}
+
+function renderWbNode(node, query) {
+  if (query && !treeHasMatch(node, query)) return '';
+  const hasChildren = node.children && node.children.length > 0;
+  const isAssessable = node.assessable;
+  const questions = node.questions ? Object.entries(node.questions) : [];
+  const depthClass = `wb-depth-${Math.min(node.depth || 1, 4)}`;
+
+  let html = `<div class="wb-node ${depthClass} ${isAssessable ? 'wb-node-assessable' : ''}">`;
+  html += `<div class="wb-node-header">`;
+  if (hasChildren) {
+    html += `<button class="wb-node-toggle collapsed" title="Toggle"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+  } else {
+    html += `<span class="wb-node-bullet"></span>`;
+  }
+  html += `<span class="wb-node-ref">${escapeHtml(node.ref_id || '')}</span>`;
+  html += `<span class="wb-node-name">${escapeHtml(node.name || node.description || '')}</span>`;
+  if (isAssessable) html += `<span class="wb-badge wb-badge-assessable">assessable</span>`;
+  if (questions.length) html += `<span class="wb-badge wb-badge-questions">${questions.length} Q</span>`;
+  if (isAssessable) html += `<button class="wb-open-req-btn" data-urn="${escapeHtml(node.urn)}" title="Open requirement detail">Edit <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+  html += `</div>`;
+
+  if (node.description && node.name) {
+    html += `<div class="wb-node-description">${escapeHtml(node.description)}</div>`;
+  }
+
+  if (isAssessable && (questions.length || node.typical_evidence)) {
+    html += `<div class="wb-node-content">`;
+    if (questions.length) {
+      html += `<div class="wb-questions-section">`;
+      html += `<h4 class="wb-section-label">Questions</h4>`;
+      html += `<div class="wb-questions-list">`;
+      questions.forEach(([qUrn, q], idx) => {
+        html += `<div class="wb-question">`;
+        html += `<div class="wb-question-header"><span class="wb-question-num">Q${idx + 1}</span><span class="wb-question-text">${escapeHtml(q.text || '')}</span></div>`;
+        if (q.choices && q.choices.length) {
+          html += `<div class="wb-choices">`;
+          q.choices.forEach(c => {
+            const cls = c.value === 'Yes' ? 'wb-choice-yes' : c.value === 'No' ? 'wb-choice-no' : 'wb-choice-partial';
+            html += `<span class="wb-choice ${cls}">${escapeHtml(c.value)}</span>`;
+          });
+          html += `</div>`;
+        }
+        html += `</div>`;
+      });
+      html += `</div></div>`;
+    }
+    if (node.typical_evidence) {
+      html += `<div class="wb-evidence-section">`;
+      html += `<h4 class="wb-section-label">Typical Evidence</h4>`;
+      html += `<div class="wb-evidence-text">${formatEvidence(node.typical_evidence)}</div>`;
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (hasChildren) {
+    html += `<div class="wb-node-children collapsed">`;
+    node.children.forEach(c => { html += renderWbNode(c, query); });
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function formatEvidence(text) {
+  return text.split('\n').map(line => {
+    line = line.trim();
+    if (!line) return '';
+    if (line.startsWith('- ')) {
+      const parts = line.substring(2).split(':');
+      if (parts.length > 1) {
+        return `<div class="wb-evidence-item"><strong>${escapeHtml(parts[0].trim())}</strong>: ${escapeHtml(parts.slice(1).join(':').trim())}</div>`;
+      }
+      return `<div class="wb-evidence-item">${escapeHtml(line.substring(2))}</div>`;
+    }
+    return `<div class="wb-evidence-item">${escapeHtml(line)}</div>`;
+  }).join('');
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── Requirement Detail Panel ─────────────────────────────────
+
+function openRequirementDetail(urn) {
+  if (!wbCurrentLibrary) return;
+  const fw = (wbCurrentLibrary.content && wbCurrentLibrary.content.framework) || wbCurrentLibrary.framework || {};
+  const nodes = fw.requirement_nodes || [];
+  const node = nodes.find(n => n.urn === urn);
+  if (!node) return;
+  wbCurrentNode = node;
+  wbDirty = false;
+
+  wbShowView('req');
+
+  document.getElementById('wb-req-ref').textContent = node.ref_id || '';
+  document.getElementById('wb-req-name').textContent = node.name || node.description || '';
+  document.getElementById('wb-req-desc').textContent = node.name ? (node.description || '') : '';
+
+  document.getElementById('wb-req-back-btn').onclick = () => {
+    if (wbDirty && !confirm('You have unsaved changes. Discard?')) return;
+    wbDirty = false;
+    wbShowView('tree');
+  };
+  document.getElementById('wb-save-btn').onclick = () => saveRequirement();
+  document.getElementById('wb-add-question-btn').onclick = () => addQuestionRow();
+  document.getElementById('wb-add-evidence-btn').onclick = () => addEvidenceRow();
+  document.getElementById('wb-add-note-btn').onclick = () => addNoteRow();
+
+  const genBody = document.getElementById('wb-gen-body');
+  genBody.style.display = 'none';
+  document.querySelector('.wb-gen-chevron').classList.remove('wb-gen-chevron-open');
+  const toggleGen = () => {
+    const open = genBody.style.display !== 'none';
+    genBody.style.display = open ? 'none' : '';
+    document.querySelector('.wb-gen-chevron').classList.toggle('wb-gen-chevron-open', !open);
+  };
+  document.getElementById('wb-gen-toggle-btn').onclick = toggleGen;
+  document.querySelector('.wb-gen-header').onclick = (e) => {
+    if (e.target.closest('.wb-gen-toggle-btn')) return;
+    toggleGen();
+  };
+  document.getElementById('wb-gen-steering').value = '';
+  document.getElementById('wb-gen-status').textContent = '';
+  document.getElementById('wb-gen-run-btn').onclick = () => runAiGeneration();
+
+  renderQuestionsList();
+  renderEvidenceList();
+  renderNotesList();
+  updateDirtyState(false);
+}
+
+function markDirty() { updateDirtyState(true); }
+function updateDirtyState(dirty) {
+  wbDirty = dirty;
+  document.getElementById('wb-dirty-badge').style.display = dirty ? '' : 'none';
+  document.getElementById('wb-save-btn').disabled = !dirty;
+}
+
+// ── Questions CRUD ──
+
+function renderQuestionsList() {
+  const list = document.getElementById('wb-questions-list');
+  const questions = wbCurrentNode.questions ? Object.entries(wbCurrentNode.questions) : [];
+  if (!questions.length) {
+    list.innerHTML = '<div class="wb-req-empty">No questions yet. Click "Add Question" to create one.</div>';
+    return;
+  }
+  list.innerHTML = questions.map(([qUrn, q], idx) => {
+    const excluded = q.excluded === true;
+    const choicesHtml = (q.choices || []).map(c => {
+      const cls = c.value === 'Yes' ? 'wb-choice-yes' : c.value === 'No' ? 'wb-choice-no' : 'wb-choice-partial';
+      return `<span class="wb-choice ${cls}">${escapeHtml(c.value)}</span>`;
+    }).join('');
+    return `<div class="wb-req-item ${excluded ? 'wb-req-item-excluded' : ''}" data-urn="${escapeHtml(qUrn)}">
+      <div class="wb-req-item-header">
+        <button class="wb-scope-toggle ${excluded ? 'wb-scope-off' : ''}" data-action="toggle-question" data-urn="${escapeHtml(qUrn)}" title="${excluded ? 'Include in AI scope' : 'Exclude from AI scope'}">${excluded ? wbIconEyeOff : wbIconEye}</button>
+        <span class="wb-req-item-num">Q${idx + 1}</span>
+        <span class="wb-req-item-type">${escapeHtml(q.type || 'unique_choice')}</span>
+        <div class="wb-req-item-actions">
+          <button class="wb-req-edit-btn" data-action="edit-question" data-urn="${escapeHtml(qUrn)}" title="Edit">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="wb-req-delete-btn" data-action="delete-question" data-urn="${escapeHtml(qUrn)}" title="Delete">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M10 4V11C10 11.6 9.6 12 9 12H5C4.4 12 4 11.6 4 11V4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="wb-req-item-body">${escapeHtml(q.text || '')}</div>
+      ${choicesHtml ? `<div class="wb-req-item-choices">${choicesHtml}</div>` : ''}
+    </div>`;
+  }).join('');
+  attachItemActions(list);
+}
+
+function addQuestionRow() {
+  const nodeUrn = wbCurrentNode.urn || '';
+  if (!wbCurrentNode.questions) wbCurrentNode.questions = {};
+  const existingCount = Object.keys(wbCurrentNode.questions).length;
+  const qNum = existingCount + 1;
+  const qUrn = `${nodeUrn}:question:${qNum}`;
+
+  showInlineEditor('question', null, (text) => {
+    wbCurrentNode.questions[qUrn] = {
+      type: 'unique_choice',
+      text: text,
+      choices: [
+        { urn: `${qUrn}:choice:1`, value: 'Yes' },
+        { urn: `${qUrn}:choice:2`, value: 'No' },
+        { urn: `${qUrn}:choice:3`, value: 'Partial' }
+      ]
+    };
+    markDirty();
+    renderQuestionsList();
+  });
+}
+
+function editQuestion(qUrn) {
+  const q = wbCurrentNode.questions[qUrn];
+  if (!q) return;
+  showInlineEditor('question', q.text, (text) => {
+    q.text = text;
+    markDirty();
+    renderQuestionsList();
+  });
+}
+
+function deleteQuestion(qUrn) {
+  if (!confirm('Delete this question?')) return;
+  delete wbCurrentNode.questions[qUrn];
+  reindexQuestions();
+  markDirty();
+  renderQuestionsList();
+}
+
+function reindexQuestions() {
+  const nodeUrn = wbCurrentNode.urn || '';
+  const entries = Object.values(wbCurrentNode.questions || {});
+  wbCurrentNode.questions = {};
+  entries.forEach((q, idx) => {
+    const qNum = idx + 1;
+    const qUrn = `${nodeUrn}:question:${qNum}`;
+    q.choices = (q.choices || []).map((c, ci) => ({
+      urn: `${qUrn}:choice:${ci + 1}`, value: c.value
+    }));
+    wbCurrentNode.questions[qUrn] = q;
+  });
+}
+
+// ── Evidence CRUD ──
+
+function parseEvidenceItems(text) {
+  if (!text) return [];
+  return text.split('\n').filter(l => l.trim()).map((line, idx) => {
+    let l = line.replace(/^-\s*/, '').trim();
+    let excluded = false;
+    if (l.startsWith('[EXCLUDED] ')) {
+      excluded = true;
+      l = l.substring(11);
+    }
+    const colonIdx = l.indexOf(':');
+    if (colonIdx > 0 && colonIdx < 80) {
+      return { id: idx, title: l.substring(0, colonIdx).trim(), description: l.substring(colonIdx + 1).trim(), excluded };
+    }
+    return { id: idx, title: '', description: l, excluded };
+  });
+}
+
+function evidenceItemsToText(items) {
+  return items.map(it => {
+    const prefix = it.excluded ? '[EXCLUDED] ' : '';
+    if (it.title) return `- ${prefix}${it.title}: ${it.description}`;
+    return `- ${prefix}${it.description}`;
+  }).join('\n');
+}
+
+function renderEvidenceList() {
+  const list = document.getElementById('wb-evidence-list');
+  const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
+  if (!items.length) {
+    list.innerHTML = '<div class="wb-req-empty">No typical evidence yet. Click "Add Evidence" to create one.</div>';
+    return;
+  }
+  list.innerHTML = items.map((it, idx) => {
+    const excluded = it.excluded === true;
+    return `<div class="wb-req-item ${excluded ? 'wb-req-item-excluded' : ''}" data-idx="${idx}">
+    <div class="wb-req-item-header">
+      <button class="wb-scope-toggle ${excluded ? 'wb-scope-off' : ''}" data-action="toggle-evidence" data-idx="${idx}" title="${excluded ? 'Include in AI scope' : 'Exclude from AI scope'}">${excluded ? wbIconEyeOff : wbIconEye}</button>
+      <span class="wb-req-item-num">E${idx + 1}</span>
+      ${it.title ? `<span class="wb-req-item-ev-title">${escapeHtml(it.title)}</span>` : ''}
+      <div class="wb-req-item-actions">
+        <button class="wb-req-edit-btn" data-action="edit-evidence" data-idx="${idx}" title="Edit">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="wb-req-delete-btn" data-action="delete-evidence" data-idx="${idx}" title="Delete">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M10 4V11C10 11.6 9.6 12 9 12H5C4.4 12 4 11.6 4 11V4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="wb-req-item-body">${escapeHtml(it.description)}</div>
+  </div>`;
+  }).join('');
+  attachItemActions(list);
+}
+
+function addEvidenceRow() {
+  showInlineEditor('evidence', null, (text, title) => {
+    const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
+    items.push({ id: items.length, title: title || '', description: text });
+    wbCurrentNode.typical_evidence = evidenceItemsToText(items);
+    markDirty();
+    renderEvidenceList();
+  }, true);
+}
+
+function editEvidence(idx) {
+  const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
+  const item = items[idx];
+  if (!item) return;
+  showInlineEditor('evidence', item.description, (text, title) => {
+    items[idx] = { id: idx, title: title || '', description: text };
+    wbCurrentNode.typical_evidence = evidenceItemsToText(items);
+    markDirty();
+    renderEvidenceList();
+  }, true, item.title);
+}
+
+function deleteEvidence(idx) {
+  if (!confirm('Delete this evidence item?')) return;
+  const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
+  items.splice(idx, 1);
+  wbCurrentNode.typical_evidence = evidenceItemsToText(items);
+  markDirty();
+  renderEvidenceList();
+}
+
+// ── Admin Notes CRUD ──
+
+function renderNotesList() {
+  const list = document.getElementById('wb-notes-list');
+  const notes = wbCurrentNode.admin_notes || [];
+  if (!notes.length) {
+    list.innerHTML = '<div class="wb-req-empty">No admin notes yet. Click "Add Note" to create one.</div>';
+    return;
+  }
+  list.innerHTML = notes.map((note, idx) => {
+    const excluded = note.excluded === true;
+    return `<div class="wb-req-item wb-req-item-note ${excluded ? 'wb-req-item-excluded' : ''}" data-idx="${idx}">
+    <div class="wb-req-item-header">
+      <button class="wb-scope-toggle ${excluded ? 'wb-scope-off' : ''}" data-action="toggle-note" data-idx="${idx}" title="${excluded ? 'Include in AI scope' : 'Exclude from AI scope'}">${excluded ? wbIconEyeOff : wbIconEye}</button>
+      <span class="wb-req-item-num">N${idx + 1}</span>
+      <span class="wb-req-item-note-date">${escapeHtml(note.date || '')}</span>
+      <div class="wb-req-item-actions">
+        <button class="wb-req-edit-btn" data-action="edit-note" data-idx="${idx}" title="Edit">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="wb-req-delete-btn" data-action="delete-note" data-idx="${idx}" title="Delete">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 4H11M5 4V3C5 2.4 5.4 2 6 2H8C8.6 2 9 2.4 9 3V4M10 4V11C10 11.6 9.6 12 9 12H5C4.4 12 4 11.6 4 11V4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="wb-req-item-body">${escapeHtml(note.text)}</div>
+  </div>`;
+  }).join('');
+  attachItemActions(list);
+}
+
+function addNoteRow() {
+  showInlineEditor('note', null, (text) => {
+    if (!wbCurrentNode.admin_notes) wbCurrentNode.admin_notes = [];
+    wbCurrentNode.admin_notes.push({ text, date: new Date().toISOString().split('T')[0] });
+    markDirty();
+    renderNotesList();
+  });
+}
+
+function editNote(idx) {
+  const notes = wbCurrentNode.admin_notes || [];
+  const note = notes[idx];
+  if (!note) return;
+  showInlineEditor('note', note.text, (text) => {
+    notes[idx].text = text;
+    notes[idx].date = new Date().toISOString().split('T')[0];
+    markDirty();
+    renderNotesList();
+  });
+}
+
+function deleteNote(idx) {
+  if (!confirm('Delete this note?')) return;
+  const notes = wbCurrentNode.admin_notes || [];
+  notes.splice(idx, 1);
+  markDirty();
+  renderNotesList();
+}
+
+// ── Action dispatcher ──
+
+function toggleQuestionScope(qUrn) {
+  const q = wbCurrentNode.questions[qUrn];
+  if (!q) return;
+  q.excluded = !q.excluded;
+  markDirty();
+  renderQuestionsList();
+}
+
+function toggleEvidenceScope(idx) {
+  const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
+  items[idx].excluded = !items[idx].excluded;
+  wbCurrentNode.typical_evidence = evidenceItemsToText(items);
+  markDirty();
+  renderEvidenceList();
+}
+
+function toggleNoteScope(idx) {
+  const notes = wbCurrentNode.admin_notes || [];
+  notes[idx].excluded = !notes[idx].excluded;
+  markDirty();
+  renderNotesList();
+}
+
+function attachItemActions(container) {
+  container.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      const urn = btn.dataset.urn;
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (action === 'edit-question') editQuestion(urn);
+      if (action === 'delete-question') deleteQuestion(urn);
+      if (action === 'toggle-question') toggleQuestionScope(urn);
+      if (action === 'edit-evidence') editEvidence(idx);
+      if (action === 'delete-evidence') deleteEvidence(idx);
+      if (action === 'toggle-evidence') toggleEvidenceScope(idx);
+      if (action === 'edit-note') editNote(idx);
+      if (action === 'delete-note') deleteNote(idx);
+      if (action === 'toggle-note') toggleNoteScope(idx);
+    });
+  });
+}
+
+// ── Inline Editor ──
+
+function showInlineEditor(type, initialText, onSave, hasTitle, initialTitle) {
+  const existing = document.querySelector('.wb-inline-editor');
+  if (existing) existing.remove();
+
+  const section = document.getElementById(`wb-req-${type === 'question' ? 'questions' : type === 'evidence' ? 'evidence' : 'notes'}-section`);
+  const editor = document.createElement('div');
+  editor.className = 'wb-inline-editor';
+  editor.innerHTML = `
+    ${hasTitle ? `<input type="text" class="wb-inline-title" placeholder="Title (optional)" value="${escapeHtml(initialTitle || '')}">` : ''}
+    <textarea class="wb-inline-textarea" rows="3" placeholder="Enter ${type} text...">${escapeHtml(initialText || '')}</textarea>
+    <div class="wb-inline-actions">
+      <button class="btn-admin-ghost wb-inline-cancel">Cancel</button>
+      <button class="btn-admin-primary wb-inline-save">Save</button>
+    </div>`;
+  section.appendChild(editor);
+
+  const textarea = editor.querySelector('.wb-inline-textarea');
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+  editor.querySelector('.wb-inline-cancel').onclick = () => editor.remove();
+  editor.querySelector('.wb-inline-save').onclick = () => {
+    const text = textarea.value.trim();
+    if (!text) { textarea.classList.add('wb-input-error'); return; }
+    const title = hasTitle ? (editor.querySelector('.wb-inline-title').value.trim() || '') : '';
+    editor.remove();
+    onSave(text, title);
+  };
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') editor.remove();
+  });
+}
+
+// ── AI Generation ──
+
+async function runAiGeneration() {
+  if (!wbCurrentNode) return;
+  const steering = document.getElementById('wb-gen-steering').value.trim();
+  const doReplace = document.getElementById('wb-gen-replace').checked;
+  const doQuestions = document.getElementById('wb-gen-questions').checked;
+  const doEvidence = document.getElementById('wb-gen-evidence').checked;
+
+  if (!doQuestions && !doEvidence) {
+    if (typeof toast === 'function') toast('error', 'Nothing selected', 'Select at least one generation target.');
+    return;
+  }
+
+  const runBtn = document.getElementById('wb-gen-run-btn');
+  const statusEl = document.getElementById('wb-gen-status');
+  runBtn.disabled = true;
+  runBtn.innerHTML = '<div class="spinner-sm"></div> Generating...';
+  statusEl.textContent = 'Calling AI...';
+  statusEl.className = 'wb-gen-status';
+
+  const fw = wbCurrentLibrary ? ((wbCurrentLibrary.content && wbCurrentLibrary.content.framework) || wbCurrentLibrary.framework || {}) : {};
+  const parentNodes = (fw.requirement_nodes || []).filter(n => {
+    let pUrn = wbCurrentNode.parent_urn;
+    while (pUrn) {
+      const parent = (fw.requirement_nodes || []).find(p => p.urn === pUrn);
+      if (!parent) break;
+      if (parent.urn === n.urn) return true;
+      pUrn = parent.parent_urn;
+    }
+    return false;
+  });
+  const breadcrumb = parentNodes.map(p => `${p.ref_id || ''} ${p.name || ''}`).join(' > ');
+
+  const requirement = {
+    ref_id: wbCurrentNode.ref_id || '',
+    name: wbCurrentNode.name || '',
+    description: wbCurrentNode.description || '',
+    nodeUrn: wbCurrentNode.urn || '',
+    framework: fw.name || '',
+    framework_ref_id: fw.ref_id || '',
+    breadcrumb: breadcrumb
+  };
+
+  let userPrompt = steering || 'No additional context provided.';
+  if (steering) {
+    userPrompt = `[Admin steering instructions]: ${steering}`;
+  }
+
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requirement, prompt: userPrompt })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'Generation failed');
+    const data = json.data;
+
+    if (doQuestions && data.questions && data.questions.length) {
+      const nodeUrn = wbCurrentNode.urn || '';
+      const newQuestions = {};
+      const existingCount = doReplace ? 0 : Object.keys(wbCurrentNode.questions || {}).length;
+      data.questions.forEach((q, idx) => {
+        const qNum = existingCount + idx + 1;
+        const qUrn = `${nodeUrn}:question:${qNum}`;
+        newQuestions[qUrn] = {
+          type: 'unique_choice',
+          text: q.question || q.text || '',
+          choices: [
+            { urn: `${qUrn}:choice:1`, value: 'Yes' },
+            { urn: `${qUrn}:choice:2`, value: 'No' },
+            { urn: `${qUrn}:choice:3`, value: 'Partial' }
+          ]
+        };
+      });
+      if (doReplace) {
+        wbCurrentNode.questions = newQuestions;
+      } else {
+        wbCurrentNode.questions = { ...(wbCurrentNode.questions || {}), ...newQuestions };
+      }
+      renderQuestionsList();
+    }
+
+    if (doEvidence && data.typical_evidence && data.typical_evidence.length) {
+      const newEvidenceText = data.typical_evidence
+        .filter(e => e.title || e.description)
+        .map(e => `- ${e.title || ''}${e.description ? ': ' + e.description : ''}`)
+        .join('\n');
+      if (doReplace) {
+        wbCurrentNode.typical_evidence = newEvidenceText;
+      } else {
+        const existing = wbCurrentNode.typical_evidence || '';
+        wbCurrentNode.typical_evidence = existing ? existing + '\n' + newEvidenceText : newEvidenceText;
+      }
+      renderEvidenceList();
+    }
+
+    markDirty();
+    statusEl.textContent = 'Generation complete.';
+    statusEl.className = 'wb-gen-status wb-gen-status-ok';
+    if (typeof toast === 'function') toast('success', 'Generated', 'AI content generated. Review and save.');
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    statusEl.className = 'wb-gen-status wb-gen-status-err';
+    if (typeof toast === 'function') toast('error', 'Generation Failed', e.message);
+  } finally {
+    runBtn.disabled = false;
+    runBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12M4 12L2.5 13.5M13.5 2.5L12 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.3"/></svg> Generate with AI`;
+  }
+}
+
+// ── Save to API ──
+
+async function saveRequirement() {
+  if (!wbCurrentLibrary || !wbCurrentNode) return;
+  const libId = wbCurrentLibrary._id || wbCurrentLibrary.id;
+  const saveBtn = document.getElementById('wb-save-btn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving...';
+
+  const evidenceText = wbCurrentNode.typical_evidence || '';
+  const questions = wbCurrentNode.questions || {};
+  const adminNotes = wbCurrentNode.admin_notes || [];
+
+  try {
+    const apiUrl = `${MURAJI_API}/${libId}/controls`;
+    const res = await fetch(apiUrl, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        updates: [{
+          code: wbCurrentNode.ref_id,
+          typical_requirements: evidenceText,
+          questions: questions,
+          admin_notes: adminNotes
+        }]
+      })
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || `HTTP ${res.status}`);
+    }
+    updateDirtyState(false);
+    if (typeof toast === 'function') toast('success', 'Saved', 'Requirement updated successfully.');
+  } catch (e) {
+    if (typeof toast === 'function') toast('error', 'Save Failed', e.message);
+  } finally {
+    saveBtn.disabled = wbDirty ? false : true;
+    saveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 1H3C2.4 1 2 1.4 2 2V12C2 12.6 2.4 13 3 13H11C11.6 13 12 12.6 12 12V4L9 1Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 1V4H12M5 8H9M5 10.5H7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Save Changes`;
+  }
 }
 
 // ─── Init ─────────────────────────────────────────────────────

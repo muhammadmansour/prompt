@@ -1873,7 +1873,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       // For page requests (HTML or SPA routes), redirect to login
-      const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections'];
+      const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench'];
       const isSpaRoute = SPA_PREFIXES.some(p => url.pathname === p || (p !== '/' && url.pathname.startsWith(p + '/')));
       if (isSpaRoute || url.pathname.endsWith('.html')) {
         res.writeHead(302, { 'Location': '/login.html' });
@@ -4867,7 +4867,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Client-side routes (serve admin.html for SPA pages) ----
-  const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections'];
+  const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench'];
   const isSpaRoute = SPA_PREFIXES.some(p => url.pathname === p || (p !== '/' && url.pathname.startsWith(p + '/')));
   if (isSpaRoute) {
     serveStaticFile(res, path.join(__dirname, 'admin.html'));
