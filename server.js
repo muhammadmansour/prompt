@@ -1862,6 +1862,20 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- Auth: Me endpoint ----
+  if (url.pathname === '/api/auth/me' && req.method === 'GET') {
+    const token = getTokenFromRequest(req);
+    const session = token ? authSessions.get(token) : null;
+    if (session) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ authenticated: true, username: session.username }));
+    } else {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ authenticated: false }));
+    }
+    return;
+  }
+
   // ---- Auth Guard ----
   if (!isPublicPath(url.pathname)) {
     const token = getTokenFromRequest(req);
@@ -1873,7 +1887,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       // For page requests (HTML or SPA routes), redirect to login
-      const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench'];
+      const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench', '/audit-log'];
       const isSpaRoute = SPA_PREFIXES.some(p => url.pathname === p || (p !== '/' && url.pathname.startsWith(p + '/')));
       if (isSpaRoute || url.pathname.endsWith('.html')) {
         res.writeHead(302, { 'Location': '/login.html' });
@@ -1932,8 +1946,18 @@ const server = http.createServer(async (req, res) => {
       }
 
       const result = await callGeminiAPIForSingle(requirement, prompt, apiKey, contextFiles);
+        let promptTemplateVersion = null;
+        try {
+          const stat = fs.statSync(promptTemplatePath);
+          promptTemplateVersion = stat.mtime.toISOString();
+        } catch (_) {}
+        const templateMeta = {
+          model: 'gemini-2.5-pro',
+          prompt_template: 'requirement-analyzer',
+          prompt_template_version: promptTemplateVersion
+        };
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, data: result }));
+        res.end(JSON.stringify({ success: true, data: result, meta: templateMeta }));
     } catch (error) {
       console.error('Analyze API Error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -2219,6 +2243,26 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- GRC Platform Proxy: Compliance assessment requirements_list ----
+  const caReqListMatch = url.pathname.match(/^\/api\/grc\/compliance-assessments\/([^/]+)\/requirements-list$/);
+  if (caReqListMatch && req.method === 'GET') {
+    try {
+      const caId = caReqListMatch[1];
+      const qs = url.search || '?assessable=true';
+      console.log(`[GRC] Fetching requirements_list for CA ${caId}`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/compliance-assessments/${caId}/requirements_list/${qs}`, {}, reqToken);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ...data }));
+    } catch (error) {
+      console.error('[GRC] Requirements list error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   // ---- GRC Platform Proxy: Get requirement assessments ----
   if (url.pathname === '/api/grc/requirement-assessments' && req.method === 'GET') {
     try {
@@ -2230,6 +2274,25 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ success: true, results: data.results || data }));
     } catch (error) {
       console.error('[GRC] Requirement assessments error:', error.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  // ---- GRC Platform Proxy: RA audit log ----
+  const raAuditMatch = url.pathname.match(/^\/api\/grc\/requirement-assessments\/([^/]+)\/audit-log$/);
+  if (raAuditMatch && req.method === 'GET') {
+    try {
+      const raId = raAuditMatch[1];
+      console.log(`[GRC] Fetching audit log for RA ${raId}`);
+      const grcRes = await grcFetch(`${GRC_API_URL}/api/requirement-assessments/${raId}/audit-log/`, {}, reqToken);
+      if (!grcRes.ok) throw new Error(`GRC API ${grcRes.status}: ${await grcRes.text()}`);
+      const data = await grcRes.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, entries: data }));
+    } catch (error) {
+      console.error('[GRC] RA audit log error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }
@@ -4867,7 +4930,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Client-side routes (serve admin.html for SPA pages) ----
-  const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench'];
+  const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench', '/audit-log'];
   const isSpaRoute = SPA_PREFIXES.some(p => url.pathname === p || (p !== '/' && url.pathname.startsWith(p + '/')));
   if (isSpaRoute) {
     serveStaticFile(res, path.join(__dirname, 'admin.html'));

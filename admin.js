@@ -61,6 +61,7 @@ const PAGE_NAMES = {
   'prompts': 'Prompts',
   'file-collections': 'File Collections',
   'workbench': 'Workbench',
+  'audit-log': 'Audit Log',
 };
 const VALID_PAGES = Object.keys(PAGE_NAMES);
 let currentPage = null;
@@ -110,6 +111,7 @@ function navigateTo(page, pushState = true, subId = null) {
   if (page === 'merge-optimizer') loadMergeOptimizer();
   if (page === 'policy-ingestion') loadPolicyIngestion(subId);
   if (page === 'workbench') loadWorkbench(subId);
+  if (page === 'audit-log') loadAuditLog(subId);
 
   // Scroll to top
   window.scrollTo(0, 0);
@@ -3138,7 +3140,7 @@ async function orgUploadFile(orgId, input) {
       console.log(`[OrgFiles] Uploaded: ${file.name}`);
     } catch (err) {
       console.error(`[OrgFiles] Upload error for ${file.name}:`, err);
-      alert(`Failed to upload "${file.name}": ${err.message}`);
+      wbAlert('Upload failed', `Failed to upload "${escapeHtml(file.name)}": ${escapeHtml(err.message)}`, { danger: true });
     }
   }
 
@@ -3167,7 +3169,8 @@ function orgViewFile(orgId, fileId, fileName) {
 window.orgViewFile = orgViewFile;
 
 async function orgDeleteFile(orgId, fileId, fileName) {
-  if (!confirm(`Delete "${fileName}"?`)) return;
+  const ok = await wbConfirm('Delete file', `Delete "${escapeHtml(fileName)}"?`, { confirmLabel: 'Delete', danger: true });
+  if (!ok) return;
   try {
     const r = await fetch(`/api/org-contexts/${orgId}/files/${fileId}`, { method: 'DELETE' });
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Delete failed'); }
@@ -3175,7 +3178,7 @@ async function orgDeleteFile(orgId, fileId, fileName) {
     orgLoadFiles(orgId);
   } catch (err) {
     console.error('[OrgFiles] Delete error:', err);
-    alert(`Failed to delete: ${err.message}`);
+    wbAlert('Delete failed', `Failed to delete: ${escapeHtml(err.message)}`, { danger: true });
   }
 }
 window.orgDeleteFile = orgDeleteFile;
@@ -8142,18 +8145,199 @@ function piRenderSuccess() {
 
 // ─── Workbench ────────────────────────────────────────────────
 
+let wbAdminUser = 'admin';
+(async function fetchAdminIdentity() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.username) wbAdminUser = data.username;
+    }
+  } catch (_) {}
+})();
+
 const MURAJI_API = 'https://muraji-api.wathbah.dev/api/libraries';
 let wbLibraries = [];
 let wbCurrentLibrary = null;
 let wbCurrentNode = null;
 let wbDirty = false;
+let wbCurrentDetailView = 'tree';
+let wbBulkAbort = false;
+
+const NOTE_SUBTYPES = [
+  { value: 'note', label: 'Note' },
+  { value: 'auditor_comment', label: 'Auditor Comment' },
+  { value: 'internal_guidance', label: 'Internal Guidance' },
+  { value: 'historical_finding', label: 'Historical Finding' },
+  { value: 'other', label: 'Other' }
+];
+
+const WB_AI_SERVICE_ACCOUNT = 'muraji-ai';
+
+function makeAuditFields(existing) {
+  const now = new Date().toISOString();
+  if (existing) return { ...existing, updated_at: now, updated_by: wbAdminUser };
+  return { created_at: now, created_by: wbAdminUser, updated_at: now, updated_by: wbAdminUser };
+}
+
+function makeAiAuditFields() {
+  const now = new Date().toISOString();
+  return { created_at: now, created_by: WB_AI_SERVICE_ACCOUNT, updated_at: now, updated_by: WB_AI_SERVICE_ACCOUNT };
+}
+
+const wbAuditLog = [];
+function wbLogAudit(action, details) {
+  wbAuditLog.push({
+    timestamp: new Date().toISOString(),
+    actor: details.actor || wbAdminUser,
+    triggered_by: details.triggered_by || wbAdminUser,
+    action,
+    requirement_urn: details.urn || (wbCurrentNode && wbCurrentNode.urn) || null,
+    item_type: details.item_type || null,
+    item_id: details.item_id || null,
+    summary: details.summary || null,
+    before: details.before || null,
+    snapshot: details.snapshot || null,
+    count: details.count || null
+  });
+}
+
+function migrateQuestionItem(qUrn, q, idx) {
+  return {
+    ...q,
+    item_type: 'question',
+    content_ar: q.content_ar || q.text || '',
+    content_en: q.content_en || '',
+    included_in_ai_scope: q.included_in_ai_scope !== undefined ? q.included_in_ai_scope : (q.excluded !== true),
+    provenance: q.provenance || 'manual',
+    generation_metadata: q.generation_metadata || null,
+    created_at: q.created_at || null,
+    created_by: q.created_by || null,
+    updated_at: q.updated_at || null,
+    updated_by: q.updated_by || null,
+    display_order: q.display_order !== undefined ? q.display_order : idx
+  };
+}
+
+function migrateEvidenceFromText(text) {
+  if (!text) return [];
+  return text.split('\n').filter(l => l.trim()).map((line, idx) => {
+    let l = line.replace(/^-\s*/, '').trim();
+    let excluded = false;
+    if (l.startsWith('[EXCLUDED] ')) { excluded = true; l = l.substring(11); }
+    const colonIdx = l.indexOf(':');
+    let title = '', description = l;
+    if (colonIdx > 0 && colonIdx < 80) { title = l.substring(0, colonIdx).trim(); description = l.substring(colonIdx + 1).trim(); }
+    return {
+      id: idx, title, description,
+      item_type: 'typical_evidence',
+      content_ar: description,
+      content_en: '',
+      excluded: excluded,
+      included_in_ai_scope: !excluded,
+      provenance: 'manual',
+      generation_metadata: null,
+      created_at: null, created_by: null, updated_at: null, updated_by: null,
+      display_order: idx
+    };
+  });
+}
+
+function migrateNoteItem(note, idx) {
+  return {
+    ...note,
+    item_type: 'admin_note',
+    subtype: note.subtype || 'note',
+    subtype_label: note.subtype_label || '',
+    content_ar: note.content_ar || note.text || '',
+    content_en: note.content_en || '',
+    included_in_ai_scope: note.included_in_ai_scope !== undefined ? note.included_in_ai_scope : false,
+    provenance: note.provenance || 'manual',
+    generation_metadata: note.generation_metadata || null,
+    created_at: note.created_at || note.date || null,
+    created_by: note.created_by || null,
+    updated_at: note.updated_at || note.date || null,
+    updated_by: note.updated_by || null,
+    display_order: note.display_order !== undefined ? note.display_order : idx
+  };
+}
+
+function getEvidenceItems(node) {
+  if (Array.isArray(node.typical_evidence_items) && node.typical_evidence_items.length) {
+    return node.typical_evidence_items.map((it, idx) => migrateEvidenceItem(it, idx));
+  }
+  return migrateEvidenceFromText(node.typical_evidence);
+}
+
+function migrateEvidenceItem(it, idx) {
+  const inScope = it.included_in_ai_scope !== undefined ? it.included_in_ai_scope : (it.excluded !== true);
+  return {
+    ...it,
+    item_type: 'typical_evidence',
+    content_ar: it.content_ar || it.description || '',
+    content_en: it.content_en || '',
+    excluded: !inScope,
+    included_in_ai_scope: inScope,
+    provenance: it.provenance || 'manual',
+    generation_metadata: it.generation_metadata || null,
+    created_at: it.created_at || null, created_by: it.created_by || null,
+    updated_at: it.updated_at || null, updated_by: it.updated_by || null,
+    display_order: it.display_order !== undefined ? it.display_order : idx
+  };
+}
+
+function getOrderedItems(node) {
+  const questions = node.questions ? Object.entries(node.questions).map(([qUrn, q], idx) => {
+    const m = migrateQuestionItem(qUrn, q, idx);
+    return { ...m, _urn: qUrn };
+  }) : [];
+  const evidence = getEvidenceItems(node).map(e => ({ ...e, item_type: 'typical_evidence' }));
+  const notes = (node.admin_notes || []).map((n, i) => migrateNoteItem(n, i));
+  return [...questions, ...evidence, ...notes].sort((a, b) => (a.display_order ?? 999) - (b.display_order ?? 999));
+}
+
+function evidenceItemsToTextLegacy(items) {
+  return items.map(it => {
+    const prefix = !it.included_in_ai_scope ? '[EXCLUDED] ' : '';
+    if (it.title) return `- ${prefix}${it.title}: ${it.content_ar || it.description || ''}`;
+    return `- ${prefix}${it.content_ar || it.description || ''}`;
+  }).join('\n');
+}
+
+function subtypeBadgeLabel(subtype, label) {
+  const found = NOTE_SUBTYPES.find(s => s.value === subtype);
+  if (subtype === 'other' && label) return label;
+  return found ? found.label : 'Note';
+}
+
+function provenanceBadge(prov) {
+  if (prov === 'ai_generated') return '<span class="wb-badge wb-badge-ai">AI</span>';
+  return '<span class="wb-badge wb-badge-manual">Manual</span>';
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  try { return new Date(ts).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }); } catch(_) { return ts; }
+}
+
 const wbIconEye = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 7 3 3 7 3C11 3 13 7 13 7C13 7 11 11 7 11C3 11 1 7 1 7Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.3"/></svg>';
 const wbIconEyeOff = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 7 3 3 7 3C11 3 13 7 13 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M2 12L12 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
 
 function wbShowView(view) {
   document.getElementById('wb-content').style.display = view === 'grid' ? '' : 'none';
-  document.getElementById('wb-detail').style.display = view === 'tree' ? '' : 'none';
+  const isDetail = (view === 'tree' || view === 'status');
+  document.getElementById('wb-detail').style.display = isDetail ? '' : 'none';
   document.getElementById('wb-req-detail').style.display = view === 'req' ? '' : 'none';
+  if (isDetail) {
+    wbCurrentDetailView = view;
+    const treeCont = document.getElementById('wb-tree-container');
+    const statusCont = document.getElementById('wb-status-container');
+    const searchWrap = document.getElementById('wb-search-bar-wrap');
+    treeCont.style.display = view === 'tree' ? '' : 'none';
+    statusCont.style.display = view === 'status' ? '' : 'none';
+    if (searchWrap) searchWrap.style.display = view === 'tree' ? '' : 'none';
+    document.querySelectorAll('.wb-view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  }
 }
 
 async function loadWorkbench(subId) {
@@ -8246,7 +8430,11 @@ async function loadWorkbenchDetail(libId) {
   searchInput.value = '';
   searchInput.oninput = () => renderWbTree(fw.requirement_nodes || [], searchInput.value.trim().toLowerCase());
 
+  document.getElementById('wb-view-tree-btn').onclick = () => { wbShowView('tree'); };
+  document.getElementById('wb-view-status-btn').onclick = () => { wbShowView('status'); renderWbStatusView(); };
+
   renderWbTree(fw.requirement_nodes || [], '');
+  wbShowView('tree');
 }
 
 function buildNodeTree(nodes) {
@@ -8403,19 +8591,39 @@ function openRequirementDetail(urn) {
 
   wbShowView('req');
 
-  document.getElementById('wb-req-ref').textContent = node.ref_id || '';
+  const breadcrumbParts = [];
+  breadcrumbParts.push(fw.name || 'Framework');
+  let pUrn = node.parent_urn;
+  const ancestors = [];
+  while (pUrn) {
+    const parent = nodes.find(p => p.urn === pUrn);
+    if (!parent) break;
+    ancestors.unshift(parent.ref_id ? `${parent.ref_id} ${parent.name || ''}`.trim() : (parent.name || ''));
+    pUrn = parent.parent_urn;
+  }
+  breadcrumbParts.push(...ancestors);
+  breadcrumbParts.push(node.ref_id || node.name || 'Requirement');
+  breadcrumbParts.push('Workbench');
+  document.getElementById('wb-req-ref').innerHTML = `<span class="wb-breadcrumb-trail">${breadcrumbParts.map(escapeHtml).join(' <span class="wb-breadcrumb-sep">›</span> ')}</span>`;
   document.getElementById('wb-req-name').textContent = node.name || node.description || '';
   document.getElementById('wb-req-desc').textContent = node.name ? (node.description || '') : '';
 
-  document.getElementById('wb-req-back-btn').onclick = () => {
-    if (wbDirty && !confirm('You have unsaved changes. Discard?')) return;
+  const returnView = wbCurrentDetailView || 'tree';
+  document.getElementById('wb-req-back-btn').onclick = async () => {
+    if (wbDirty) {
+      const discard = await wbConfirm('Unsaved changes', 'You have unsaved changes. Do you want to discard them?', { confirmLabel: 'Discard', danger: true });
+      if (!discard) return;
+    }
     wbDirty = false;
-    wbShowView('tree');
+    wbShowView(returnView);
+    if (returnView === 'status') renderWbStatusView();
   };
   document.getElementById('wb-save-btn').onclick = () => saveRequirement();
   document.getElementById('wb-add-question-btn').onclick = () => addQuestionRow();
   document.getElementById('wb-add-evidence-btn').onclick = () => addEvidenceRow();
   document.getElementById('wb-add-note-btn').onclick = () => addNoteRow();
+  document.getElementById('wb-regen-questions-btn').onclick = () => regenSection('question');
+  document.getElementById('wb-regen-evidence-btn').onclick = () => regenSection('typical_evidence');
 
   const genBody = document.getElementById('wb-gen-body');
   genBody.style.display = 'none';
@@ -8430,7 +8638,11 @@ function openRequirementDetail(urn) {
     if (e.target.closest('.wb-gen-toggle-btn')) return;
     toggleGen();
   };
-  document.getElementById('wb-gen-steering').value = '';
+  const steeringEl = document.getElementById('wb-gen-steering');
+  steeringEl.value = '';
+  const charCountEl = document.getElementById('wb-gen-char-count');
+  charCountEl.textContent = '0 / 2000';
+  steeringEl.oninput = () => { charCountEl.textContent = `${steeringEl.value.length} / 2000`; };
   document.getElementById('wb-gen-status').textContent = '';
   document.getElementById('wb-gen-run-btn').onclick = () => runAiGeneration();
 
@@ -8456,17 +8668,20 @@ function renderQuestionsList() {
     list.innerHTML = '<div class="wb-req-empty">No questions yet. Click "Add Question" to create one.</div>';
     return;
   }
-  list.innerHTML = questions.map(([qUrn, q], idx) => {
-    const excluded = q.excluded === true;
+  list.innerHTML = questions.map(([qUrn, rawQ], idx) => {
+    const q = migrateQuestionItem(qUrn, rawQ, idx);
+    const inScope = q.included_in_ai_scope !== false;
     const choicesHtml = (q.choices || []).map(c => {
       const cls = c.value === 'Yes' ? 'wb-choice-yes' : c.value === 'No' ? 'wb-choice-no' : 'wb-choice-partial';
       return `<span class="wb-choice ${cls}">${escapeHtml(c.value)}</span>`;
     }).join('');
-    return `<div class="wb-req-item ${excluded ? 'wb-req-item-excluded' : ''}" data-urn="${escapeHtml(qUrn)}">
+    return `<div class="wb-req-item ${!inScope ? 'wb-req-item-excluded' : ''}" data-urn="${escapeHtml(qUrn)}">
       <div class="wb-req-item-header">
-        <button class="wb-scope-toggle ${excluded ? 'wb-scope-off' : ''}" data-action="toggle-question" data-urn="${escapeHtml(qUrn)}" title="${excluded ? 'Include in AI scope' : 'Exclude from AI scope'}">${excluded ? wbIconEyeOff : wbIconEye}</button>
+        <button class="wb-scope-toggle ${!inScope ? 'wb-scope-off' : ''}" data-action="toggle-question" data-urn="${escapeHtml(qUrn)}" title="${!inScope ? 'Include in AI scope' : 'Exclude from AI scope'}">${!inScope ? wbIconEyeOff : wbIconEye}</button>
         <span class="wb-req-item-num">Q${idx + 1}</span>
-        <span class="wb-req-item-type">${escapeHtml(q.type || 'unique_choice')}</span>
+        <span class="wb-badge wb-badge-type">question</span>
+        ${provenanceBadge(q.provenance)}
+        ${q.updated_at ? `<span class="wb-item-meta">${q.updated_by ? escapeHtml(q.updated_by) + ' · ' : ''}${formatTimestamp(q.updated_at)}</span>` : ''}
         <div class="wb-req-item-actions">
           <button class="wb-req-edit-btn" data-action="edit-question" data-urn="${escapeHtml(qUrn)}" title="Edit">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -8476,7 +8691,10 @@ function renderQuestionsList() {
           </button>
         </div>
       </div>
-      <div class="wb-req-item-body">${escapeHtml(q.text || '')}</div>
+      <div class="wb-req-item-body wb-bilingual">
+        <div class="wb-lang-ar" dir="rtl">${escapeHtml(q.content_ar || q.text || '')}</div>
+        ${q.content_en ? `<div class="wb-lang-en-wrap wb-collapsed"><button class="wb-lang-toggle" onclick="this.parentElement.classList.toggle('wb-collapsed')">EN</button><div class="wb-lang-en">${escapeHtml(q.content_en)}</div></div>` : ''}
+      </div>
       ${choicesHtml ? `<div class="wb-req-item-choices">${choicesHtml}</div>` : ''}
     </div>`;
   }).join('');
@@ -8490,16 +8708,26 @@ function addQuestionRow() {
   const qNum = existingCount + 1;
   const qUrn = `${nodeUrn}:question:${qNum}`;
 
-  showInlineEditor('question', null, (text) => {
+  showItemEditor('question', null, (data) => {
+    const audit = makeAuditFields();
     wbCurrentNode.questions[qUrn] = {
-      type: 'unique_choice',
-      text: text,
+      type: 'question',
+      item_type: 'question',
+      text: data.content_ar,
+      content_ar: data.content_ar,
+      content_en: data.content_en || '',
+      included_in_ai_scope: true,
+      provenance: 'manual',
+      generation_metadata: null,
+      ...audit,
+      display_order: existingCount,
       choices: [
         { urn: `${qUrn}:choice:1`, value: 'Yes' },
         { urn: `${qUrn}:choice:2`, value: 'No' },
         { urn: `${qUrn}:choice:3`, value: 'Partial' }
       ]
     };
+    wbLogAudit('create_item', { item_type: 'question', item_id: qUrn, summary: data.content_ar.substring(0, 60) });
     markDirty();
     renderQuestionsList();
   });
@@ -8508,15 +8736,25 @@ function addQuestionRow() {
 function editQuestion(qUrn) {
   const q = wbCurrentNode.questions[qUrn];
   if (!q) return;
-  showInlineEditor('question', q.text, (text) => {
-    q.text = text;
+  const migrated = migrateQuestionItem(qUrn, q, 0);
+  showItemEditor('question', migrated, (data) => {
+    const before = q.content_ar || q.text || '';
+    q.text = data.content_ar;
+    q.content_ar = data.content_ar;
+    q.content_en = data.content_en || '';
+    const audit = makeAuditFields(q);
+    Object.assign(q, audit);
+    wbLogAudit('edit_item', { item_type: 'question', item_id: qUrn, summary: `edited`, before });
     markDirty();
     renderQuestionsList();
   });
 }
 
-function deleteQuestion(qUrn) {
-  if (!confirm('Delete this question?')) return;
+async function deleteQuestion(qUrn) {
+  const ok = await wbConfirm('Delete question', 'Are you sure you want to delete this question?', { confirmLabel: 'Delete', danger: true });
+  if (!ok) return;
+  const deleted = wbCurrentNode.questions[qUrn];
+  wbLogAudit('delete_item', { item_type: 'question', item_id: qUrn, summary: (deleted && deleted.content_ar) || (deleted && deleted.text) || qUrn });
   delete wbCurrentNode.questions[qUrn];
   reindexQuestions();
   markDirty();
@@ -8533,51 +8771,30 @@ function reindexQuestions() {
     q.choices = (q.choices || []).map((c, ci) => ({
       urn: `${qUrn}:choice:${ci + 1}`, value: c.value
     }));
+    q.display_order = idx;
     wbCurrentNode.questions[qUrn] = q;
   });
 }
 
 // ── Evidence CRUD ──
 
-function parseEvidenceItems(text) {
-  if (!text) return [];
-  return text.split('\n').filter(l => l.trim()).map((line, idx) => {
-    let l = line.replace(/^-\s*/, '').trim();
-    let excluded = false;
-    if (l.startsWith('[EXCLUDED] ')) {
-      excluded = true;
-      l = l.substring(11);
-    }
-    const colonIdx = l.indexOf(':');
-    if (colonIdx > 0 && colonIdx < 80) {
-      return { id: idx, title: l.substring(0, colonIdx).trim(), description: l.substring(colonIdx + 1).trim(), excluded };
-    }
-    return { id: idx, title: '', description: l, excluded };
-  });
-}
-
-function evidenceItemsToText(items) {
-  return items.map(it => {
-    const prefix = it.excluded ? '[EXCLUDED] ' : '';
-    if (it.title) return `- ${prefix}${it.title}: ${it.description}`;
-    return `- ${prefix}${it.description}`;
-  }).join('\n');
-}
-
 function renderEvidenceList() {
   const list = document.getElementById('wb-evidence-list');
-  const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
+  const items = getEvidenceItems(wbCurrentNode);
   if (!items.length) {
     list.innerHTML = '<div class="wb-req-empty">No typical evidence yet. Click "Add Evidence" to create one.</div>';
     return;
   }
   list.innerHTML = items.map((it, idx) => {
-    const excluded = it.excluded === true;
-    return `<div class="wb-req-item ${excluded ? 'wb-req-item-excluded' : ''}" data-idx="${idx}">
+    const inScope = it.included_in_ai_scope !== false;
+    return `<div class="wb-req-item ${!inScope ? 'wb-req-item-excluded' : ''}" data-idx="${idx}">
     <div class="wb-req-item-header">
-      <button class="wb-scope-toggle ${excluded ? 'wb-scope-off' : ''}" data-action="toggle-evidence" data-idx="${idx}" title="${excluded ? 'Include in AI scope' : 'Exclude from AI scope'}">${excluded ? wbIconEyeOff : wbIconEye}</button>
+      <button class="wb-scope-toggle ${!inScope ? 'wb-scope-off' : ''}" data-action="toggle-evidence" data-idx="${idx}" title="${!inScope ? 'Include in AI scope' : 'Exclude from AI scope'}">${!inScope ? wbIconEyeOff : wbIconEye}</button>
       <span class="wb-req-item-num">E${idx + 1}</span>
       ${it.title ? `<span class="wb-req-item-ev-title">${escapeHtml(it.title)}</span>` : ''}
+      <span class="wb-badge wb-badge-type">evidence</span>
+      ${provenanceBadge(it.provenance)}
+      ${it.updated_at ? `<span class="wb-item-meta">${it.updated_by ? escapeHtml(it.updated_by) + ' · ' : ''}${formatTimestamp(it.updated_at)}</span>` : ''}
       <div class="wb-req-item-actions">
         <button class="wb-req-edit-btn" data-action="edit-evidence" data-idx="${idx}" title="Edit">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -8587,39 +8804,72 @@ function renderEvidenceList() {
         </button>
       </div>
     </div>
-    <div class="wb-req-item-body">${escapeHtml(it.description)}</div>
+    <div class="wb-req-item-body wb-bilingual">
+      <div class="wb-lang-ar" dir="rtl">${escapeHtml(it.content_ar || it.description || '')}</div>
+      ${it.content_en ? `<div class="wb-lang-en-wrap wb-collapsed"><button class="wb-lang-toggle" onclick="this.parentElement.classList.toggle('wb-collapsed')">EN</button><div class="wb-lang-en">${escapeHtml(it.content_en)}</div></div>` : ''}
+    </div>
   </div>`;
   }).join('');
   attachItemActions(list);
 }
 
+function syncEvidenceToNode(items) {
+  wbCurrentNode.typical_evidence_items = items;
+  wbCurrentNode.typical_evidence = evidenceItemsToTextLegacy(items);
+}
+
 function addEvidenceRow() {
-  showInlineEditor('evidence', null, (text, title) => {
-    const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
-    items.push({ id: items.length, title: title || '', description: text });
-    wbCurrentNode.typical_evidence = evidenceItemsToText(items);
+  showItemEditor('evidence', null, (data) => {
+    const items = getEvidenceItems(wbCurrentNode);
+    const audit = makeAuditFields();
+    items.push({
+      id: items.length, title: data.title || '',
+      item_type: 'typical_evidence',
+      description: data.content_ar,
+      content_ar: data.content_ar,
+      content_en: data.content_en || '',
+      excluded: false,
+      included_in_ai_scope: true,
+      provenance: 'manual',
+      generation_metadata: null,
+      ...audit,
+      display_order: items.length
+    });
+    wbLogAudit('create_item', { item_type: 'typical_evidence', item_id: String(items.length - 1), summary: data.content_ar.substring(0, 60) });
+    syncEvidenceToNode(items);
     markDirty();
     renderEvidenceList();
-  }, true);
+  });
 }
 
 function editEvidence(idx) {
-  const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
+  const items = getEvidenceItems(wbCurrentNode);
   const item = items[idx];
   if (!item) return;
-  showInlineEditor('evidence', item.description, (text, title) => {
-    items[idx] = { id: idx, title: title || '', description: text };
-    wbCurrentNode.typical_evidence = evidenceItemsToText(items);
+  showItemEditor('evidence', item, (data) => {
+    const before = items[idx].content_ar || items[idx].description || '';
+    items[idx].title = data.title || '';
+    items[idx].description = data.content_ar;
+    items[idx].content_ar = data.content_ar;
+    items[idx].content_en = data.content_en || '';
+    const audit = makeAuditFields(items[idx]);
+    Object.assign(items[idx], audit);
+    wbLogAudit('edit_item', { item_type: 'typical_evidence', item_id: String(idx), summary: `edited`, before });
+    syncEvidenceToNode(items);
     markDirty();
     renderEvidenceList();
-  }, true, item.title);
+  });
 }
 
-function deleteEvidence(idx) {
-  if (!confirm('Delete this evidence item?')) return;
-  const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
+async function deleteEvidence(idx) {
+  const ok = await wbConfirm('Delete evidence', 'Are you sure you want to delete this evidence item?', { confirmLabel: 'Delete', danger: true });
+  if (!ok) return;
+  const items = getEvidenceItems(wbCurrentNode);
+  const deleted = items[idx];
+  wbLogAudit('delete_item', { item_type: 'typical_evidence', item_id: String(idx), summary: (deleted && deleted.content_ar) || (deleted && deleted.description) || '' });
   items.splice(idx, 1);
-  wbCurrentNode.typical_evidence = evidenceItemsToText(items);
+  items.forEach((it, i) => { it.display_order = i; });
+  syncEvidenceToNode(items);
   markDirty();
   renderEvidenceList();
 }
@@ -8628,18 +8878,22 @@ function deleteEvidence(idx) {
 
 function renderNotesList() {
   const list = document.getElementById('wb-notes-list');
-  const notes = wbCurrentNode.admin_notes || [];
+  const rawNotes = wbCurrentNode.admin_notes || [];
+  const notes = rawNotes.map((n, i) => migrateNoteItem(n, i));
   if (!notes.length) {
     list.innerHTML = '<div class="wb-req-empty">No admin notes yet. Click "Add Note" to create one.</div>';
     return;
   }
   list.innerHTML = notes.map((note, idx) => {
-    const excluded = note.excluded === true;
-    return `<div class="wb-req-item wb-req-item-note ${excluded ? 'wb-req-item-excluded' : ''}" data-idx="${idx}">
+    const inScope = note.included_in_ai_scope !== false;
+    const stLabel = subtypeBadgeLabel(note.subtype, note.subtype_label);
+    return `<div class="wb-req-item wb-req-item-note ${!inScope ? 'wb-req-item-excluded' : ''}" data-idx="${idx}">
     <div class="wb-req-item-header">
-      <button class="wb-scope-toggle ${excluded ? 'wb-scope-off' : ''}" data-action="toggle-note" data-idx="${idx}" title="${excluded ? 'Include in AI scope' : 'Exclude from AI scope'}">${excluded ? wbIconEyeOff : wbIconEye}</button>
+      <button class="wb-scope-toggle ${!inScope ? 'wb-scope-off' : ''}" data-action="toggle-note" data-idx="${idx}" title="${!inScope ? 'Include in AI scope' : 'Exclude from AI scope'}">${!inScope ? wbIconEyeOff : wbIconEye}</button>
       <span class="wb-req-item-num">N${idx + 1}</span>
-      <span class="wb-req-item-note-date">${escapeHtml(note.date || '')}</span>
+      <span class="wb-badge wb-badge-subtype wb-badge-subtype-${escapeHtml(note.subtype || 'note')}">${escapeHtml(stLabel)}</span>
+      ${provenanceBadge(note.provenance)}
+      ${note.updated_at ? `<span class="wb-item-meta">${note.updated_by ? escapeHtml(note.updated_by) + ' · ' : ''}${formatTimestamp(note.updated_at)}</span>` : ''}
       <div class="wb-req-item-actions">
         <button class="wb-req-edit-btn" data-action="edit-note" data-idx="${idx}" title="Edit">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -8649,16 +8903,33 @@ function renderNotesList() {
         </button>
       </div>
     </div>
-    <div class="wb-req-item-body">${escapeHtml(note.text)}</div>
+    <div class="wb-req-item-body wb-bilingual">
+      <div class="wb-lang-ar" dir="rtl">${escapeHtml(note.content_ar || note.text || '')}</div>
+      ${note.content_en ? `<div class="wb-lang-en-wrap wb-collapsed"><button class="wb-lang-toggle" onclick="this.parentElement.classList.toggle('wb-collapsed')">EN</button><div class="wb-lang-en">${escapeHtml(note.content_en)}</div></div>` : ''}
+    </div>
   </div>`;
   }).join('');
   attachItemActions(list);
 }
 
 function addNoteRow() {
-  showInlineEditor('note', null, (text) => {
+  showItemEditor('admin_note', null, (data) => {
     if (!wbCurrentNode.admin_notes) wbCurrentNode.admin_notes = [];
-    wbCurrentNode.admin_notes.push({ text, date: new Date().toISOString().split('T')[0] });
+    const audit = makeAuditFields();
+    wbCurrentNode.admin_notes.push({
+      text: data.content_ar,
+      item_type: 'admin_note',
+      content_ar: data.content_ar,
+      content_en: data.content_en || '',
+      subtype: data.subtype || 'note',
+      subtype_label: data.subtype_label || '',
+      included_in_ai_scope: false,
+      provenance: 'manual',
+      generation_metadata: null,
+      ...audit,
+      display_order: wbCurrentNode.admin_notes.length
+    });
+    wbLogAudit('create_item', { item_type: 'admin_note', item_id: String(wbCurrentNode.admin_notes.length - 1), summary: data.content_ar.substring(0, 60) });
     markDirty();
     renderNotesList();
   });
@@ -8668,45 +8939,94 @@ function editNote(idx) {
   const notes = wbCurrentNode.admin_notes || [];
   const note = notes[idx];
   if (!note) return;
-  showInlineEditor('note', note.text, (text) => {
-    notes[idx].text = text;
-    notes[idx].date = new Date().toISOString().split('T')[0];
+  const migrated = migrateNoteItem(note, idx);
+  showItemEditor('admin_note', migrated, (data) => {
+    const before = notes[idx].content_ar || notes[idx].text || '';
+    notes[idx].text = data.content_ar;
+    notes[idx].content_ar = data.content_ar;
+    notes[idx].content_en = data.content_en || '';
+    notes[idx].subtype = data.subtype || 'note';
+    notes[idx].subtype_label = data.subtype_label || '';
+    const audit = makeAuditFields(notes[idx]);
+    Object.assign(notes[idx], audit);
+    wbLogAudit('edit_item', { item_type: 'admin_note', item_id: String(idx), summary: `edited`, before });
     markDirty();
     renderNotesList();
   });
 }
 
-function deleteNote(idx) {
-  if (!confirm('Delete this note?')) return;
+async function deleteNote(idx) {
+  const ok = await wbConfirm('Delete note', 'Are you sure you want to delete this admin note?', { confirmLabel: 'Delete', danger: true });
+  if (!ok) return;
   const notes = wbCurrentNode.admin_notes || [];
+  const deleted = notes[idx];
+  wbLogAudit('delete_item', { item_type: 'admin_note', item_id: String(idx), summary: (deleted && deleted.content_ar) || '' });
   notes.splice(idx, 1);
+  notes.forEach((n, i) => { n.display_order = i; });
   markDirty();
   renderNotesList();
 }
 
 // ── Action dispatcher ──
 
+async function persistScopeToggle() {
+  if (!wbCurrentLibrary || !wbCurrentNode) return;
+  const libId = wbCurrentLibrary._id || wbCurrentLibrary.id;
+  const pendingLog = wbAuditLog.splice(0);
+  try {
+    await fetch(`${MURAJI_API}/${libId}/controls`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        updates: [{
+          code: wbCurrentNode.ref_id,
+          typical_requirements: wbCurrentNode.typical_evidence || '',
+          typical_evidence_items: wbCurrentNode.typical_evidence_items || getEvidenceItems(wbCurrentNode),
+          questions: wbCurrentNode.questions || {},
+          admin_notes: wbCurrentNode.admin_notes || [],
+          audit_log: pendingLog
+        }]
+      })
+    });
+  } catch (e) {
+    wbAuditLog.unshift(...pendingLog);
+    console.error('Scope toggle persist failed:', e);
+  }
+}
+
 function toggleQuestionScope(qUrn) {
   const q = wbCurrentNode.questions[qUrn];
   if (!q) return;
-  q.excluded = !q.excluded;
-  markDirty();
+  const newVal = !(q.included_in_ai_scope !== false);
+  q.included_in_ai_scope = newVal;
+  q.excluded = !newVal;
+  Object.assign(q, makeAuditFields(q));
+  wbLogAudit('toggle_scope', { item_type: 'question', item_id: qUrn, summary: `scope → ${newVal ? 'on' : 'off'}` });
   renderQuestionsList();
+  persistScopeToggle();
 }
 
 function toggleEvidenceScope(idx) {
-  const items = parseEvidenceItems(wbCurrentNode.typical_evidence);
-  items[idx].excluded = !items[idx].excluded;
-  wbCurrentNode.typical_evidence = evidenceItemsToText(items);
-  markDirty();
+  const items = getEvidenceItems(wbCurrentNode);
+  const newVal = !(items[idx].included_in_ai_scope !== false);
+  items[idx].included_in_ai_scope = newVal;
+  items[idx].excluded = !newVal;
+  Object.assign(items[idx], makeAuditFields(items[idx]));
+  wbLogAudit('toggle_scope', { item_type: 'typical_evidence', item_id: String(idx), summary: `scope → ${newVal ? 'on' : 'off'}` });
+  syncEvidenceToNode(items);
   renderEvidenceList();
+  persistScopeToggle();
 }
 
 function toggleNoteScope(idx) {
   const notes = wbCurrentNode.admin_notes || [];
-  notes[idx].excluded = !notes[idx].excluded;
-  markDirty();
+  const newVal = !(notes[idx].included_in_ai_scope !== false);
+  notes[idx].included_in_ai_scope = newVal;
+  notes[idx].excluded = !newVal;
+  Object.assign(notes[idx], makeAuditFields(notes[idx]));
+  wbLogAudit('toggle_scope', { item_type: 'admin_note', item_id: String(idx), summary: `scope → ${newVal ? 'on' : 'off'}` });
   renderNotesList();
+  persistScopeToggle();
 }
 
 function attachItemActions(container) {
@@ -8729,42 +9049,419 @@ function attachItemActions(container) {
   });
 }
 
-// ── Inline Editor ──
+// ── Inline Item Editor ──
 
-function showInlineEditor(type, initialText, onSave, hasTitle, initialTitle) {
+function showItemEditor(type, existingItem, onSave) {
   const existing = document.querySelector('.wb-inline-editor');
   if (existing) existing.remove();
 
-  const section = document.getElementById(`wb-req-${type === 'question' ? 'questions' : type === 'evidence' ? 'evidence' : 'notes'}-section`);
+  const sectionMap = { question: 'questions', evidence: 'evidence', admin_note: 'notes' };
+  const section = document.getElementById(`wb-req-${sectionMap[type] || type}-section`);
+
+  const isNote = type === 'admin_note';
+  const isEvidence = type === 'evidence';
+  const contentAr = existingItem ? (existingItem.content_ar || existingItem.text || existingItem.description || '') : '';
+  const contentEn = existingItem ? (existingItem.content_en || '') : '';
+  const title = existingItem ? (existingItem.title || '') : '';
+  const subtype = existingItem ? (existingItem.subtype || 'note') : 'note';
+  const subtypeLabel = existingItem ? (existingItem.subtype_label || '') : '';
+
+  const subtypeOptions = NOTE_SUBTYPES.map(s =>
+    `<option value="${s.value}" ${s.value === subtype ? 'selected' : ''}>${s.label}</option>`
+  ).join('');
+
   const editor = document.createElement('div');
   editor.className = 'wb-inline-editor';
   editor.innerHTML = `
-    ${hasTitle ? `<input type="text" class="wb-inline-title" placeholder="Title (optional)" value="${escapeHtml(initialTitle || '')}">` : ''}
-    <textarea class="wb-inline-textarea" rows="3" placeholder="Enter ${type} text...">${escapeHtml(initialText || '')}</textarea>
+    ${isNote ? `
+      <div class="wb-editor-row">
+        <label class="wb-editor-label">Subtype</label>
+        <select class="wb-inline-select wb-subtype-select">${subtypeOptions}</select>
+        <input type="text" class="wb-inline-title wb-subtype-label-input" placeholder="Custom subtype label (max 60)" maxlength="60" value="${escapeHtml(subtypeLabel)}" style="display:${subtype === 'other' ? '' : 'none'}">
+      </div>` : ''}
+    ${isEvidence ? `
+      <div class="wb-editor-row">
+        <label class="wb-editor-label">Title (optional)</label>
+        <input type="text" class="wb-inline-title" placeholder="Evidence title" value="${escapeHtml(title)}">
+      </div>` : ''}
+    <div class="wb-editor-row">
+      <label class="wb-editor-label">Arabic <span class="wb-required">*</span></label>
+      <textarea class="wb-inline-textarea wb-ar-input" rows="3" dir="rtl" placeholder="المحتوى بالعربي...">${escapeHtml(contentAr)}</textarea>
+    </div>
+    <div class="wb-editor-row">
+      <label class="wb-editor-label">English ${isNote ? '<span class="wb-optional">(optional)</span>' : '<span class="wb-required">*</span>'}</label>
+      <textarea class="wb-inline-textarea wb-en-input" rows="2" placeholder="English content...">${escapeHtml(contentEn)}</textarea>
+    </div>
     <div class="wb-inline-actions">
       <button class="btn-admin-ghost wb-inline-cancel">Cancel</button>
       <button class="btn-admin-primary wb-inline-save">Save</button>
     </div>`;
   section.appendChild(editor);
 
-  const textarea = editor.querySelector('.wb-inline-textarea');
-  textarea.focus();
-  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  if (isNote) {
+    const subtypeSelect = editor.querySelector('.wb-subtype-select');
+    const labelInput = editor.querySelector('.wb-subtype-label-input');
+    subtypeSelect.onchange = () => {
+      labelInput.style.display = subtypeSelect.value === 'other' ? '' : 'none';
+    };
+  }
+
+  const arInput = editor.querySelector('.wb-ar-input');
+  arInput.focus();
+  arInput.setSelectionRange(arInput.value.length, arInput.value.length);
 
   editor.querySelector('.wb-inline-cancel').onclick = () => editor.remove();
   editor.querySelector('.wb-inline-save').onclick = () => {
-    const text = textarea.value.trim();
-    if (!text) { textarea.classList.add('wb-input-error'); return; }
-    const title = hasTitle ? (editor.querySelector('.wb-inline-title').value.trim() || '') : '';
+    const ar = editor.querySelector('.wb-ar-input').value.trim();
+    const en = editor.querySelector('.wb-en-input').value.trim();
+    if (!ar) { editor.querySelector('.wb-ar-input').classList.add('wb-input-error'); return; }
+    if (!isNote && !en) { editor.querySelector('.wb-en-input').classList.add('wb-input-error'); return; }
+
+    const result = { content_ar: ar, content_en: en };
+    if (isEvidence) result.title = editor.querySelector('.wb-inline-title').value.trim();
+    if (isNote) {
+      result.subtype = editor.querySelector('.wb-subtype-select').value;
+      result.subtype_label = result.subtype === 'other' ? editor.querySelector('.wb-subtype-label-input').value.trim() : '';
+      if (result.subtype === 'other' && !result.subtype_label) {
+        editor.querySelector('.wb-subtype-label-input').classList.add('wb-input-error');
+        return;
+      }
+    }
     editor.remove();
-    onSave(text, title);
+    onSave(result);
   };
-  textarea.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') editor.remove();
+  arInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') editor.remove(); });
+}
+
+// ── Background Job System ──
+
+const wbJobs = new Map();
+let wbJobCounter = 0;
+
+function createJob(label, type) {
+  const id = ++wbJobCounter;
+  const job = {
+    id, label, type,
+    status: 'running',
+    progress: { done: 0, total: 0, current: '' },
+    results: [],
+    startedAt: Date.now(),
+    completedAt: null,
+    onComplete: null
+  };
+  wbJobs.set(id, job);
+  refreshJobIndicator();
+  return job;
+}
+
+function updateJobProgress(job, done, total, current) {
+  job.progress = { done, total, current };
+  refreshJobIndicator();
+}
+
+function completeJob(job, results) {
+  job.status = 'completed';
+  job.completedAt = Date.now();
+  job.results = results || [];
+  const succeeded = results ? results.filter(r => r.ok).length : 0;
+  const failed = results ? results.filter(r => !r.ok).length : 0;
+
+  if (typeof toast === 'function') {
+    const elapsed = ((job.completedAt - job.startedAt) / 1000).toFixed(0);
+    toast('success', 'Job Complete',
+      `${job.label}: ${succeeded} succeeded, ${failed} failed (${elapsed}s)`);
+  }
+
+  setTimeout(() => { wbJobs.delete(job.id); refreshJobIndicator(); }, 30000);
+  refreshJobIndicator();
+  if (job.onComplete) job.onComplete(job);
+}
+
+function failJob(job, error) {
+  job.status = 'failed';
+  job.completedAt = Date.now();
+  if (typeof toast === 'function') toast('error', 'Job Failed', `${job.label}: ${error}`);
+  setTimeout(() => { wbJobs.delete(job.id); refreshJobIndicator(); }, 30000);
+  refreshJobIndicator();
+}
+
+function refreshJobIndicator() {
+  const indicator = document.getElementById('wb-jobs-indicator');
+  if (!indicator) return;
+  const running = Array.from(wbJobs.values()).filter(j => j.status === 'running');
+  const completed = Array.from(wbJobs.values()).filter(j => j.status !== 'running');
+
+  if (running.length === 0 && completed.length === 0) {
+    indicator.style.display = 'none';
+    return;
+  }
+  indicator.style.display = '';
+  const labelEl = document.getElementById('wb-jobs-label');
+  const detailEl = document.getElementById('wb-jobs-detail');
+  const spinnerEl = indicator.querySelector('.wb-jobs-spinner');
+
+  if (running.length > 0) {
+    const j = running[0];
+    spinnerEl.style.display = '';
+    labelEl.textContent = `${running.length} job${running.length > 1 ? 's' : ''} running`;
+    if (j.progress.total > 0) {
+      detailEl.textContent = `${j.progress.done}/${j.progress.total}`;
+    } else {
+      detailEl.textContent = j.progress.current || '';
+    }
+  } else {
+    spinnerEl.style.display = 'none';
+    const last = completed[completed.length - 1];
+    const ok = last.results.filter(r => r.ok).length;
+    labelEl.textContent = `Job done: ${ok}/${last.results.length}`;
+    detailEl.textContent = '';
+  }
+}
+
+const WB_FOREGROUND_TIMEOUT = 15000;
+
+// ── AI Generation ──
+
+function wbConfirm(title, message, opts = {}) {
+  const { confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false } = opts;
+  return new Promise((resolve) => {
+    const existing = document.querySelector('.wb-confirm-overlay');
+    if (existing) existing.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'wb-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="wb-confirm-modal">
+        <h3 class="wb-confirm-title">${escapeHtml(title)}</h3>
+        <div class="wb-confirm-body"><p>${message}</p></div>
+        <div class="wb-confirm-actions">
+          <button class="btn-admin-ghost wb-confirm-cancel">${escapeHtml(cancelLabel)}</button>
+          <button class="${danger ? 'btn-admin-danger' : 'btn-admin-primary'} wb-confirm-accept">${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.wb-confirm-cancel').onclick = () => { overlay.remove(); resolve(false); };
+    overlay.querySelector('.wb-confirm-accept').onclick = () => { overlay.remove(); resolve(true); };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
   });
 }
 
-// ── AI Generation ──
+function wbAlert(title, message, opts = {}) {
+  const { buttonLabel = 'OK', danger = false } = opts;
+  return new Promise((resolve) => {
+    const existing = document.querySelector('.wb-confirm-overlay');
+    if (existing) existing.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'wb-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="wb-confirm-modal">
+        <h3 class="wb-confirm-title">${escapeHtml(title)}</h3>
+        <div class="wb-confirm-body"><p>${message}</p></div>
+        <div class="wb-confirm-actions">
+          <button class="${danger ? 'btn-admin-danger' : 'btn-admin-primary'} wb-confirm-accept">${escapeHtml(buttonLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.wb-confirm-accept').onclick = () => { overlay.remove(); resolve(); };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); resolve(); } });
+  });
+}
+
+function showReplaceConfirmation(qCount, eCount, doQuestions, doEvidence) {
+  return new Promise((resolve) => {
+    const existing = document.querySelector('.wb-confirm-overlay');
+    if (existing) existing.remove();
+
+    const lines = [];
+    if (doQuestions && qCount > 0) lines.push(`${qCount} question${qCount !== 1 ? 's' : ''}`);
+    if (doEvidence && eCount > 0) lines.push(`${eCount} evidence item${eCount !== 1 ? 's' : ''}`);
+    const summary = lines.join(' and ');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'wb-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="wb-confirm-modal">
+        <div class="wb-confirm-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 2L2 26H26L14 2Z" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 10V16" stroke="#dc2626" stroke-width="2" stroke-linecap="round"/><circle cx="14" cy="20" r="1.2" fill="#dc2626"/></svg>
+        </div>
+        <h3 class="wb-confirm-title">Replace existing items?</h3>
+        <div class="wb-confirm-body">
+          <p>This will <strong>permanently delete</strong> ${summary} for this requirement and replace them with newly generated content.</p>
+          <ul class="wb-confirm-warnings">
+            <li>Any manual edits to those items will be lost</li>
+            <li>The deletion will be recorded in the audit log (prior content is recoverable through audit history)</li>
+          </ul>
+        </div>
+        <div class="wb-confirm-actions">
+          <button class="btn-admin-ghost wb-confirm-cancel">Cancel</button>
+          <button class="btn-admin-danger wb-confirm-accept">I understand, replace all</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('.wb-confirm-cancel').onclick = () => { overlay.remove(); resolve(false); };
+    overlay.querySelector('.wb-confirm-accept').onclick = () => { overlay.remove(); resolve(true); };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
+  });
+}
+
+async function regenSection(sectionType) {
+  if (!wbCurrentNode) return;
+  const label = sectionType === 'question' ? 'questions' : 'typical evidence';
+  const existingCount = sectionType === 'question'
+    ? Object.keys(wbCurrentNode.questions || {}).length
+    : getEvidenceItems(wbCurrentNode).length;
+
+  const steering = await new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'wb-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="wb-confirm-modal" style="max-width:460px">
+        <div class="wb-confirm-icon" style="color:#d97706">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M1 12C1 5.9 5.9 1 12 1C16.1 1 19.6 3.4 21.2 6.9M23 12C23 18.1 18.1 23 12 23C7.9 23 4.4 20.6 2.8 17.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M21 2V7H16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 22V17H8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3 class="wb-confirm-title">Re-generate ${label}</h3>
+        <div class="wb-confirm-body">
+          ${existingCount > 0 ? `<div class="wb-confirm-warnings"><p>This will <strong>delete all ${existingCount} existing ${label}</strong> and replace them with new AI-generated items.</p><p>Any manual edits will be lost. The deletion will be recorded in the audit log.</p></div>` : `<p>AI will generate new ${label} for this requirement.</p>`}
+          <label style="display:block;margin-top:12px;font-size:12px;font-weight:600;color:#64748b">Steering instructions <span style="font-weight:400;color:#94a3b8">(optional, max 2000 chars)</span></label>
+          <textarea id="wb-regen-steering" style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:7px;font-size:13px;resize:vertical;min-height:60px" maxlength="2000" placeholder="e.g. Focus on cloud-hosted core banking systems."></textarea>
+        </div>
+        <div class="wb-confirm-actions">
+          <button class="btn-admin-secondary wb-confirm-cancel">Cancel</button>
+          <button class="btn-admin-danger wb-confirm-ok">${existingCount > 0 ? 'I understand, replace all' : 'Generate'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.wb-confirm-cancel').onclick = () => { overlay.remove(); resolve(null); };
+    overlay.querySelector('.wb-confirm-ok').onclick = () => {
+      const v = overlay.querySelector('#wb-regen-steering').value.trim();
+      overlay.remove();
+      resolve(v);
+    };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
+  });
+  if (steering === null) return;
+
+  const regenBtn = document.getElementById(sectionType === 'question' ? 'wb-regen-questions-btn' : 'wb-regen-evidence-btn');
+  regenBtn.disabled = true;
+  regenBtn.textContent = 'Generating...';
+
+  const capturedNode = wbCurrentNode;
+  const requirement = JSON.stringify({
+    urn: capturedNode.urn, ref_id: capturedNode.ref_id,
+    name: capturedNode.name, description: capturedNode.description,
+    parent_section: capturedNode.parent_urn || ''
+  });
+  let localPromptTemplate = '';
+  let promptVersion = null;
+  try {
+    const r = await fetch('/api/local-prompts'); const j = await r.json();
+    if (j.prompts && j.prompts[0]) { localPromptTemplate = j.prompts[0].content || ''; promptVersion = j.prompts[0].updated_at || j.prompts[0].id || null; }
+  } catch (_) {}
+  const userPrompt = localPromptTemplate
+    ? localPromptTemplate.replace('{{REQUIREMENT}}', requirement).replace('{{USER_PROMPT}}', steering || '').replace('{{CONTEXT_FILES}}', '')
+    : `Analyze this requirement: ${requirement}${steering ? '\n\nAdditional instructions: ' + steering : ''}`;
+
+  let movedToBg = false;
+  let bgJob = null;
+  const bgTimer = setTimeout(() => {
+    movedToBg = true;
+    bgJob = createJob(`Re-gen ${label}: ${capturedNode.ref_id || capturedNode.urn}`, 'single');
+    updateJobProgress(bgJob, 0, 1, 'Waiting for AI...');
+    regenBtn.disabled = false;
+    regenBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.7 3.7 1 7 1C9.4 1 11.4 2.5 12.3 4.5M13 7C13 10.3 10.3 13 7 13C4.6 13 2.6 11.5 1.7 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M12 1.5V4.5H9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12.5V9.5H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Re-generate`;
+    if (typeof toast === 'function') toast('info', 'Moved to background', 'Re-generation continues in the background — you can navigate away.');
+  }, WB_FOREGROUND_TIMEOUT);
+
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requirement, prompt: userPrompt })
+    });
+    clearTimeout(bgTimer);
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || `HTTP ${res.status}`); }
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'Generation failed');
+    const data = json.data;
+    const apiMeta = json.meta || {};
+
+    const genMeta = {
+      prompt_template: apiMeta.prompt_template || 'requirement-analyzer',
+      prompt_template_version: apiMeta.prompt_template_version || promptVersion,
+      steering_prompt: steering || null,
+      triggered_by: wbAdminUser, generated_at: new Date().toISOString(),
+      model: apiMeta.model || 'gemini-2.5-pro'
+    };
+    const audit = makeAiAuditFields();
+
+    if (sectionType === 'question' && data.questions && data.questions.length) {
+      const existingQs = capturedNode.questions || {};
+      const dc = Object.keys(existingQs).length;
+      if (dc) {
+        const snapshot = JSON.parse(JSON.stringify(existingQs));
+        wbLogAudit('ai_wipe_replace', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: capturedNode.urn, item_type: 'question', count: dc, snapshot, summary: `section re-gen: wiped ${dc} questions` });
+      }
+      const nodeUrn = capturedNode.urn || '';
+      const newQuestions = {};
+      data.questions.forEach((q, idx) => {
+        const qNum = idx + 1;
+        const qUrn = `${nodeUrn}:question:${qNum}`;
+        const qText = q.question || q.text || '';
+        newQuestions[qUrn] = {
+          type: 'question', item_type: 'question', text: qText, content_ar: qText,
+          content_en: q.question_en || q.text_en || '',
+          included_in_ai_scope: true, provenance: 'ai_generated',
+          generation_metadata: genMeta, ...audit, display_order: idx,
+          choices: [
+            { urn: `${qUrn}:choice:1`, value: 'Yes' },
+            { urn: `${qUrn}:choice:2`, value: 'No' },
+            { urn: `${qUrn}:choice:3`, value: 'Partial' }
+          ]
+        };
+      });
+      capturedNode.questions = newQuestions;
+      wbLogAudit('ai_generate', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: capturedNode.urn, item_type: 'question', count: data.questions.length, summary: `section re-gen: generated ${data.questions.length} questions` });
+    }
+
+    if (sectionType === 'typical_evidence' && data.typical_evidence && data.typical_evidence.length) {
+      const existingEvidence = getEvidenceItems(capturedNode);
+      const dc = existingEvidence.length;
+      if (dc) {
+        const snapshot = JSON.parse(JSON.stringify(existingEvidence));
+        wbLogAudit('ai_wipe_replace', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: capturedNode.urn, item_type: 'typical_evidence', count: dc, snapshot, summary: `section re-gen: wiped ${dc} evidence items` });
+      }
+      const newItems = data.typical_evidence
+        .filter(e => e.title || e.description)
+        .map((e, idx) => ({
+          id: idx, title: e.title || '', description: e.description || '',
+          item_type: 'typical_evidence',
+          content_ar: e.description || '', content_en: e.description_en || '',
+          excluded: false, included_in_ai_scope: true, provenance: 'ai_generated',
+          generation_metadata: genMeta, ...audit, display_order: idx
+        }));
+      capturedNode.typical_evidence_items = newItems;
+      capturedNode.typical_evidence = evidenceItemsToTextLegacy(newItems);
+      wbLogAudit('ai_generate', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: capturedNode.urn, item_type: 'typical_evidence', count: newItems.length, summary: `section re-gen: generated ${newItems.length} evidence items` });
+    }
+
+    if (movedToBg) {
+      completeJob(bgJob, [{ ref: capturedNode.ref_id, ok: true }]);
+    }
+    if (wbCurrentNode === capturedNode) {
+      if (sectionType === 'question') renderQuestionsList();
+      else renderEvidenceList();
+      markDirty();
+    }
+    if (typeof toast === 'function') toast('success', 'Re-generated', `${label} have been re-generated successfully.`);
+  } catch (e) {
+    clearTimeout(bgTimer);
+    if (movedToBg && bgJob) failJob(bgJob, e.message);
+    if (typeof toast === 'function') toast('error', 'Re-generation failed', e.message);
+  } finally {
+    regenBtn.disabled = false;
+    regenBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.7 3.7 1 7 1C9.4 1 11.4 2.5 12.3 4.5M13 7C13 10.3 10.3 13 7 13C4.6 13 2.6 11.5 1.7 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M12 1.5V4.5H9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12.5V9.5H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Re-generate`;
+  }
+}
 
 async function runAiGeneration() {
   if (!wbCurrentNode) return;
@@ -8778,6 +9475,16 @@ async function runAiGeneration() {
     return;
   }
 
+  if (doReplace) {
+    const qCount = doQuestions ? Object.keys(wbCurrentNode.questions || {}).length : 0;
+    const eCount = doEvidence ? getEvidenceItems(wbCurrentNode).length : 0;
+    const total = qCount + eCount;
+    if (total > 0) {
+      const confirmed = await showReplaceConfirmation(qCount, eCount, doQuestions, doEvidence);
+      if (!confirmed) return;
+    }
+  }
+
   const runBtn = document.getElementById('wb-gen-run-btn');
   const statusEl = document.getElementById('wb-gen-status');
   runBtn.disabled = true;
@@ -8785,9 +9492,14 @@ async function runAiGeneration() {
   statusEl.textContent = 'Calling AI...';
   statusEl.className = 'wb-gen-status';
 
-  const fw = wbCurrentLibrary ? ((wbCurrentLibrary.content && wbCurrentLibrary.content.framework) || wbCurrentLibrary.framework || {}) : {};
+  let promptVersion = null;
+  try { const pr = await fetch('/api/local-prompts'); const pj = await pr.json(); if (pj.prompts && pj.prompts[0]) promptVersion = pj.prompts[0].updated_at || pj.prompts[0].id || null; } catch (_) {}
+
+  const capturedNode = wbCurrentNode;
+  const capturedLib = wbCurrentLibrary;
+  const fw = capturedLib ? ((capturedLib.content && capturedLib.content.framework) || capturedLib.framework || {}) : {};
   const parentNodes = (fw.requirement_nodes || []).filter(n => {
-    let pUrn = wbCurrentNode.parent_urn;
+    let pUrn = capturedNode.parent_urn;
     while (pUrn) {
       const parent = (fw.requirement_nodes || []).find(p => p.urn === pUrn);
       if (!parent) break;
@@ -8799,19 +9511,29 @@ async function runAiGeneration() {
   const breadcrumb = parentNodes.map(p => `${p.ref_id || ''} ${p.name || ''}`).join(' > ');
 
   const requirement = {
-    ref_id: wbCurrentNode.ref_id || '',
-    name: wbCurrentNode.name || '',
-    description: wbCurrentNode.description || '',
-    nodeUrn: wbCurrentNode.urn || '',
+    ref_id: capturedNode.ref_id || '',
+    name: capturedNode.name || '',
+    description: capturedNode.description || '',
+    nodeUrn: capturedNode.urn || '',
     framework: fw.name || '',
     framework_ref_id: fw.ref_id || '',
-    breadcrumb: breadcrumb
+    breadcrumb
   };
 
   let userPrompt = steering || 'No additional context provided.';
-  if (steering) {
-    userPrompt = `[Admin steering instructions]: ${steering}`;
-  }
+  if (steering) userPrompt = `[Admin steering instructions]: ${steering}`;
+
+  let movedToBackground = false;
+  let bgJob = null;
+  const bgTimer = setTimeout(() => {
+    movedToBackground = true;
+    bgJob = createJob(`Generate ${capturedNode.ref_id || capturedNode.name || 'requirement'}`, 'single');
+    updateJobProgress(bgJob, 0, 1, 'Waiting for AI...');
+    statusEl.textContent = 'Moved to background — you can navigate away.';
+    statusEl.className = 'wb-gen-status wb-gen-status-bg';
+    runBtn.disabled = false;
+    runBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12M4 12L2.5 13.5M13.5 2.5L12 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.3"/></svg> Generate with AI`;
+  }, WB_FOREGROUND_TIMEOUT);
 
   try {
     const res = await fetch('/api/analyze', {
@@ -8819,6 +9541,7 @@ async function runAiGeneration() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ requirement, prompt: userPrompt })
     });
+    clearTimeout(bgTimer);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `HTTP ${res.status}`);
@@ -8826,17 +9549,39 @@ async function runAiGeneration() {
     const json = await res.json();
     if (!json.success) throw new Error(json.error || 'Generation failed');
     const data = json.data;
+    const apiMeta = json.meta || {};
+
+    const genMeta = {
+      prompt_template: apiMeta.prompt_template || 'requirement-analyzer',
+      prompt_template_version: apiMeta.prompt_template_version || promptVersion,
+      steering_prompt: steering || null,
+      triggered_by: wbAdminUser,
+      generated_at: new Date().toISOString(),
+      model: apiMeta.model || 'gemini-2.5-pro'
+    };
+    const audit = makeAiAuditFields();
 
     if (doQuestions && data.questions && data.questions.length) {
-      const nodeUrn = wbCurrentNode.urn || '';
+      const nodeUrn = capturedNode.urn || '';
+      if (doReplace) {
+        const existingQs = capturedNode.questions || {};
+        const deletedCount = Object.keys(existingQs).length;
+        if (deletedCount) {
+          const snapshot = JSON.parse(JSON.stringify(existingQs));
+          wbLogAudit('ai_wipe_replace', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: capturedNode.urn, item_type: 'question', count: deletedCount, snapshot, summary: `wiped ${deletedCount} questions for re-generation` });
+        }
+      }
       const newQuestions = {};
-      const existingCount = doReplace ? 0 : Object.keys(wbCurrentNode.questions || {}).length;
+      const existingCount = doReplace ? 0 : Object.keys(capturedNode.questions || {}).length;
       data.questions.forEach((q, idx) => {
         const qNum = existingCount + idx + 1;
         const qUrn = `${nodeUrn}:question:${qNum}`;
+        const qText = q.question || q.text || '';
         newQuestions[qUrn] = {
-          type: 'unique_choice',
-          text: q.question || q.text || '',
+          type: 'question', item_type: 'question', text: qText, content_ar: qText,
+          content_en: q.question_en || q.text_en || '',
+          included_in_ai_scope: true, provenance: 'ai_generated',
+          generation_metadata: genMeta, ...audit, display_order: existingCount + idx,
           choices: [
             { urn: `${qUrn}:choice:1`, value: 'Yes' },
             { urn: `${qUrn}:choice:2`, value: 'No' },
@@ -8844,39 +9589,67 @@ async function runAiGeneration() {
           ]
         };
       });
-      if (doReplace) {
-        wbCurrentNode.questions = newQuestions;
-      } else {
-        wbCurrentNode.questions = { ...(wbCurrentNode.questions || {}), ...newQuestions };
-      }
-      renderQuestionsList();
+      if (doReplace) { capturedNode.questions = newQuestions; }
+      else { capturedNode.questions = { ...(capturedNode.questions || {}), ...newQuestions }; }
+      wbLogAudit('ai_generate', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: capturedNode.urn, item_type: 'question', count: data.questions.length, summary: `generated ${data.questions.length} questions` });
     }
 
     if (doEvidence && data.typical_evidence && data.typical_evidence.length) {
-      const newEvidenceText = data.typical_evidence
-        .filter(e => e.title || e.description)
-        .map(e => `- ${e.title || ''}${e.description ? ': ' + e.description : ''}`)
-        .join('\n');
       if (doReplace) {
-        wbCurrentNode.typical_evidence = newEvidenceText;
-      } else {
-        const existing = wbCurrentNode.typical_evidence || '';
-        wbCurrentNode.typical_evidence = existing ? existing + '\n' + newEvidenceText : newEvidenceText;
+        const existingEv = getEvidenceItems(capturedNode);
+        const deletedCount = existingEv.length;
+        if (deletedCount) {
+          const snapshot = JSON.parse(JSON.stringify(existingEv));
+          wbLogAudit('ai_wipe_replace', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: capturedNode.urn, item_type: 'typical_evidence', count: deletedCount, snapshot, summary: `wiped ${deletedCount} evidence items for re-generation` });
+        }
       }
-      renderEvidenceList();
+      const existingItems = doReplace ? [] : getEvidenceItems(capturedNode);
+      const newItems = data.typical_evidence
+        .filter(e => e.title || e.description)
+        .map((e, idx) => ({
+          id: existingItems.length + idx, title: e.title || '',
+          item_type: 'typical_evidence',
+          description: e.description || '', content_ar: e.description || '',
+          content_en: e.description_en || '', excluded: false,
+          included_in_ai_scope: true, provenance: 'ai_generated',
+          generation_metadata: genMeta, ...audit,
+          display_order: existingItems.length + idx
+        }));
+      const merged = [...existingItems, ...newItems];
+      capturedNode.typical_evidence_items = merged;
+      capturedNode.typical_evidence = evidenceItemsToTextLegacy(merged);
+      wbLogAudit('ai_generate', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: capturedNode.urn, item_type: 'typical_evidence', count: newItems.length, summary: `generated ${newItems.length} evidence items` });
     }
 
-    markDirty();
-    statusEl.textContent = 'Generation complete.';
-    statusEl.className = 'wb-gen-status wb-gen-status-ok';
-    if (typeof toast === 'function') toast('success', 'Generated', 'AI content generated. Review and save.');
+    if (movedToBackground) {
+      completeJob(bgJob, [{ ref: capturedNode.ref_id, ok: true, qAdded: data.questions?.length || 0, eAdded: data.typical_evidence?.length || 0 }]);
+      if (wbCurrentNode === capturedNode) {
+        renderQuestionsList();
+        renderEvidenceList();
+        markDirty();
+      }
+    } else {
+      renderQuestionsList();
+      renderEvidenceList();
+      markDirty();
+      statusEl.textContent = 'Generation complete.';
+      statusEl.className = 'wb-gen-status wb-gen-status-ok';
+      if (typeof toast === 'function') toast('success', 'Generated', 'AI content generated. Review and save.');
+    }
   } catch (e) {
-    statusEl.textContent = 'Error: ' + e.message;
-    statusEl.className = 'wb-gen-status wb-gen-status-err';
-    if (typeof toast === 'function') toast('error', 'Generation Failed', e.message);
+    clearTimeout(bgTimer);
+    if (movedToBackground && bgJob) {
+      failJob(bgJob, e.message);
+    } else {
+      statusEl.textContent = 'Error: ' + e.message;
+      statusEl.className = 'wb-gen-status wb-gen-status-err';
+      if (typeof toast === 'function') toast('error', 'Generation Failed', e.message);
+    }
   } finally {
-    runBtn.disabled = false;
-    runBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12M4 12L2.5 13.5M13.5 2.5L12 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.3"/></svg> Generate with AI`;
+    if (!movedToBackground) {
+      runBtn.disabled = false;
+      runBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12M4 12L2.5 13.5M13.5 2.5L12 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.3"/></svg> Generate with AI`;
+    }
   }
 }
 
@@ -8890,8 +9663,11 @@ async function saveRequirement() {
   saveBtn.textContent = 'Saving...';
 
   const evidenceText = wbCurrentNode.typical_evidence || '';
+  const evidenceItems = wbCurrentNode.typical_evidence_items || getEvidenceItems(wbCurrentNode);
   const questions = wbCurrentNode.questions || {};
   const adminNotes = wbCurrentNode.admin_notes || [];
+
+  const pendingLog = wbAuditLog.splice(0);
 
   try {
     const apiUrl = `${MURAJI_API}/${libId}/controls`;
@@ -8902,8 +9678,10 @@ async function saveRequirement() {
         updates: [{
           code: wbCurrentNode.ref_id,
           typical_requirements: evidenceText,
+          typical_evidence_items: evidenceItems,
           questions: questions,
-          admin_notes: adminNotes
+          admin_notes: adminNotes,
+          audit_log: pendingLog
         }]
       })
     });
@@ -8914,12 +9692,843 @@ async function saveRequirement() {
     updateDirtyState(false);
     if (typeof toast === 'function') toast('success', 'Saved', 'Requirement updated successfully.');
   } catch (e) {
+    wbAuditLog.unshift(...pendingLog);
     if (typeof toast === 'function') toast('error', 'Save Failed', e.message);
   } finally {
     saveBtn.disabled = wbDirty ? false : true;
     saveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 1H3C2.4 1 2 1.4 2 2V12C2 12.6 2.4 13 3 13H11C11.6 13 12 12.6 12 12V4L9 1Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 1V4H12M5 8H9M5 10.5H7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Save Changes`;
   }
 }
+
+// ─── Status View ──────────────────────────────────────────────
+
+let wbPopulationMinQ = 1;
+let wbPopulationMinE = 1;
+
+function getRequirementStatus(node) {
+  const questions = node.questions ? Object.values(node.questions) : [];
+  const qInScope = questions.filter(q => q.included_in_ai_scope !== false);
+  const eItems = getEvidenceItems(node);
+  const eInScope = eItems.filter(e => e.included_in_ai_scope !== false);
+  const qTotal = questions.length;
+  const eTotal = eItems.length;
+  if (qTotal === 0 && eTotal === 0) return 'empty';
+  const allQScoped = qTotal > 0 && qInScope.length === qTotal;
+  const allEScoped = eTotal > 0 && eInScope.length === eTotal;
+  if (allQScoped && allEScoped && qInScope.length >= wbPopulationMinQ && eInScope.length >= wbPopulationMinE) return 'full';
+  if (qTotal > 0 || eTotal > 0) return 'partial';
+  return 'empty';
+}
+
+function getStatusLabel(status) {
+  const map = { full: 'Full', partial: 'Partial', empty: 'Empty' };
+  return map[status] || status;
+}
+
+function getStatusClass(status) {
+  return `wb-status-chip wb-status-${status}`;
+}
+
+function collectParentSections(nodes) {
+  const parents = new Map();
+  nodes.forEach(n => {
+    if (n.assessable && n.parent_urn) {
+      const parent = nodes.find(p => p.urn === n.parent_urn);
+      if (parent) parents.set(parent.urn, parent);
+    }
+  });
+  return Array.from(parents.values());
+}
+
+function getAssessableRows() {
+  if (!wbCurrentLibrary) return [];
+  const fw = (wbCurrentLibrary.content && wbCurrentLibrary.content.framework) || wbCurrentLibrary.framework || {};
+  const nodes = fw.requirement_nodes || [];
+  return nodes.filter(n => n.assessable).map(n => {
+    const qCount = n.questions ? Object.keys(n.questions).length : 0;
+    const evidenceItems = Array.isArray(n.typical_evidence_items) ? n.typical_evidence_items.length
+      : (n.typical_evidence ? n.typical_evidence.split('\n').filter(l => l.trim()).length : 0);
+    const noteCount = Array.isArray(n.admin_notes) ? n.admin_notes.length : 0;
+    const status = getRequirementStatus(n);
+    const parent = nodes.find(p => p.urn === n.parent_urn);
+    return { node: n, qCount, evidenceItems, noteCount, status, parent };
+  });
+}
+
+function renderWbStatusView() {
+  if (!wbCurrentLibrary) return;
+  const fw = (wbCurrentLibrary.content && wbCurrentLibrary.content.framework) || wbCurrentLibrary.framework || {};
+  const nodes = fw.requirement_nodes || [];
+
+  const parentFilter = document.getElementById('wb-parent-filter');
+  const currentVal = parentFilter.value;
+  const sections = collectParentSections(nodes);
+  parentFilter.innerHTML = '<option value="all">All sections</option>' +
+    sections.map(s => `<option value="${escapeHtml(s.urn)}">${escapeHtml(s.ref_id || '')} ${escapeHtml(s.name || '')}</option>`).join('');
+  parentFilter.value = currentVal;
+
+  const rows = getAssessableRows();
+
+  const full = rows.filter(r => r.status === 'full').length;
+  const partial = rows.filter(r => r.status === 'partial').length;
+  const empty = rows.filter(r => r.status === 'empty').length;
+  document.getElementById('wb-status-summary').innerHTML = `
+    <div class="wb-summary-card wb-summary-full"><span class="wb-summary-num">${full}</span><span class="wb-summary-label">Full</span></div>
+    <div class="wb-summary-card wb-summary-partial"><span class="wb-summary-num">${partial}</span><span class="wb-summary-label">Partial</span></div>
+    <div class="wb-summary-card wb-summary-empty"><span class="wb-summary-num">${empty}</span><span class="wb-summary-label">Empty</span></div>
+    <div class="wb-summary-card wb-summary-total"><span class="wb-summary-num">${rows.length}</span><span class="wb-summary-label">Total</span></div>`;
+
+  renderStatusTable(rows);
+  wireStatusEvents();
+}
+
+function filterAndSortRows(rows) {
+  const statusVal = document.getElementById('wb-status-filter').value;
+  const parentVal = document.getElementById('wb-parent-filter').value;
+  const sortVal = document.getElementById('wb-sort-select').value;
+
+  let filtered = rows;
+  if (statusVal !== 'all') filtered = filtered.filter(r => r.status === statusVal);
+  if (parentVal !== 'all') filtered = filtered.filter(r => r.node.parent_urn === parentVal);
+
+  filtered.sort((a, b) => {
+    switch (sortVal) {
+      case 'status-asc': {
+        const order = { empty: 0, partial: 1, full: 2 };
+        return (order[a.status] ?? 1) - (order[b.status] ?? 1);
+      }
+      case 'status-desc': {
+        const order = { full: 0, partial: 1, empty: 2 };
+        return (order[a.status] ?? 1) - (order[b.status] ?? 1);
+      }
+      case 'questions': return b.qCount - a.qCount;
+      default: return (a.node.ref_id || '').localeCompare(b.node.ref_id || '');
+    }
+  });
+  return filtered;
+}
+
+function renderStatusTable(rows) {
+  const filtered = filterAndSortRows(rows);
+  const tbody = document.getElementById('wb-status-tbody');
+
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="wb-st-empty">No matching requirements.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(r => {
+    const parentLabel = r.parent ? (r.parent.ref_id || r.parent.name || '') : '';
+    return `<tr data-urn="${escapeHtml(r.node.urn)}">
+      <td class="wb-st-check"><input type="checkbox" class="wb-row-check" data-urn="${escapeHtml(r.node.urn)}"></td>
+      <td class="wb-st-ref">${escapeHtml(r.node.ref_id || '')}</td>
+      <td class="wb-st-name">
+        <span class="wb-st-name-text">${escapeHtml(r.node.name || r.node.description || '')}</span>
+        ${parentLabel ? `<span class="wb-st-parent-label">${escapeHtml(parentLabel)}</span>` : ''}
+      </td>
+      <td class="wb-st-q">${r.qCount}</td>
+      <td class="wb-st-e">${r.evidenceItems}</td>
+      <td class="wb-st-n">${r.noteCount}</td>
+      <td class="wb-st-status"><span class="${getStatusClass(r.status)}">${getStatusLabel(r.status)}</span></td>
+      <td class="wb-st-action"><button class="wb-st-edit-btn" data-urn="${escapeHtml(r.node.urn)}" title="Edit">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2L12 4L5 11H3V9L10 2Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button></td>
+    </tr>`;
+  }).join('');
+
+  updateBulkUI();
+}
+
+function wireStatusEvents() {
+  document.getElementById('wb-status-filter').onchange = () => renderStatusTable(getAssessableRows());
+  document.getElementById('wb-parent-filter').onchange = () => renderStatusTable(getAssessableRows());
+  document.getElementById('wb-sort-select').onchange = () => renderStatusTable(getAssessableRows());
+  document.getElementById('wb-threshold-filter').onchange = (e) => {
+    const [q, ev] = e.target.value.split(',').map(Number);
+    wbPopulationMinQ = q;
+    wbPopulationMinE = ev;
+    renderWbStatusView();
+  };
+
+  document.getElementById('wb-select-all').onchange = (e) => {
+    document.querySelectorAll('.wb-row-check').forEach(c => { c.checked = e.target.checked; });
+    updateBulkUI();
+  };
+
+  document.getElementById('wb-status-tbody').onclick = (e) => {
+    const editBtn = e.target.closest('.wb-st-edit-btn');
+    if (editBtn) { openRequirementDetail(editBtn.dataset.urn); return; }
+    const checkbox = e.target.closest('.wb-row-check');
+    if (checkbox) { setTimeout(updateBulkUI, 0); return; }
+  };
+
+  document.getElementById('wb-bulk-gen-btn').onclick = () => runBulkGeneration();
+
+  const bulkSteeringEl = document.getElementById('wb-bulk-steering');
+  const bulkCharCount = document.getElementById('wb-bulk-char-count');
+  bulkSteeringEl.oninput = () => { bulkCharCount.textContent = `${bulkSteeringEl.value.length} / 2000`; };
+}
+
+function updateBulkUI() {
+  const checked = document.querySelectorAll('.wb-row-check:checked');
+  const actions = document.getElementById('wb-bulk-actions');
+  const countEl = document.getElementById('wb-bulk-count');
+  const steeringWrap = document.getElementById('wb-bulk-steering-wrap');
+  if (checked.length > 0) {
+    actions.style.display = '';
+    steeringWrap.style.display = '';
+    countEl.textContent = `${checked.length} selected`;
+  } else {
+    actions.style.display = 'none';
+    steeringWrap.style.display = 'none';
+  }
+}
+
+async function runBulkGeneration() {
+  const checked = Array.from(document.querySelectorAll('.wb-row-check:checked'));
+  if (!checked.length || !wbCurrentLibrary) return;
+
+  const mode = document.getElementById('wb-bulk-mode').value;
+  const isReplace = mode === 'regenerate';
+  const steering = document.getElementById('wb-bulk-steering').value.trim();
+
+  const capturedLib = wbCurrentLibrary;
+  const fw = (capturedLib.content && capturedLib.content.framework) || capturedLib.framework || {};
+  const nodes = fw.requirement_nodes || [];
+  const urns = checked.map(c => c.dataset.urn);
+  let targetNodes = urns.map(u => nodes.find(n => n.urn === u)).filter(Boolean);
+
+  if (mode === 'empty-only') {
+    targetNodes = targetNodes.filter(n => getRequirementStatus(n) === 'empty');
+    if (!targetNodes.length) {
+      if (typeof toast === 'function') toast('info', 'Nothing to generate', 'All selected requirements already have content.');
+      return;
+    }
+  }
+
+  if (isReplace) {
+    let totalQDelete = 0, totalEDelete = 0;
+    targetNodes.forEach(n => {
+      totalQDelete += n.questions ? Object.keys(n.questions).length : 0;
+      totalEDelete += getEvidenceItems(n).length;
+    });
+    if (totalQDelete + totalEDelete > 0) {
+      const confirmed = await showBulkReplaceConfirmation(targetNodes.length, totalQDelete, totalEDelete);
+      if (!confirmed) return;
+    }
+  } else {
+    const goAhead = await wbConfirm('Bulk generation', `Generate AI content for <strong>${targetNodes.length}</strong> empty requirement(s)? This will run as a background job.`, { confirmLabel: 'Generate' });
+    if (!goAhead) return;
+  }
+
+  const job = createJob(`Bulk ${isReplace ? 're-generate' : 'generate'} (${targetNodes.length} reqs)`, 'bulk');
+  const total = targetNodes.length;
+
+  const progressWrap = document.getElementById('wb-bulk-progress');
+  const fill = document.getElementById('wb-progress-fill');
+  const textEl = document.getElementById('wb-progress-text');
+  const genBtn = document.getElementById('wb-bulk-gen-btn');
+  const resultsEl = document.getElementById('wb-bulk-results');
+  progressWrap.style.display = '';
+  resultsEl.style.display = 'none';
+  resultsEl.innerHTML = '';
+  fill.style.width = '0%';
+  genBtn.disabled = true;
+  genBtn.innerHTML = '<div class="spinner-sm"></div> Running in background...';
+
+  let bulkPromptVersion = null;
+  try { const pr = await fetch('/api/local-prompts'); const pj = await pr.json(); if (pj.prompts && pj.prompts[0]) bulkPromptVersion = pj.prompts[0].updated_at || pj.prompts[0].id || null; } catch (_) {}
+
+  const processBulk = async () => {
+    const results = [];
+    let done = 0;
+
+    for (const node of targetNodes) {
+      if (wbBulkAbort) break;
+      done++;
+      updateJobProgress(job, done, total, node.ref_id || node.name || '');
+      fill.style.width = `${(done / total) * 100}%`;
+      textEl.textContent = `Processing ${done}/${total}: ${node.ref_id || node.name || ''}...`;
+
+      const parentNodes = nodes.filter(n => {
+        let pUrn = node.parent_urn;
+        while (pUrn) {
+          const parent = nodes.find(p => p.urn === pUrn);
+          if (!parent) break;
+          if (parent.urn === n.urn) return true;
+          pUrn = parent.parent_urn;
+        }
+        return false;
+      });
+      const breadcrumb = parentNodes.map(p => `${p.ref_id || ''} ${p.name || ''}`).join(' > ');
+      const requirement = {
+        ref_id: node.ref_id || '', name: node.name || '',
+        description: node.description || '', nodeUrn: node.urn || '',
+        framework: fw.name || '', framework_ref_id: fw.ref_id || '', breadcrumb
+      };
+      const userPrompt = steering ? `[Admin steering instructions]: ${steering}` : 'No additional context provided.';
+
+      try {
+        const res = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requirement, prompt: userPrompt })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || 'Generation failed');
+        const data = json.data;
+        const bulkApiMeta = json.meta || {};
+
+        const bulkGenMeta = {
+          prompt_template: bulkApiMeta.prompt_template || 'requirement-analyzer',
+          prompt_template_version: bulkApiMeta.prompt_template_version || bulkPromptVersion,
+          steering_prompt: steering || null,
+          triggered_by: wbAdminUser,
+          generated_at: new Date().toISOString(),
+          model: bulkApiMeta.model || 'gemini-2.5-pro'
+        };
+        const bulkAudit = makeAiAuditFields();
+        let qAdded = 0, eAdded = 0;
+
+        if (data.questions && data.questions.length) {
+          if (isReplace) {
+            const existingQs = node.questions || {};
+            const dc = Object.keys(existingQs).length;
+            if (dc) {
+              const snapshot = JSON.parse(JSON.stringify(existingQs));
+              wbLogAudit('ai_wipe_replace', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: node.urn, item_type: 'question', count: dc, snapshot, summary: `bulk: wiped ${dc} questions` });
+            }
+          }
+          const baseCount = isReplace ? 0 : Object.keys(node.questions || {}).length;
+          const newQuestions = {};
+          data.questions.forEach((q, idx) => {
+            const qNum = baseCount + idx + 1;
+            const qUrn = `${node.urn}:question:${qNum}`;
+            const qText = q.question || q.text || '';
+            newQuestions[qUrn] = {
+              type: 'question', item_type: 'question', text: qText, content_ar: qText,
+              content_en: q.question_en || q.text_en || '',
+              included_in_ai_scope: true, provenance: 'ai_generated',
+              generation_metadata: bulkGenMeta, ...bulkAudit,
+              display_order: baseCount + idx,
+              choices: [
+                { urn: `${qUrn}:choice:1`, value: 'Yes' },
+                { urn: `${qUrn}:choice:2`, value: 'No' },
+                { urn: `${qUrn}:choice:3`, value: 'Partial' }
+              ]
+            };
+          });
+          node.questions = isReplace ? newQuestions : { ...(node.questions || {}), ...newQuestions };
+          qAdded = data.questions.length;
+          wbLogAudit('ai_generate', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: node.urn, item_type: 'question', count: qAdded, summary: `bulk: generated ${qAdded} questions` });
+        } else if (isReplace) { node.questions = {}; }
+
+        if (data.typical_evidence && data.typical_evidence.length) {
+          if (isReplace) {
+            const existingEv = getEvidenceItems(node);
+            const dc = existingEv.length;
+            if (dc) {
+              const snapshot = JSON.parse(JSON.stringify(existingEv));
+              wbLogAudit('ai_wipe_replace', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: node.urn, item_type: 'typical_evidence', count: dc, snapshot, summary: `bulk: wiped ${dc} evidence items` });
+            }
+          }
+          const existingItems = isReplace ? [] : getEvidenceItems(node);
+          const newItems = data.typical_evidence
+            .filter(e => e.title || e.description)
+            .map((e, idx) => ({
+              id: existingItems.length + idx, title: e.title || '',
+              item_type: 'typical_evidence',
+              description: e.description || '', content_ar: e.description || '',
+              content_en: e.description_en || '', excluded: false,
+              included_in_ai_scope: true, provenance: 'ai_generated',
+              generation_metadata: bulkGenMeta, ...bulkAudit,
+              display_order: existingItems.length + idx
+            }));
+          const merged = [...existingItems, ...newItems];
+          node.typical_evidence_items = merged;
+          node.typical_evidence = evidenceItemsToTextLegacy(merged);
+          eAdded = newItems.length;
+          wbLogAudit('ai_generate', { actor: WB_AI_SERVICE_ACCOUNT, triggered_by: wbAdminUser, urn: node.urn, item_type: 'typical_evidence', count: eAdded, summary: `bulk: generated ${eAdded} evidence items` });
+        } else if (isReplace) { node.typical_evidence_items = []; node.typical_evidence = ''; }
+
+        const libId = capturedLib._id || capturedLib.id;
+        const bulkPendingLog = wbAuditLog.splice(0);
+        await fetch(`${MURAJI_API}/${libId}/controls`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            updates: [{
+              code: node.ref_id,
+              typical_requirements: node.typical_evidence || '',
+              typical_evidence_items: node.typical_evidence_items || [],
+              questions: node.questions || {},
+              admin_notes: node.admin_notes || [],
+              audit_log: bulkPendingLog
+            }]
+          })
+        });
+        results.push({ ref: node.ref_id || node.name, ok: true, qAdded, eAdded });
+      } catch (e) {
+        results.push({ ref: node.ref_id || node.name, ok: false, error: e.message });
+        console.error(`Bulk gen failed for ${node.ref_id}:`, e);
+      }
+    }
+
+    completeJob(job, results);
+
+    const succeeded = results.filter(r => r.ok).length;
+    const failedCount = results.filter(r => !r.ok).length;
+    fill.style.width = '100%';
+    textEl.textContent = `Done: ${succeeded} succeeded, ${failedCount} failed out of ${total}.`;
+    genBtn.disabled = false;
+    genBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12M4 12L2.5 13.5M13.5 2.5L12 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.3"/></svg> Run`;
+
+    resultsEl.style.display = '';
+    resultsEl.innerHTML = `<h4 class="wb-results-title">Results</h4>` + results.map(r => {
+      if (r.ok) return `<div class="wb-result-row wb-result-ok"><span class="wb-result-ref">${escapeHtml(r.ref)}</span> <span class="wb-result-detail">+${r.qAdded}Q, +${r.eAdded}E</span></div>`;
+      return `<div class="wb-result-row wb-result-fail"><span class="wb-result-ref">${escapeHtml(r.ref)}</span> <span class="wb-result-error">${escapeHtml(r.error)}</span></div>`;
+    }).join('');
+
+    if (wbCurrentLibrary === capturedLib && wbCurrentDetailView === 'status') renderWbStatusView();
+    document.getElementById('wb-select-all').checked = false;
+  };
+
+  processBulk();
+}
+
+function showBulkReplaceConfirmation(reqCount, totalQ, totalE) {
+  return new Promise((resolve) => {
+    const existing = document.querySelector('.wb-confirm-overlay');
+    if (existing) existing.remove();
+
+    const parts = [];
+    if (totalQ > 0) parts.push(`${totalQ} question${totalQ !== 1 ? 's' : ''}`);
+    if (totalE > 0) parts.push(`${totalE} evidence item${totalE !== 1 ? 's' : ''}`);
+    const summary = parts.join(' and ');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'wb-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="wb-confirm-modal">
+        <div class="wb-confirm-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 2L2 26H26L14 2Z" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 10V16" stroke="#dc2626" stroke-width="2" stroke-linecap="round"/><circle cx="14" cy="20" r="1.2" fill="#dc2626"/></svg>
+        </div>
+        <h3 class="wb-confirm-title">Bulk re-generate ${reqCount} requirement${reqCount !== 1 ? 's' : ''}?</h3>
+        <div class="wb-confirm-body">
+          <p>This will <strong>permanently delete</strong> ${summary} across ${reqCount} requirement${reqCount !== 1 ? 's' : ''} and replace them with newly generated content.</p>
+          <ul class="wb-confirm-warnings">
+            <li>Any manual edits to those items will be lost</li>
+            <li>The deletion will be recorded in the audit log (prior content is recoverable through audit history)</li>
+          </ul>
+        </div>
+        <div class="wb-confirm-actions">
+          <button class="btn-admin-ghost wb-confirm-cancel">Cancel</button>
+          <button class="btn-admin-danger wb-confirm-accept">I understand, replace all</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.wb-confirm-cancel').onclick = () => { overlay.remove(); resolve(false); };
+    overlay.querySelector('.wb-confirm-accept').onclick = () => { overlay.remove(); resolve(true); };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
+  });
+}
+
+// ─── Audit Log ────────────────────────────────────────────────
+
+let alComplianceAssessments = [];
+let alCurrentCA = null;
+let alRequirementAssessments = [];
+let alRequirements = [];
+
+const AL_STATUS_LABELS = {
+  to_do: 'To Do', in_progress: 'In Progress', in_review: 'In Review', done: 'Done'
+};
+const AL_STATUS_COLORS = {
+  to_do: '#94a3b8', in_progress: '#f59e0b', in_review: '#8b5cf6', done: '#22c55e'
+};
+const AL_RESULT_LABELS = {
+  not_assessed: 'Not Assessed', compliant: 'Compliant', partially_compliant: 'Partially Compliant',
+  non_compliant: 'Non-Compliant', not_applicable: 'N/A'
+};
+const AL_RESULT_COLORS = {
+  not_assessed: '#94a3b8', compliant: '#22c55e', partially_compliant: '#f59e0b',
+  non_compliant: '#ef4444', not_applicable: '#6b7280'
+};
+
+function alShowView(view) {
+  document.getElementById('al-ca-list-view').style.display = view === 'list' ? '' : 'none';
+  document.getElementById('al-ra-list-view').style.display = view === 'ras' ? '' : 'none';
+  document.getElementById('al-ra-detail-view').style.display = view === 'detail' ? '' : 'none';
+}
+
+async function loadAuditLog(subId) {
+  alShowView('list');
+  const grid = document.getElementById('al-ca-grid');
+  grid.innerHTML = '<div class="al-loading"><div class="spinner-sm"></div> Loading compliance assessments...</div>';
+  try {
+    const res = await fetch('/api/grc/compliance-assessments');
+    const json = await res.json();
+    alComplianceAssessments = json.results || [];
+    if (subId) {
+      await alOpenCA(subId);
+    } else {
+      alRenderCAGrid();
+    }
+  } catch (e) {
+    grid.innerHTML = `<div class="al-error">Failed to load compliance assessments: ${e.message}</div>`;
+  }
+}
+
+function alRenderCAGrid(filter) {
+  const grid = document.getElementById('al-ca-grid');
+  const q = (filter || '').toLowerCase();
+  const filtered = q
+    ? alComplianceAssessments.filter(ca => {
+        const name = (ca.name || ca.str || '').toLowerCase();
+        const fw = ((ca.framework && ca.framework.str) || '').toLowerCase();
+        return name.includes(q) || fw.includes(q);
+      })
+    : alComplianceAssessments;
+
+  if (!filtered.length) {
+    grid.innerHTML = `<div class="al-empty">No compliance assessments found${q ? ` matching "${filter}"` : ''}.</div>`;
+    return;
+  }
+
+  grid.innerHTML = filtered.map(ca => {
+    const name = ca.name || ca.str || 'Unnamed Assessment';
+    const fw = (ca.framework && ca.framework.str) || '';
+    const perimeter = (ca.perimeter && ca.perimeter.str) || '';
+    const locked = ca.is_locked;
+    const created = ca.created_at ? new Date(ca.created_at).toLocaleDateString() : '';
+    return `<div class="al-ca-card" data-ca-id="${ca.id}">
+      <div class="al-ca-card-header">
+        <h3 class="al-ca-card-title">${escapeHtml(name)}</h3>
+        ${locked ? '<span class="al-badge al-badge-locked">Locked</span>' : ''}
+      </div>
+      <div class="al-ca-card-meta">
+        ${fw ? `<span class="al-ca-meta-item"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 6H11M5 8.5H9M5 11H7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> ${escapeHtml(fw)}</span>` : ''}
+        ${perimeter ? `<span class="al-ca-meta-item"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/></svg> ${escapeHtml(perimeter)}</span>` : ''}
+        ${created ? `<span class="al-ca-meta-item"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M5 1V4M11 1V4M2 7H14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> ${created}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.al-ca-card').forEach(card => {
+    card.addEventListener('click', () => alOpenCA(card.dataset.caId));
+  });
+}
+
+async function alOpenCA(caId) {
+  alShowView('ras');
+  alCurrentCA = alComplianceAssessments.find(c => c.id === caId) || { id: caId, name: caId };
+  const title = alCurrentCA.name || alCurrentCA.str || 'Assessment';
+  document.getElementById('al-ra-title').textContent = title;
+  const fw = (alCurrentCA.framework && alCurrentCA.framework.str) || '';
+  document.getElementById('al-ra-subtitle').textContent = fw;
+
+  updateRoute('audit-log', caId);
+
+  document.getElementById('al-ra-back-btn').onclick = () => {
+    alShowView('list');
+    updateRoute('audit-log', null);
+    alRenderCAGrid(document.getElementById('al-ca-search').value);
+  };
+
+  const tbody = document.getElementById('al-ra-tbody');
+  tbody.innerHTML = '<tr><td colspan="7" class="al-loading"><div class="spinner-sm"></div> Loading requirement assessments...</td></tr>';
+
+  try {
+    const assessable = document.getElementById('al-filter-assessable').value;
+    const qs = assessable ? `?assessable=${assessable}` : '';
+    const res = await fetch(`/api/grc/compliance-assessments/${caId}/requirements-list${qs}`);
+    const json = await res.json();
+    if (!json.success && json.error) throw new Error(json.error);
+    alRequirementAssessments = json.requirement_assessments || [];
+    alRequirements = json.requirements || [];
+    alRenderRATable();
+    alWireRAFilters();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7" class="al-error">Failed to load: ${e.message}</td></tr>`;
+  }
+}
+
+function alWireRAFilters() {
+  const handler = () => alRenderRATable();
+  document.getElementById('al-filter-status').onchange = handler;
+  document.getElementById('al-filter-result').onchange = handler;
+  document.getElementById('al-ra-search').oninput = handler;
+  document.getElementById('al-filter-assessable').onchange = async () => {
+    if (alCurrentCA) await alOpenCA(alCurrentCA.id);
+  };
+}
+
+function alRenderRATable() {
+  const tbody = document.getElementById('al-ra-tbody');
+  const statusF = document.getElementById('al-filter-status').value;
+  const resultF = document.getElementById('al-filter-result').value;
+  const q = (document.getElementById('al-ra-search').value || '').toLowerCase();
+
+  let rows = alRequirementAssessments;
+  if (statusF) rows = rows.filter(r => r.status === statusF);
+  if (resultF) rows = rows.filter(r => r.result === resultF);
+  if (q) rows = rows.filter(r => {
+    const ref = (r.requirement && r.requirement.ref_id) || '';
+    const name = (r.requirement && r.requirement.name) || r.name || '';
+    const desc = (r.requirement && r.requirement.description) || r.description || '';
+    return ref.toLowerCase().includes(q) || name.toLowerCase().includes(q) || desc.toLowerCase().includes(q);
+  });
+
+  const stats = document.getElementById('al-ra-stats');
+  const totalCount = alRequirementAssessments.length;
+  const statusCounts = {};
+  alRequirementAssessments.forEach(r => { statusCounts[r.status] = (statusCounts[r.status] || 0) + 1; });
+  stats.innerHTML = `<span class="al-stat-total">${totalCount} total</span>` +
+    Object.entries(statusCounts).map(([s, c]) =>
+      `<span class="al-stat-chip" style="--chip-color:${AL_STATUS_COLORS[s] || '#94a3b8'}">${AL_STATUS_LABELS[s] || s}: ${c}</span>`
+    ).join('');
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="al-empty">No matching requirement assessments.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(ra => {
+    const req = ra.requirement || {};
+    const refId = req.ref_id || '';
+    const name = req.name || ra.name || '';
+    const status = ra.status || 'to_do';
+    const result = ra.result || 'not_assessed';
+    const evidenceCount = (ra.evidences || []).length;
+    const controlsCount = (ra.applied_controls || []).length;
+    const updated = ra.updated_at ? alRelativeDate(ra.updated_at) : '';
+
+    return `<tr class="al-ra-row" data-ra-id="${ra.id}">
+      <td class="al-td-ref"><span class="al-ref-badge">${escapeHtml(refId)}</span></td>
+      <td class="al-td-name">${escapeHtml(name)}</td>
+      <td class="al-td-status"><span class="al-status-badge" style="--badge-color:${AL_STATUS_COLORS[status] || '#94a3b8'}">${AL_STATUS_LABELS[status] || status}</span></td>
+      <td class="al-td-result"><span class="al-result-badge" style="--badge-color:${AL_RESULT_COLORS[result] || '#94a3b8'}">${AL_RESULT_LABELS[result] || result}</span></td>
+      <td class="al-td-count">${evidenceCount}</td>
+      <td class="al-td-count">${controlsCount}</td>
+      <td class="al-td-date">${updated}</td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('.al-ra-row').forEach(row => {
+    row.addEventListener('click', () => alOpenRADetail(row.dataset.raId));
+  });
+}
+
+function alRelativeDate(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const diff = now - d;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
+  return d.toLocaleDateString();
+}
+
+function alOpenRADetail(raId) {
+  const ra = alRequirementAssessments.find(r => r.id === raId);
+  if (!ra) return;
+  alShowView('detail');
+  const req = ra.requirement || {};
+  document.getElementById('al-detail-title').textContent = `${req.ref_id || ''} — ${req.name || ra.name || ''}`;
+  document.getElementById('al-detail-subtitle').textContent = (alCurrentCA && alCurrentCA.name) || '';
+  document.getElementById('al-detail-back-btn').onclick = () => {
+    alShowView('ras');
+    alRenderRATable();
+  };
+
+  const content = document.getElementById('al-detail-content');
+  const status = ra.status || 'to_do';
+  const result = ra.result || 'not_assessed';
+  const extResult = ra.extended_result;
+
+  content.innerHTML = `
+    <div class="al-detail-grid">
+      <div class="al-detail-card al-detail-card-wide">
+        <h4 class="al-detail-card-title">Overview</h4>
+        <div class="al-detail-field-grid">
+          <div class="al-detail-field">
+            <label>Status</label>
+            <span class="al-status-badge" style="--badge-color:${AL_STATUS_COLORS[status]}">${AL_STATUS_LABELS[status] || status}</span>
+          </div>
+          <div class="al-detail-field">
+            <label>Result</label>
+            <span class="al-result-badge" style="--badge-color:${AL_RESULT_COLORS[result]}">${AL_RESULT_LABELS[result] || result}</span>
+          </div>
+          ${extResult ? `<div class="al-detail-field"><label>Extended Result</label><span class="al-ext-result">${escapeHtml(extResult.replace(/_/g, ' '))}</span></div>` : ''}
+          ${ra.score != null ? `<div class="al-detail-field"><label>Score</label><span>${ra.score}${ra.compliance_assessment ? ` / ${ra.compliance_assessment.max_score}` : ''}</span></div>` : ''}
+          ${ra.eta ? `<div class="al-detail-field"><label>ETA</label><span>${ra.eta}</span></div>` : ''}
+          ${ra.due_date ? `<div class="al-detail-field"><label>Due Date</label><span>${ra.due_date}</span></div>` : ''}
+          <div class="al-detail-field"><label>Assessable</label><span>${ra.assessable ? 'Yes' : 'No'}</span></div>
+          <div class="al-detail-field"><label>Locked</label><span>${ra.is_locked ? 'Yes' : 'No'}</span></div>
+        </div>
+      </div>
+
+      <div class="al-detail-card">
+        <h4 class="al-detail-card-title">Requirement</h4>
+        <div class="al-detail-field"><label>URN</label><span class="al-mono">${escapeHtml(req.urn || '')}</span></div>
+        <div class="al-detail-field"><label>Ref ID</label><span class="al-ref-badge">${escapeHtml(req.ref_id || '')}</span></div>
+        ${req.description ? `<div class="al-detail-field"><label>Description</label><p class="al-detail-desc">${escapeHtml(req.description)}</p></div>` : ''}
+        ${req.annotation ? `<div class="al-detail-field"><label>Annotation</label><p class="al-detail-desc">${escapeHtml(req.annotation)}</p></div>` : ''}
+        ${req.typical_evidence ? `<div class="al-detail-field"><label>Typical Evidence</label><p class="al-detail-desc">${escapeHtml(req.typical_evidence)}</p></div>` : ''}
+      </div>
+
+      <div class="al-detail-card">
+        <h4 class="al-detail-card-title">Observation</h4>
+        <p class="al-detail-desc">${ra.observation ? escapeHtml(ra.observation) : '<em class="al-muted">No observation recorded.</em>'}</p>
+      </div>
+
+      ${alRenderAnswersCard(ra, req)}
+      ${alRenderLinkedCard('Evidence', ra.evidences)}
+      ${alRenderLinkedCard('Applied Controls', ra.applied_controls)}
+      ${alRenderLinkedCard('Security Exceptions', ra.security_exceptions)}
+
+      <div class="al-detail-card">
+        <h4 class="al-detail-card-title">Timestamps</h4>
+        <div class="al-detail-field-grid">
+          <div class="al-detail-field"><label>Created</label><span>${ra.created_at ? new Date(ra.created_at).toLocaleString() : '—'}</span></div>
+          <div class="al-detail-field"><label>Updated</label><span>${ra.updated_at ? new Date(ra.updated_at).toLocaleString() : '—'}</span></div>
+        </div>
+      </div>
+
+      <div class="al-detail-card al-detail-card-wide al-audit-log-card">
+        <h4 class="al-detail-card-title">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1C4.1 1 1 4.1 1 8s3.1 7 7 7 7-3.1 7-7-3.1-7-7-7z" stroke="currentColor" stroke-width="1.3"/><path d="M8 4V8L10.5 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Audit Log
+        </h4>
+        <div id="al-audit-log-entries">
+          <div class="al-loading"><div class="spinner-sm"></div> Loading audit log...</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  alFetchAuditLog(ra.id);
+}
+
+async function alFetchAuditLog(raId) {
+  const container = document.getElementById('al-audit-log-entries');
+  try {
+    const res = await fetch(`/api/grc/requirement-assessments/${raId}/audit-log`);
+    const json = await res.json();
+    if (!json.success && json.error) throw new Error(json.error);
+    const entries = json.entries || [];
+    if (!entries.length) {
+      container.innerHTML = '<div class="al-empty">No audit log entries.</div>';
+      return;
+    }
+    container.innerHTML = `<div class="al-timeline">${entries.map(alRenderAuditEntry).join('')}</div>`;
+  } catch (e) {
+    container.innerHTML = `<div class="al-error">Failed to load audit log: ${e.message}</div>`;
+  }
+}
+
+function alRenderAuditEntry(entry) {
+  const ts = entry.timestamp ? new Date(entry.timestamp) : null;
+  const timeStr = ts ? ts.toLocaleString() : '';
+  const relTime = ts ? alRelativeDate(entry.timestamp) : '';
+  const actor = entry.actor || 'System';
+  const action = entry.action || 'update';
+  const isAI = actor === 'AI Service' || (entry.additional_data && entry.additional_data.action_type === 'info');
+
+  const actionIcon = {
+    create: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    update: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5L14.5 4.5L5 14H2V11L11.5 1.5Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    delete: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 4H13M5 4V13H11V4M7 7V10M9 7V10M6 4V2H10V4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    info: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M8 5V5.5M8 7.5V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
+  };
+  const actionColor = { create: '#22c55e', update: '#3b82f6', delete: '#ef4444', info: '#8b5cf6' };
+
+  const changes = entry.changes || {};
+  const changedFields = Object.keys(changes);
+  const ad = entry.additional_data || {};
+
+  let changesHtml = '';
+  if (changedFields.length) {
+    changesHtml = `<div class="al-log-changes">${changedFields.map(field => {
+      const [oldVal, newVal] = changes[field];
+      const oldStr = oldVal == null || oldVal === '' ? '<em class="al-muted">empty</em>' : escapeHtml(String(oldVal));
+      const newStr = newVal == null || newVal === '' ? '<em class="al-muted">empty</em>' : escapeHtml(String(newVal));
+      return `<div class="al-log-change-row">
+        <span class="al-log-field">${escapeHtml(field.replace(/_/g, ' '))}</span>
+        <span class="al-log-old">${oldStr}</span>
+        <svg class="al-log-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6H10M7 3L10 6L7 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="al-log-new">${newStr}</span>
+      </div>`;
+    }).join('')}</div>`;
+  }
+
+  let metaHtml = '';
+  if (isAI && ad.description) {
+    metaHtml = `<div class="al-log-ai-meta">
+      <span class="al-log-ai-desc">${escapeHtml(ad.description)}</span>
+      ${ad.applied_fields ? `<span class="al-log-ai-fields">Fields: ${ad.applied_fields.join(', ')}</span>` : ''}
+    </div>`;
+  } else if (ad.folder) {
+    metaHtml = `<div class="al-log-folder">${escapeHtml(ad.folder)}</div>`;
+  }
+
+  return `<div class="al-timeline-entry" data-action="${action}">
+    <div class="al-timeline-dot" style="--dot-color:${actionColor[action] || '#94a3b8'}">
+      ${actionIcon[action] || actionIcon.update}
+    </div>
+    <div class="al-timeline-body">
+      <div class="al-timeline-header">
+        <span class="al-log-actor ${isAI ? 'al-log-actor-ai' : ''}">${escapeHtml(actor)}</span>
+        <span class="al-log-action-badge" style="--badge-color:${actionColor[action] || '#94a3b8'}">${action}</span>
+        <span class="al-log-time" title="${timeStr}">${relTime}</span>
+      </div>
+      ${changesHtml}
+      ${metaHtml}
+    </div>
+  </div>`;
+}
+
+function alRenderAnswersCard(ra, req) {
+  const answers = ra.answers || {};
+  const questions = req.questions || {};
+  const entries = Object.entries(answers);
+  if (!entries.length) return '';
+  return `<div class="al-detail-card">
+    <h4 class="al-detail-card-title">Answers</h4>
+    <div class="al-answers-list">
+      ${entries.map(([qUrn, aUrn]) => {
+        const q = questions[qUrn];
+        const qText = q ? (q.text || q.content_ar || qUrn) : qUrn;
+        let aText = aUrn;
+        if (q && q.choices) {
+          const choice = q.choices.find(c => c.urn === aUrn);
+          if (choice) aText = choice.value;
+        }
+        return `<div class="al-answer-row">
+          <span class="al-answer-q">${escapeHtml(qText)}</span>
+          <span class="al-answer-a">${escapeHtml(String(aText))}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function alRenderLinkedCard(title, items) {
+  if (!items || !items.length) return '';
+  return `<div class="al-detail-card">
+    <h4 class="al-detail-card-title">${title} <span class="al-count-badge">${items.length}</span></h4>
+    <div class="al-linked-list">
+      ${items.map(it => `<div class="al-linked-item">${escapeHtml(it.str || it.name || it.id)}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
+// Wire search on CA grid
+document.getElementById('al-ca-search').addEventListener('input', (e) => {
+  alRenderCAGrid(e.target.value);
+});
 
 // ─── Init ─────────────────────────────────────────────────────
 

@@ -83,6 +83,25 @@
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4H14M2 4V12C2 12.6 2.4 13 3 13H13C13.6 13 14 12.6 14 12V4M6 7H10M6 10H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Frameworks
           </button>
+          <div class="wb-jobs-indicator" id="wb-jobs-indicator" style="display:none">
+            <div class="wb-jobs-icon"><div class="spinner-sm wb-jobs-spinner"></div></div>
+            <div class="wb-jobs-info">
+              <span class="wb-jobs-label" id="wb-jobs-label">1 job running</span>
+              <span class="wb-jobs-detail" id="wb-jobs-detail"></span>
+            </div>
+          </div>
+        </div>
+
+        <button class="sidebar-section-toggle" data-section="auditlog">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V14H3V2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 2V5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 8H11M5 10.5H9M5 13H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          AUDIT LOG
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 5L6 7L8 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <div class="sidebar-section" id="section-auditlog">
+          <button class="sidebar-item" data-page="audit-log">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1C4.1 1 1 4.1 1 8s3.1 7 7 7 7-3.1 7-7-3.1-7-7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M8 4V8L10.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Assessments
+          </button>
         </div>
 
         <button class="sidebar-section-toggle" data-section="config">
@@ -580,11 +599,85 @@
                 </div>
                 <div class="wb-detail-meta" id="wb-detail-meta"></div>
               </div>
-              <div class="wb-search-bar">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M11 11L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                <input type="text" id="wb-search-input" placeholder="Search requirements, questions..." class="admin-form-input">
+              <div class="wb-view-toolbar">
+                <div class="wb-view-toggle">
+                  <button class="wb-view-btn active" id="wb-view-tree-btn" data-view="tree">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 3H12M4 6.5H12M6 10H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    Tree
+                  </button>
+                  <button class="wb-view-btn" id="wb-view-status-btn" data-view="status">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2H6V6H2ZM8 2H12V6H8ZM2 8H6V12H2ZM8 8H12V12H8Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    Status
+                  </button>
+                </div>
+                <div class="wb-search-bar" id="wb-search-bar-wrap">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M11 11L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  <input type="text" id="wb-search-input" placeholder="Search requirements, questions..." class="admin-form-input">
+                </div>
               </div>
               <div id="wb-tree-container" class="wb-tree-container"></div>
+              <div id="wb-status-container" style="display:none">
+                <div class="wb-status-summary" id="wb-status-summary"></div>
+                <div class="wb-status-filters">
+                  <select class="wb-status-select" id="wb-status-filter">
+                    <option value="all">All statuses</option>
+                    <option value="empty">Empty</option>
+                    <option value="partial">Partial</option>
+                    <option value="full">Full</option>
+                  </select>
+                  <select class="wb-status-select" id="wb-parent-filter">
+                    <option value="all">All sections</option>
+                  </select>
+                  <select class="wb-status-select" id="wb-sort-select">
+                    <option value="ref_id">Sort by Ref ID</option>
+                    <option value="status-asc">Empty first</option>
+                    <option value="status-desc">Full first</option>
+                    <option value="questions">Most questions</option>
+                  </select>
+                  <select class="wb-status-select" id="wb-threshold-filter" title="Population threshold">
+                    <option value="1,1">Min 1Q + 1E</option>
+                    <option value="2,1">Min 2Q + 1E</option>
+                    <option value="3,2">Min 3Q + 2E</option>
+                    <option value="5,3">Min 5Q + 3E</option>
+                  </select>
+                  <div class="wb-bulk-actions" id="wb-bulk-actions" style="display:none">
+                    <span class="wb-bulk-count" id="wb-bulk-count">0 selected</span>
+                    <select class="wb-status-select" id="wb-bulk-mode">
+                      <option value="empty-only">Generate (empty only)</option>
+                      <option value="regenerate">Re-generate (replace)</option>
+                    </select>
+                    <button class="btn-admin-primary wb-bulk-gen-btn" id="wb-bulk-gen-btn">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8 1V3M8 13V15M3 8H1M15 8H13M4 4L2.5 2.5M13.5 13.5L12 12M4 12L2.5 13.5M13.5 2.5L12 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.3"/></svg>
+                      Run
+                    </button>
+                  </div>
+                </div>
+                <div class="wb-bulk-steering" id="wb-bulk-steering-wrap" style="display:none">
+                  <label class="wb-editor-label">Bulk Steering Instructions <span class="wb-optional">(optional, applied to every requirement)</span></label>
+                  <textarea class="wb-gen-textarea" id="wb-bulk-steering" rows="2" maxlength="2000" placeholder="Custom steering prompt for this batch..."></textarea>
+                  <span class="wb-gen-char-count" id="wb-bulk-char-count">0 / 2000</span>
+                </div>
+                <div class="wb-status-progress" id="wb-bulk-progress" style="display:none">
+                  <div class="wb-progress-bar"><div class="wb-progress-fill" id="wb-progress-fill"></div></div>
+                  <span class="wb-progress-text" id="wb-progress-text"></span>
+                </div>
+                <div class="wb-bulk-results" id="wb-bulk-results" style="display:none"></div>
+                <table class="wb-status-table" id="wb-status-table">
+                  <thead>
+                    <tr>
+                      <th class="wb-st-check"><input type="checkbox" id="wb-select-all"></th>
+                      <th class="wb-st-ref">Ref</th>
+                      <th class="wb-st-name">Requirement</th>
+                      <th class="wb-st-q">Questions</th>
+                      <th class="wb-st-e">Evidence</th>
+                      <th class="wb-st-n">Notes</th>
+                      <th class="wb-st-status">Status</th>
+                      <th class="wb-st-action"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="wb-status-tbody"></tbody>
+                </table>
+              </div>
             </div>
             <div id="wb-req-detail" style="display:none">
               <div class="wb-req-topbar">
@@ -622,7 +715,8 @@
                 <div class="wb-gen-body" id="wb-gen-body" style="display:none">
                   <div class="wb-gen-field">
                     <label class="wb-gen-label">Steering Instructions <span class="wb-gen-optional">(optional)</span></label>
-                    <textarea class="wb-gen-textarea" id="wb-gen-steering" rows="3" placeholder="Add custom instructions to guide the AI for this specific requirement. e.g. 'Focus on cloud infrastructure evidence' or 'Generate questions about incident response procedures'"></textarea>
+                    <textarea class="wb-gen-textarea" id="wb-gen-steering" rows="3" maxlength="2000" placeholder="Add custom instructions to guide the AI for this specific requirement. e.g. 'Focus on cloud infrastructure evidence' or 'Generate questions about incident response procedures'"></textarea>
+                    <span class="wb-gen-char-count" id="wb-gen-char-count">0 / 2000</span>
                   </div>
                   <div class="wb-gen-options">
                     <label class="wb-gen-checkbox-label">
@@ -656,10 +750,16 @@
                       <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M6 6.5C6 5.7 6.7 5 7.5 5H8.5C9.3 5 10 5.7 10 6.5C10 7.5 8 7.5 8 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="11" r="0.7" fill="currentColor"/></svg>
                       Questions
                     </h3>
-                    <button class="wb-req-add-btn" id="wb-add-question-btn">
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                      Add Question
-                    </button>
+                    <div class="wb-section-actions">
+                      <button class="wb-req-regen-btn" id="wb-regen-questions-btn" title="Re-generate questions with AI">
+                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.7 3.7 1 7 1C9.4 1 11.4 2.5 12.3 4.5M13 7C13 10.3 10.3 13 7 13C4.6 13 2.6 11.5 1.7 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M12 1.5V4.5H9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12.5V9.5H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Re-generate
+                      </button>
+                      <button class="wb-req-add-btn" id="wb-add-question-btn">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                        Add Question
+                      </button>
+                    </div>
                   </div>
                   <div class="wb-req-items" id="wb-questions-list"></div>
                 </div>
@@ -670,10 +770,16 @@
                       <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.3"/><path d="M5 8H10M5 10.5H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
                       Typical Evidence
                     </h3>
-                    <button class="wb-req-add-btn" id="wb-add-evidence-btn">
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                      Add Evidence
-                    </button>
+                    <div class="wb-section-actions">
+                      <button class="wb-req-regen-btn" id="wb-regen-evidence-btn" title="Re-generate evidence with AI">
+                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M1 7C1 3.7 3.7 1 7 1C9.4 1 11.4 2.5 12.3 4.5M13 7C13 10.3 10.3 13 7 13C4.6 13 2.6 11.5 1.7 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M12 1.5V4.5H9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12.5V9.5H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Re-generate
+                      </button>
+                      <button class="wb-req-add-btn" id="wb-add-evidence-btn">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2V12M2 7H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                        Add Evidence
+                      </button>
+                    </div>
                   </div>
                   <div class="wb-req-items" id="wb-evidence-list"></div>
                 </div>
@@ -692,6 +798,102 @@
                   <div class="wb-req-items" id="wb-notes-list"></div>
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =================== AUDIT LOG =================== -->
+        <section class="admin-page" id="page-audit-log">
+          <div class="page-container">
+            <!-- View: Compliance Assessment list -->
+            <div id="al-ca-list-view">
+              <div class="page-header">
+                <div>
+                  <h1 class="page-title">Audit Log</h1>
+                  <p class="page-subtitle">Requirement assessments from GRC compliance assessments</p>
+                </div>
+              </div>
+              <div class="al-search-bar">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M11 11L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                <input type="text" id="al-ca-search" class="al-search-input" placeholder="Search compliance assessments...">
+              </div>
+              <div class="al-ca-grid" id="al-ca-grid">
+                <div class="al-loading"><div class="spinner-sm"></div> Loading compliance assessments...</div>
+              </div>
+            </div>
+
+            <!-- View: RA list for a compliance assessment -->
+            <div id="al-ra-list-view" style="display:none">
+              <div class="al-ra-header">
+                <button class="al-back-btn" id="al-ra-back-btn">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Back
+                </button>
+                <div class="al-ra-header-info">
+                  <h2 class="al-ra-title" id="al-ra-title">Assessment</h2>
+                  <span class="al-ra-subtitle" id="al-ra-subtitle"></span>
+                </div>
+              </div>
+              <div class="al-ra-toolbar">
+                <div class="al-ra-filters">
+                  <select id="al-filter-status" class="al-filter-select">
+                    <option value="">All statuses</option>
+                    <option value="to_do">To Do</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="in_review">In Review</option>
+                    <option value="done">Done</option>
+                  </select>
+                  <select id="al-filter-result" class="al-filter-select">
+                    <option value="">All results</option>
+                    <option value="not_assessed">Not Assessed</option>
+                    <option value="compliant">Compliant</option>
+                    <option value="partially_compliant">Partially Compliant</option>
+                    <option value="non_compliant">Non-Compliant</option>
+                    <option value="not_applicable">Not Applicable</option>
+                  </select>
+                  <select id="al-filter-assessable" class="al-filter-select">
+                    <option value="">All</option>
+                    <option value="true" selected>Assessable only</option>
+                    <option value="false">Non-assessable</option>
+                  </select>
+                </div>
+                <div class="al-ra-search-wrap">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.3"/><path d="M11 11L14 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                  <input type="text" id="al-ra-search" class="al-search-input" placeholder="Search by ref_id, name, or description...">
+                </div>
+                <div class="al-ra-stats" id="al-ra-stats"></div>
+              </div>
+              <div class="al-ra-table-wrap">
+                <table class="al-ra-table" id="al-ra-table">
+                  <thead>
+                    <tr>
+                      <th class="al-th-ref">Ref ID</th>
+                      <th class="al-th-name">Requirement</th>
+                      <th class="al-th-status">Status</th>
+                      <th class="al-th-result">Result</th>
+                      <th class="al-th-evidence">Evidence</th>
+                      <th class="al-th-controls">Controls</th>
+                      <th class="al-th-date">Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody id="al-ra-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- View: RA detail -->
+            <div id="al-ra-detail-view" style="display:none">
+              <div class="al-ra-header">
+                <button class="al-back-btn" id="al-detail-back-btn">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Back to list
+                </button>
+                <div class="al-ra-header-info">
+                  <h2 class="al-ra-title" id="al-detail-title">Requirement Assessment</h2>
+                  <span class="al-ra-subtitle" id="al-detail-subtitle"></span>
+                </div>
+              </div>
+              <div class="al-detail-content" id="al-detail-content"></div>
             </div>
           </div>
         </section>
