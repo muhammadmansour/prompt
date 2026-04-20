@@ -170,6 +170,21 @@ function sleep(ms, signal) {
   });
 }
 
+function describeFetchError(err, url) {
+  if (!err) return 'unknown error';
+  if (err.name === 'AbortError') return `timeout after ${CURL_TIMEOUT_MS}ms on ${url}`;
+  const cause = err.cause || {};
+  const parts = [];
+  if (cause.code) parts.push(cause.code);
+  if (cause.errno) parts.push(`errno=${cause.errno}`);
+  if (cause.syscall) parts.push(cause.syscall);
+  if (cause.hostname) parts.push(`host=${cause.hostname}`);
+  if (cause.address) parts.push(`addr=${cause.address}`);
+  if (cause.port) parts.push(`port=${cause.port}`);
+  const detail = parts.length ? ` (${parts.join(' ')})` : '';
+  return `${err.message}${detail} — ${url}`;
+}
+
 async function fetchJson(url, signal) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), CURL_TIMEOUT_MS);
@@ -187,6 +202,10 @@ async function fetchJson(url, signal) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
+  } catch (err) {
+    const e = new Error(describeFetchError(err, url));
+    e.cause = err;
+    throw e;
   } finally {
     clearTimeout(timer);
     if (signal) signal.removeEventListener('abort', onParentAbort);
