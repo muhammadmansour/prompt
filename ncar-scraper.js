@@ -2,6 +2,8 @@
    NCAR Document Scraper — ncar.gov.sa
    Pure Node.js port (no extra deps for scraping).
    Supports per-trial GCS uploads via ./gcs-uploader.js
+   Outbound traffic can be routed through an HTTPS proxy via
+   NCAR_PROXY_URL (preferred) or standard HTTPS_PROXY / ALL_PROXY.
    ============================================================ */
 
 const fs = require('fs');
@@ -13,6 +15,57 @@ const BASE = 'https://ncar.gov.sa';
 const API = `${BASE}/api/index.php/api`;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const CURL_TIMEOUT_MS = 30000;
+
+// ---------- HTTPS proxy (for geo-restricted endpoints like NCAR) ----------
+// Use NCAR_PROXY_URL for the scraper specifically; fall back to common envs.
+// Example: NCAR_PROXY_URL=http://user:pass@sa-proxy.example.com:8080
+let _proxyDispatcher = null;
+let _proxyResolved = false;
+function getProxyUrl() {
+  return (
+    process.env.NCAR_PROXY_URL ||
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.ALL_PROXY ||
+    process.env.all_proxy ||
+    ''
+  ).trim();
+}
+function redactProxyUrl(raw) {
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    if (u.username || u.password) {
+      u.username = u.username ? '***' : '';
+      u.password = u.password ? '***' : '';
+    }
+    return u.toString();
+  } catch {
+    return '<invalid-proxy-url>';
+  }
+}
+function getProxyDispatcher() {
+  if (_proxyResolved) return _proxyDispatcher;
+  _proxyResolved = true;
+  const raw = getProxyUrl();
+  if (!raw) return null;
+  try {
+    const { ProxyAgent } = require('undici');
+    _proxyDispatcher = new ProxyAgent({
+      uri: raw,
+      requestTls: { timeout: CURL_TIMEOUT_MS },
+      connectTimeout: CURL_TIMEOUT_MS,
+    });
+    return _proxyDispatcher;
+  } catch (e) {
+    // Surface once via thrown error so UI can show a clear message.
+    throw new Error(`Failed to initialise HTTPS proxy (${redactProxyUrl(raw)}): ${e.message}`);
+  }
+}
+function getProxyInfo() {
+  const raw = getProxyUrl();
+  return { enabled: Boolean(raw), url: redactProxyUrl(raw) };
+}
 
 // ---------- Job state (singleton — one job at a time) ----------
 
@@ -191,8 +244,10 @@ async function fetchJson(url, signal) {
   const onParentAbort = () => ctrl.abort();
   if (signal) signal.addEventListener('abort', onParentAbort, { once: true });
   try {
+    const dispatcher = getProxyDispatcher();
     const res = await fetch(url, {
       signal: ctrl.signal,
+      ...(dispatcher ? { dispatcher } : {}),
       headers: {
         'User-Agent': UA,
         'Accept': 'application/json',
@@ -218,8 +273,10 @@ async function fetchPdf(url, outFile, signal) {
   const onParentAbort = () => ctrl.abort();
   if (signal) signal.addEventListener('abort', onParentAbort, { once: true });
   try {
+    const dispatcher = getProxyDispatcher();
     const res = await fetch(url, {
       signal: ctrl.signal,
+      ...(dispatcher ? { dispatcher } : {}),
       headers: { 'User-Agent': UA, 'Referer': `${BASE}/` },
     });
     if (!res.ok) return false;
@@ -499,6 +556,8 @@ async function startJob(cfg = {}) {
   log(`Output: ${trialDir}`);
   log(`PDFs:   ${config.downloadPdf}`);
   log(`GCS:    ${gcsEnabled ? `✓ gs://${process.env.GCP_BUCKET}/${state.gcsPrefix}/` : (gcsConfigured ? 'disabled for this trial' : 'not configured')}`);
+  const _proxyInfo = getProxyInfo();
+  log(`Proxy:  ${_proxyInfo.enabled ? `✓ ${_proxyInfo.url}` : 'direct (no proxy)'}`);
   log(`Started: ${formatInZone(state.startedAt)}`);
 
   saveTrialSnapshot();
@@ -750,6 +809,33 @@ async function readTrialIndexFromGcs(trialId) {
 
 async function gcsPing() { return gcs.ping(); }
 
+// Lightweight reachability probe for NCAR (honours the configured proxy).
+// Returns { ok, status, viaProxy, proxy, elapsedMs, error? }.
+async function ncarPing() {
+  const started = Date.now();
+  const info = getProxyInfo();
+  const url = `${API}/documents/list/1/1/approveDate/ASC`;
+  try {
+    const data = await fetchJson(url);
+    return {
+      ok: true,
+      status: Number(data?.status) === 1 ? 'api-ok' : 'api-unexpected',
+      total: Number(data?.dataLength) || 0,
+      viaProxy: info.enabled,
+      proxy: info.url || null,
+      elapsedMs: Date.now() - started,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      viaProxy: info.enabled,
+      proxy: info.url || null,
+      elapsedMs: Date.now() - started,
+      error: err.message,
+    };
+  }
+}
+
 module.exports = {
   startJob,
   stopJob,
@@ -764,4 +850,6 @@ module.exports = {
   getSignedUrlForTrialFile,
   readTrialIndexFromGcs,
   gcsPing,
+  ncarPing,
+  getProxyInfo,
 };

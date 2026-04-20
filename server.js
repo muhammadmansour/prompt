@@ -5058,6 +5058,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/scrapping/ncar-check' && req.method === 'GET') {
+    try {
+      const result = await ncarScraper.ncarPing();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ...result }));
+    } catch (err) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ok: false, error: err.message }));
+    }
+    return;
+  }
+
   if (url.pathname === '/api/scrapping/start' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
