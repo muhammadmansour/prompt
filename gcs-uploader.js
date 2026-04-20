@@ -54,13 +54,29 @@ async function ping() {
   if (!isConfigured()) {
     return { ok: false, error: 'Not configured (set GCP_BUCKET and GOOGLE_APPLICATION_CREDENTIALS in .env)' };
   }
+  // Object-level probe: write + delete a tiny health object. This works with
+  // roles/storage.objectAdmin alone (no storage.buckets.get required).
   try {
     const bucket = init();
-    const [exists] = await bucket.exists();
-    if (!exists) return { ok: false, error: `Bucket ${process.env.GCP_BUCKET} not found or no access` };
+    const probePath = `.health/ping-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
+    const file = bucket.file(probePath);
+    await file.save(Buffer.from('ok', 'utf8'), {
+      contentType: 'text/plain',
+      resumable: false,
+      metadata: { metadata: { purpose: 'gcs-ping' } },
+    });
+    await file.delete({ ignoreNotFound: true });
     return { ok: true, bucket: process.env.GCP_BUCKET, projectId: process.env.GCP_PROJECT_ID };
   } catch (err) {
-    return { ok: false, error: err.message };
+    // Surface common auth/permission failures with a clearer message.
+    const msg = err && err.message ? err.message : String(err);
+    if (err && (err.code === 404 || /not found/i.test(msg))) {
+      return { ok: false, error: `Bucket ${process.env.GCP_BUCKET} not found or no access` };
+    }
+    if (err && (err.code === 403 || /permission|forbidden/i.test(msg))) {
+      return { ok: false, error: `GCP permission denied: ${msg}` };
+    }
+    return { ok: false, error: msg };
   }
 }
 
