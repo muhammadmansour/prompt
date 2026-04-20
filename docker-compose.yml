@@ -1,0 +1,60 @@
+# ============================================================
+# docker-compose.yml — local & single-host production use
+#
+# Usage:
+#   docker compose up -d --build
+#   docker compose logs -f app
+#   docker compose down
+#
+# Persistence:
+#   One named volume (app-data) holds everything mutable:
+#     sessions.db
+#     ncar_documents/
+#     policy-uploads/
+#     collection-uploads/
+#
+# Secrets:
+#   - .env is loaded via env_file (non-secret config + GCP_* settings).
+#   - ncar-scraper-key.json is mounted read-only at the path .env
+#     already points to (./ncar-scraper-key.json).
+# ============================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_VERSION: "20.18.1"
+    image: wathbah-grc-admin:latest
+    container_name: wathbah-grc-admin
+    restart: unless-stopped
+
+    env_file:
+      - .env
+    environment:
+      PORT: "5555"
+      TZ: "Asia/Riyadh"
+      # Override if you want state stored somewhere else inside the container.
+      DATA_DIR: "/app/data"
+
+    ports:
+      - "5555:5555"
+
+    volumes:
+      # Single persistent volume for all mutable runtime state.
+      - app-data:/app/data
+
+      # GCP service-account key (read-only). Remove this line if you use
+      # workload identity or an inline GCP_SERVICE_ACCOUNT_JSON env var.
+      - ./ncar-scraper-key.json:/app/ncar-scraper-key.json:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null --tries=1 --timeout=4 http://127.0.0.1:5555/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  app-data:

@@ -1,0 +1,47 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Dependencies (built fresh inside the image via npm ci)
+node_modules
+
+# Local env & secrets — inject at runtime via --env-file / mounted secrets
+.env
+.env.*
+*.pem
+*-key.json
+gcp-service-account.json
+
+# Editor / IDE
+.vscode
+.idea
+.cursor
+.cursorignore
+.cursorrules
+.DS_Store
+Thumbs.db
+
+# Runtime state — provided by mounted volumes in production
+sessions.db
+ncar_documents
+policy-uploads
+collection-uploads
+
+# Docs / planning snapshots not needed at runtime
+context-snapshot
+context-snapshot-admin
+
+# Build / logs
+npm-debug.log*
+yarn-error.log*
+*.log
+coverage
+dist
+build
+tmp
+
+# Docker meta (not needed inside the build context)
+Dockerfile
+.dockerignore
+docker-compose*.yml
