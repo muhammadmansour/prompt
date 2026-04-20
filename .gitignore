@@ -16,6 +16,14 @@ wathba.db
 policy-uploads/
 collection-uploads/
 
+# Scrapping output
+ncar_documents/
+
+# GCP service account keys
+ncar-scraper-key.json
+gcp-service-account.json
+*-key.json
+
 # OS
 .DS_Store
 Thumbs.db

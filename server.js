@@ -4,6 +4,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { GoogleGenAI } = require('@google/genai');
 const Database = require('better-sqlite3');
+const ncarScraper = require('./ncar-scraper');
+const NCAR_OUT_DIR = path.join(__dirname, 'ncar_documents');
+let __scrapTrialStoreWired = false; // wired after db init below
 
 const PORT = 5555; // Wathbah server port
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
@@ -240,7 +243,114 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_chain_org ON org_context_chain(org_context_id);
   CREATE INDEX IF NOT EXISTS idx_chain_fw  ON org_context_chain(framework_uuid);
+
+  CREATE TABLE IF NOT EXISTS scrap_trials (
+    id               TEXT PRIMARY KEY,
+    status           TEXT NOT NULL,
+    started_at       TEXT,
+    finished_at      TEXT,
+    total_docs       INTEGER DEFAULT 0,
+    total_pages      INTEGER DEFAULT 0,
+    processed_docs   INTEGER DEFAULT 0,
+    downloaded_pdfs  INTEGER DEFAULT 0,
+    uploaded_files   INTEGER DEFAULT 0,
+    failed_pages     INTEGER DEFAULT 0,
+    failed_docs      INTEGER DEFAULT 0,
+    failed_uploads   INTEGER DEFAULT 0,
+    last_error       TEXT,
+    config_json      TEXT,
+    gcs_bucket       TEXT,
+    gcs_prefix       TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_scrap_trials_started ON scrap_trials(started_at DESC);
 `);
+
+// ---- Scrapping: wire trial persistence ----
+const dbInsertScrapTrial = db.prepare(`
+  INSERT INTO scrap_trials (
+    id, status, started_at, finished_at,
+    total_docs, total_pages, processed_docs, downloaded_pdfs, uploaded_files,
+    failed_pages, failed_docs, failed_uploads, last_error,
+    config_json, gcs_bucket, gcs_prefix
+  ) VALUES (
+    @id, @status, @started_at, @finished_at,
+    @total_docs, @total_pages, @processed_docs, @downloaded_pdfs, @uploaded_files,
+    @failed_pages, @failed_docs, @failed_uploads, @last_error,
+    @config_json, @gcs_bucket, @gcs_prefix
+  )
+  ON CONFLICT(id) DO UPDATE SET
+    status          = excluded.status,
+    started_at      = excluded.started_at,
+    finished_at     = excluded.finished_at,
+    total_docs      = excluded.total_docs,
+    total_pages     = excluded.total_pages,
+    processed_docs  = excluded.processed_docs,
+    downloaded_pdfs = excluded.downloaded_pdfs,
+    uploaded_files  = excluded.uploaded_files,
+    failed_pages    = excluded.failed_pages,
+    failed_docs     = excluded.failed_docs,
+    failed_uploads  = excluded.failed_uploads,
+    last_error      = excluded.last_error,
+    config_json     = excluded.config_json,
+    gcs_bucket      = excluded.gcs_bucket,
+    gcs_prefix      = excluded.gcs_prefix
+`);
+const dbListScrapTrials = db.prepare(`
+  SELECT * FROM scrap_trials ORDER BY started_at DESC LIMIT ?
+`);
+
+function scrapTrialRowToObj(r) {
+  return {
+    id: r.id,
+    status: r.status,
+    startedAt: r.started_at,
+    finishedAt: r.finished_at,
+    totalDocs: r.total_docs,
+    totalPages: r.total_pages,
+    processedDocs: r.processed_docs,
+    downloadedPdfs: r.downloaded_pdfs,
+    uploadedFiles: r.uploaded_files,
+    failedPages: r.failed_pages,
+    failedDocs: r.failed_docs,
+    failedUploads: r.failed_uploads,
+    lastError: r.last_error,
+    config: r.config_json ? (() => { try { return JSON.parse(r.config_json); } catch { return null; } })() : null,
+    gcsBucket: r.gcs_bucket,
+    gcsPrefix: r.gcs_prefix,
+    gcsEnabled: Boolean(r.gcs_bucket),
+  };
+}
+
+if (!__scrapTrialStoreWired) {
+  ncarScraper.setTrialStore(snap => {
+    dbInsertScrapTrial.run({
+      id: snap.id,
+      status: snap.status,
+      started_at: snap.startedAt || null,
+      finished_at: snap.finishedAt || null,
+      total_docs: snap.totalDocs || 0,
+      total_pages: snap.totalPages || 0,
+      processed_docs: snap.processedDocs || 0,
+      downloaded_pdfs: snap.downloadedPdfs || 0,
+      uploaded_files: snap.uploadedFiles || 0,
+      failed_pages: snap.failedPages || 0,
+      failed_docs: snap.failedDocs || 0,
+      failed_uploads: snap.failedUploads || 0,
+      last_error: snap.lastError || null,
+      config_json: snap.config ? JSON.stringify(snap.config) : null,
+      gcs_bucket: snap.gcsBucket || null,
+      gcs_prefix: snap.gcsPrefix || null,
+    });
+  });
+  try {
+    const existing = dbListScrapTrials.all(500).map(scrapTrialRowToObj);
+    ncarScraper.loadTrialsFromStore(existing);
+    console.log(`[Scrapper] Loaded ${existing.length} prior trial(s) from SQLite`);
+  } catch (e) {
+    console.warn('[Scrapper] Failed to hydrate trials:', e.message);
+  }
+  __scrapTrialStoreWired = true;
+}
 
 // Migrate policy_generation_history: add extraction_data and policy_uuid columns if missing
 try {
@@ -1887,7 +1997,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       // For page requests (HTML or SPA routes), redirect to login
-      const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench', '/audit-log'];
+      const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench', '/audit-log', '/scrapping'];
       const isSpaRoute = SPA_PREFIXES.some(p => url.pathname === p || (p !== '/' && url.pathname.startsWith(p + '/')));
       if (isSpaRoute || url.pathname.endsWith('.html')) {
         res.writeHead(302, { 'Location': '/login.html' });
@@ -4929,8 +5039,139 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- Scrapping (NCAR) API ----
+  if (url.pathname === '/api/scrapping/status' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, ...ncarScraper.getStatus() }));
+    return;
+  }
+
+  if (url.pathname === '/api/scrapping/gcs-check' && req.method === 'GET') {
+    try {
+      const result = await ncarScraper.gcsPing();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ...result }));
+    } catch (err) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ok: false, error: err.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/scrapping/start' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const status = await ncarScraper.startJob({
+        startPage: body.startPage,
+        perPage: body.perPage,
+        sort: body.sort,
+        order: body.order,
+        downloadPdf: body.downloadPdf,
+        uploadToGcs: body.uploadToGcs,
+        delayMs: body.delayMs,
+        maxPages: body.maxPages,
+        outDir: NCAR_OUT_DIR,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ...status }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/scrapping/stop' && req.method === 'POST') {
+    const stopped = ncarScraper.stopJob();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, stopped, ...ncarScraper.getStatus() }));
+    return;
+  }
+
+  if (url.pathname === '/api/scrapping/trials' && req.method === 'GET') {
+    try {
+      const limit = Math.min(500, parseInt(url.searchParams.get('limit') || '100', 10));
+      const rows = dbListScrapTrials.all(limit).map(scrapTrialRowToObj);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, trials: rows }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/scrapping/documents' && req.method === 'GET') {
+    try {
+      const limit = Math.min(200, parseInt(url.searchParams.get('limit') || '50', 10));
+      const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10));
+      const search = url.searchParams.get('search') || '';
+      const trialId = url.searchParams.get('trialId') || null;
+      const result = ncarScraper.listDocuments(NCAR_OUT_DIR, { trialId, limit, offset, search });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ...result }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
+  // GET /api/scrapping/pdf/<type>?trialId=<id>&folder=<relative folder>
+  const scrapPdfMatch = url.pathname.match(/^\/api\/scrapping\/pdf\/(original|translated|printed)$/);
+  if (scrapPdfMatch && req.method === 'GET') {
+    const folder = url.searchParams.get('folder') || '';
+    const trialId = url.searchParams.get('trialId') || '';
+    const type = scrapPdfMatch[1];
+    const pdfPath = ncarScraper.documentPdfPath(NCAR_OUT_DIR, trialId, folder, type);
+    if (!pdfPath) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'PDF not found' }));
+      return;
+    }
+    const stat = fs.statSync(pdfPath);
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Length': stat.size,
+      'Content-Disposition': `inline; filename="${type}.pdf"`,
+    });
+    fs.createReadStream(pdfPath).pipe(res);
+    return;
+  }
+
+  // GET /api/scrapping/trials/<id>/gcs-index → read scraped index from the bucket
+  const scrapTrialIdxMatch = url.pathname.match(/^\/api\/scrapping\/trials\/([^/]+)\/gcs-index$/);
+  if (scrapTrialIdxMatch && req.method === 'GET') {
+    try {
+      const trialId = scrapTrialIdxMatch[1];
+      const result = await ncarScraper.readTrialIndexFromGcs(trialId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ...result }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
+  // GET /api/scrapping/gcs-url?trialId=<id>&path=<rel>
+  if (url.pathname === '/api/scrapping/gcs-url' && req.method === 'GET') {
+    try {
+      const trialId = url.searchParams.get('trialId');
+      const rel = url.searchParams.get('path');
+      if (!trialId || !rel) throw new Error('trialId and path are required');
+      const signed = await ncarScraper.getSignedUrlForTrialFile(trialId, rel);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, url: signed }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
   // ---- Client-side routes (serve admin.html for SPA pages) ----
-  const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench', '/audit-log'];
+  const SPA_PREFIXES = ['/', '/dashboard', '/audit-sessions', '/audit-studio', '/controls-studio', '/merge-optimizer', '/policy-ingestion', '/org-contexts', '/prompts', '/file-collections', '/workbench', '/audit-log', '/scrapping'];
   const isSpaRoute = SPA_PREFIXES.some(p => url.pathname === p || (p !== '/' && url.pathname.startsWith(p + '/')));
   if (isSpaRoute) {
     serveStaticFile(res, path.join(__dirname, 'admin.html'));

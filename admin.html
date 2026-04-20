@@ -92,6 +92,18 @@
           </div>
         </div>
 
+        <button class="sidebar-section-toggle" data-section="scrapping">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2L14 2L14 6C14 6 11 6 8 6C5 6 2 6 2 6L2 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M4 9V13M8 9V13M12 9V13M3 6H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          SCRAPPING
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 5L6 7L8 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <div class="sidebar-section open" id="section-scrapping">
+          <button class="sidebar-item" data-page="scrapping">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3V12C2 12.6 2.4 13 3 13H13C13.6 13 14 12.6 14 12V5L11 2H3C2.4 2 2 2.4 2 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 2V5H14M5 8H11M5 10.5H9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            NCAR Documents
+          </button>
+        </div>
+
         <button class="sidebar-section-toggle" data-section="auditlog">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V14H3V2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 2V5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 8H11M5 10.5H9M5 13H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           AUDIT LOG
@@ -802,6 +814,192 @@
           </div>
         </section>
 
+        <!-- =================== SCRAPPING =================== -->
+        <section class="admin-page" id="page-scrapping">
+          <div class="page-container">
+            <div class="page-header page-header-row">
+              <div>
+                <h1 class="page-title">NCAR Document Scrapping</h1>
+                <p class="page-subtitle">Bulk-fetch regulations and documents from <strong>ncar.gov.sa</strong> — metadata, CSV, and PDFs</p>
+              </div>
+              <div class="scrap-header-actions">
+                <span class="scrap-pill" id="scrap-status-pill">
+                  <span class="scrap-dot" id="scrap-status-dot"></span>
+                  <span id="scrap-status-text">Idle</span>
+                </span>
+              </div>
+            </div>
+
+            <!-- Config card -->
+            <div class="admin-card scrap-card" id="scrap-config-card">
+              <div class="admin-card-header">
+                <div class="admin-card-header-left">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1V3M8 13V15M1 8H3M13 8H15M3.5 3.5L5 5M11 11L12.5 12.5M3.5 12.5L5 11M11 5L12.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  <h2>Configuration</h2>
+                </div>
+              </div>
+              <div class="scrap-config-grid">
+                <div class="scrap-field">
+                  <label for="scrap-start-page">Start Page</label>
+                  <input type="number" id="scrap-start-page" min="1" value="1">
+                  <small>Resume from this page (1-based)</small>
+                </div>
+                <div class="scrap-field">
+                  <label for="scrap-per-page">Per Page</label>
+                  <input type="number" id="scrap-per-page" min="1" max="100" value="10">
+                  <small>Documents per API page</small>
+                </div>
+                <div class="scrap-field">
+                  <label for="scrap-sort">Sort</label>
+                  <select id="scrap-sort">
+                    <option value="approveDate" selected>Approve Date</option>
+                    <option value="number">Number</option>
+                    <option value="title_ar">Title (AR)</option>
+                  </select>
+                </div>
+                <div class="scrap-field">
+                  <label for="scrap-order">Order</label>
+                  <select id="scrap-order">
+                    <option value="ASC" selected>Ascending</option>
+                    <option value="DESC">Descending</option>
+                  </select>
+                </div>
+                <div class="scrap-field">
+                  <label for="scrap-delay">Delay (ms)</label>
+                  <input type="number" id="scrap-delay" min="0" max="10000" value="400">
+                  <small>Pause between requests</small>
+                </div>
+                <div class="scrap-field">
+                  <label for="scrap-max-pages">Max Pages <span class="scrap-optional">(optional)</span></label>
+                  <input type="number" id="scrap-max-pages" min="1" placeholder="All pages">
+                  <small>Cap pages for a test run</small>
+                </div>
+                <div class="scrap-field scrap-field-toggle">
+                  <label class="scrap-switch">
+                    <input type="checkbox" id="scrap-download-pdf" checked>
+                    <span class="scrap-switch-slider"></span>
+                    <span class="scrap-switch-label">Download PDFs</span>
+                  </label>
+                  <small>Original, translated, and printed attachments</small>
+                </div>
+                <div class="scrap-field scrap-field-toggle">
+                  <label class="scrap-switch">
+                    <input type="checkbox" id="scrap-upload-gcs" checked>
+                    <span class="scrap-switch-slider"></span>
+                    <span class="scrap-switch-label">Upload to GCP Bucket</span>
+                  </label>
+                  <small id="scrap-gcs-hint">Each trial streams to its own folder in Cloud Storage</small>
+                </div>
+              </div>
+
+              <div class="scrap-trial-bar" id="scrap-trial-bar" style="display:none">
+                <span class="scrap-trial-bar-label">Active trial:</span>
+                <code class="scrap-trial-bar-id" id="scrap-trial-bar-id">—</code>
+                <span class="scrap-trial-bar-sep" id="scrap-trial-bar-gcs-sep" style="display:none">·</span>
+                <a class="scrap-trial-bar-gcs" id="scrap-trial-bar-gcs" href="#" target="_blank" style="display:none">View in GCS ↗</a>
+              </div>
+
+              <div class="scrap-actions">
+                <button class="btn-admin-primary" id="scrap-start-btn">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 2L11 7L3 12V2Z" fill="currentColor"/></svg>
+                  Start Scrapping
+                </button>
+                <button class="btn-admin-outline" id="scrap-stop-btn" disabled>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="3" width="8" height="8" rx="1" fill="currentColor"/></svg>
+                  Stop
+                </button>
+                <button class="btn-admin-ghost btn-admin-sm" id="scrap-refresh-btn">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7C2 4.2 4.2 2 7 2C9 2 10.7 3.1 11.5 4.8M12 7C12 9.8 9.8 12 7 12C5 12 3.3 10.9 2.5 9.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.5 2V4.8H12M4.5 12V9.2H2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <!-- Progress / metrics -->
+            <div class="scrap-metrics-grid" id="scrap-metrics">
+              <div class="scrap-metric">
+                <div class="scrap-metric-label">Documents</div>
+                <div class="scrap-metric-value" id="scrap-m-docs">0 / 0</div>
+              </div>
+              <div class="scrap-metric">
+                <div class="scrap-metric-label">Current Page</div>
+                <div class="scrap-metric-value" id="scrap-m-page">—</div>
+              </div>
+              <div class="scrap-metric">
+                <div class="scrap-metric-label">PDFs Downloaded</div>
+                <div class="scrap-metric-value" id="scrap-m-pdfs">0</div>
+              </div>
+              <div class="scrap-metric">
+                <div class="scrap-metric-label">Failed</div>
+                <div class="scrap-metric-value" id="scrap-m-failed">0</div>
+              </div>
+            </div>
+
+            <div class="scrap-progress-wrap" id="scrap-progress-wrap">
+              <div class="scrap-progress-bar">
+                <div class="scrap-progress-fill" id="scrap-progress-fill" style="width:0%"></div>
+              </div>
+              <div class="scrap-progress-text" id="scrap-progress-text">0%</div>
+            </div>
+
+            <!-- Log + Documents + Trials tabs -->
+            <div class="scrap-tabs">
+              <button class="scrap-tab active" data-scrap-tab="log">Live Log</button>
+              <button class="scrap-tab" data-scrap-tab="docs">Scraped Documents</button>
+              <button class="scrap-tab" data-scrap-tab="trials">Trials <span class="scrap-badge" id="scrap-trials-count">0</span></button>
+            </div>
+
+            <div class="scrap-tab-content" id="scrap-tab-log">
+              <div class="admin-card scrap-log-card">
+                <div class="admin-card-header">
+                  <div class="admin-card-header-left">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V14H3V2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M5 8H11M5 10.5H9M5 6H8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                    <h2>Live Log</h2>
+                  </div>
+                  <button class="btn-admin-ghost btn-admin-sm" id="scrap-clear-log" title="Clear display">Clear</button>
+                </div>
+                <pre class="scrap-log" id="scrap-log-pane">No activity yet. Press <strong>Start Scrapping</strong> to begin.</pre>
+              </div>
+            </div>
+
+            <div class="scrap-tab-content" id="scrap-tab-docs" style="display:none">
+              <div class="admin-card">
+                <div class="admin-card-header">
+                  <div class="admin-card-header-left">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V13C13 13.6 12.6 14 12 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2Z" stroke="currentColor" stroke-width="1.5"/></svg>
+                    <h2>Scraped Documents</h2>
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <select id="scrap-docs-trial" class="scrap-trial-select"><option value="">Latest trial</option></select>
+                    <div class="admin-search-bar" style="max-width:280px;margin:0">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                      <input type="text" id="scrap-docs-search" placeholder="Search title or number...">
+                    </div>
+                  </div>
+                </div>
+                <div id="scrap-docs-list">
+                  <div class="scrap-empty">No documents scraped yet.</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="scrap-tab-content" id="scrap-tab-trials" style="display:none">
+              <div class="admin-card">
+                <div class="admin-card-header">
+                  <div class="admin-card-header-left">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4H14M2 8H14M2 12H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    <h2>Scrapping Trials</h2>
+                  </div>
+                  <button class="btn-admin-ghost btn-admin-sm" id="scrap-trials-refresh">Refresh</button>
+                </div>
+                <div id="scrap-trials-list">
+                  <div class="scrap-empty">No trials yet.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- =================== AUDIT LOG =================== -->
         <section class="admin-page" id="page-audit-log">
           <div class="page-container">
@@ -1254,6 +1452,59 @@
 
   <!-- Toast Container -->
   <div class="toast-container" id="toast-container"></div>
+
+  <!-- Scrapping: Results modal (loaded from GCS bucket) -->
+  <div class="scrap-modal-overlay" id="scrap-results-overlay">
+    <div class="scrap-modal scrap-modal-wide" role="dialog" aria-modal="true" aria-labelledby="scrap-results-title">
+      <div class="scrap-modal-header">
+        <div>
+          <h2 id="scrap-results-title">Scrapping Results</h2>
+          <div class="scrap-modal-sub" id="scrap-results-sub">Loading from Cloud Storage…</div>
+        </div>
+        <div class="scrap-modal-header-actions">
+          <a class="btn-admin-ghost btn-admin-sm" id="scrap-results-console-link" target="_blank" style="display:none">Open in GCS Console ↗</a>
+          <button class="scrap-modal-close" id="scrap-results-close" title="Close" aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="scrap-modal-toolbar">
+        <div class="admin-search-bar" style="max-width:320px;margin:0">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M9 9L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <input type="text" id="scrap-results-search" placeholder="Filter by title or number...">
+        </div>
+        <div class="scrap-modal-stats" id="scrap-results-stats"></div>
+      </div>
+      <div class="scrap-modal-body" id="scrap-results-body">
+        <div class="scrap-results-loading">
+          <div class="spinner-sm"></div>
+          <span>Loading from Cloud Storage…</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scrapping: inline PDF viewer -->
+  <div class="scrap-modal-overlay" id="scrap-pdf-overlay">
+    <div class="scrap-modal scrap-modal-pdf" role="dialog" aria-modal="true">
+      <div class="scrap-modal-header">
+        <div>
+          <h2 id="scrap-pdf-title">PDF Viewer</h2>
+          <div class="scrap-modal-sub" id="scrap-pdf-sub"></div>
+        </div>
+        <div class="scrap-modal-header-actions">
+          <a class="btn-admin-ghost btn-admin-sm" id="scrap-pdf-open-tab" target="_blank" rel="noopener">Open in new tab ↗</a>
+          <a class="btn-admin-ghost btn-admin-sm" id="scrap-pdf-download" download>Download</a>
+          <button class="scrap-modal-close" id="scrap-pdf-close" title="Close" aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="scrap-modal-body scrap-pdf-body">
+        <iframe id="scrap-pdf-frame" title="PDF preview" src="about:blank"></iframe>
+      </div>
+    </div>
+  </div>
 
   <!-- Confirm Dialog -->
   <div class="confirm-dialog-overlay" id="confirm-dialog-overlay">

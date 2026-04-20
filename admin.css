@@ -6224,3 +6224,493 @@
   .al-log-change-row { flex-wrap: wrap; }
   .al-log-old, .al-log-new { max-width: 100%; }
 }
+
+
+/* ============================================================
+   SCRAPPING (NCAR) — added by Scrapping section
+   ============================================================ */
+.scrap-header-actions { display: flex; align-items: center; gap: 8px; }
+
+.scrap-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 600;
+  background: #f3f4f6; color: #374151;
+  border: 1px solid #e5e7eb;
+}
+.scrap-pill .scrap-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #9ca3af;
+}
+.scrap-st-idle    { background: #f3f4f6; color: #374151; border-color: #e5e7eb; }
+.scrap-st-idle    .scrap-dot { background: #9ca3af; }
+.scrap-st-running { background: rgba(0,119,204,0.10); color: var(--admin-primary); border-color: rgba(0,119,204,0.30); }
+.scrap-st-running .scrap-dot { background: var(--admin-primary); animation: scrap-pulse 1.2s ease-in-out infinite; }
+.scrap-st-done    { background: rgba(16,185,129,0.10); color: #059669; border-color: rgba(16,185,129,0.30); }
+.scrap-st-done    .scrap-dot { background: #10b981; }
+.scrap-st-stopped { background: rgba(245,158,11,0.10); color: #b45309; border-color: rgba(245,158,11,0.30); }
+.scrap-st-stopped .scrap-dot { background: #f59e0b; }
+.scrap-st-failed  { background: rgba(239,68,68,0.10); color: #dc2626; border-color: rgba(239,68,68,0.30); }
+.scrap-st-failed  .scrap-dot { background: #ef4444; }
+
+@keyframes scrap-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(1.25); }
+}
+
+.scrap-card { margin-bottom: 16px; }
+
+.scrap-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  padding: 8px 0 4px;
+}
+.scrap-field { display: flex; flex-direction: column; gap: 4px; }
+.scrap-field label {
+  font-size: 12px; font-weight: 600; color: #374151;
+}
+.scrap-field .scrap-optional { font-weight: 400; color: #9ca3af; font-size: 11px; }
+.scrap-field input[type="number"],
+.scrap-field select {
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.scrap-field input[type="number"]:focus,
+.scrap-field select:focus {
+  border-color: var(--admin-primary);
+  box-shadow: 0 0 0 3px rgba(0,119,204,0.12);
+}
+.scrap-field small { font-size: 11px; color: #9ca3af; }
+
+.scrap-field-toggle { justify-content: flex-end; }
+.scrap-switch {
+  display: inline-flex; align-items: center; gap: 10px;
+  cursor: pointer; user-select: none;
+}
+.scrap-switch input { display: none; }
+.scrap-switch-slider {
+  position: relative;
+  width: 34px; height: 20px;
+  background: #d1d5db;
+  border-radius: 999px;
+  transition: background 0.18s;
+}
+.scrap-switch-slider::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.18s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+.scrap-switch input:checked + .scrap-switch-slider { background: var(--admin-primary); }
+.scrap-switch input:checked + .scrap-switch-slider::after { transform: translateX(14px); }
+.scrap-switch-label { font-size: 13px; font-weight: 500; color: #374151; }
+
+.scrap-actions {
+  display: flex; gap: 8px; align-items: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.scrap-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.scrap-metric {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.scrap-metric-label { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+.scrap-metric-value { font-size: 22px; font-weight: 700; color: #111827; margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+.scrap-progress-wrap {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: flex; align-items: center; gap: 14px;
+}
+.scrap-progress-bar {
+  flex: 1;
+  height: 10px;
+  background: #f3f4f6;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.scrap-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--admin-primary), var(--admin-primary-light));
+  transition: width 0.4s ease;
+}
+.scrap-progress-text { font-size: 13px; font-weight: 600; color: #374151; min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.scrap-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 16px;
+}
+.scrap-tab {
+  background: none;
+  border: none;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.scrap-tab:hover { color: #374151; }
+.scrap-tab.active { color: var(--admin-primary); border-bottom-color: var(--admin-primary); }
+
+.scrap-log-card .admin-card-header { padding-bottom: 8px; }
+.scrap-log {
+  margin: 0;
+  padding: 14px 16px;
+  background: #0A1628;
+  color: #d1e5f7;
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  border-radius: 8px;
+  max-height: 480px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.scrap-log strong { color: #7ec8ff; font-weight: 600; }
+
+.scrap-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.scrap-table-wrap { overflow-x: auto; }
+.scrap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.scrap-table thead th {
+  text-align: left;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.scrap-table tbody td {
+  padding: 12px;
+  border-bottom: 1px solid #f3f4f6;
+  vertical-align: top;
+}
+.scrap-table tbody tr:hover { background: #fafbfc; }
+.scrap-idx { color: #9ca3af; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.scrap-nowrap { white-space: nowrap; }
+.scrap-title-ar { font-weight: 600; color: #111827; }
+.scrap-title-en { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.scrap-muted { color: #9ca3af; }
+.scrap-pdf-link {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(0,119,204,0.08);
+  color: var(--admin-primary);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  margin: 1px 2px;
+}
+.scrap-pdf-link:hover { background: rgba(0,119,204,0.16); }
+
+.scrap-docs-footer {
+  padding: 12px 16px 0;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+@media (max-width: 768px) {
+  .scrap-config-grid { grid-template-columns: 1fr 1fr; }
+  .scrap-metrics-grid { grid-template-columns: 1fr 1fr; }
+  .scrap-actions { flex-wrap: wrap; }
+}
+
+
+/* Trial bar + Trials tab + GCS toggle extras */
+.scrap-trial-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: rgba(0,119,204,0.06);
+  border: 1px solid rgba(0,119,204,0.18);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.scrap-trial-bar-label { color: #6b7280; font-weight: 600; }
+.scrap-trial-bar-id {
+  background: #fff;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  color: #111827;
+}
+.scrap-trial-bar-sep { color: #9ca3af; }
+.scrap-trial-bar-gcs {
+  color: var(--admin-primary);
+  text-decoration: none;
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+}
+.scrap-trial-bar-gcs:hover { text-decoration: underline; }
+
+.scrap-warning { color: #b45309 !important; }
+
+.scrap-badge {
+  display: inline-block;
+  margin-left: 6px;
+  background: #e5e7eb;
+  color: #6b7280;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.scrap-tab.active .scrap-badge {
+  background: var(--admin-primary);
+  color: #fff;
+}
+
+.scrap-trial-select {
+  padding: 7px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 12px;
+  background: #fff;
+  outline: none;
+  max-width: 300px;
+}
+
+.scrap-trial-code {
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  font-size: 11px;
+  background: #f3f4f6;
+  padding: 3px 7px;
+  border-radius: 4px;
+  color: #111827;
+}
+
+.scrap-pdf-link-gcs {
+  background: rgba(66, 133, 244, 0.10);
+  color: #1a73e8;
+}
+.scrap-pdf-link-gcs:hover { background: rgba(66, 133, 244, 0.20); }
+
+.scrap-table td.center { text-align: center; }
+
+
+/* ============================================================
+   Scrapping: Results modal + PDF viewer
+   ============================================================ */
+.scrap-modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(10, 22, 40, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+.scrap-modal-overlay.active {
+  display: flex;
+  opacity: 1;
+}
+.scrap-modal {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+  width: 100%;
+  max-width: 1080px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scrap-modal-in 0.18s ease-out;
+}
+@keyframes scrap-modal-in {
+  from { transform: translateY(10px) scale(0.98); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+.scrap-modal-wide { max-width: 1200px; }
+.scrap-modal-pdf  { max-width: 1100px; height: 90vh; }
+
+.scrap-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.scrap-modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+}
+.scrap-modal-sub {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+  word-break: break-all;
+}
+.scrap-modal-sub code.scrap-trial-bar-id { font-size: 11px; }
+.scrap-modal-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.scrap-modal-close {
+  width: 32px; height: 32px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  border-radius: 6px;
+  color: #6b7280;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.scrap-modal-close:hover { background: #f3f4f6; color: #111827; }
+
+.scrap-modal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 22px;
+  border-bottom: 1px solid #f3f4f6;
+  background: #fafbfc;
+}
+.scrap-modal-stats {
+  font-size: 12px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+.scrap-modal-stats strong { color: #111827; font-weight: 700; }
+
+.scrap-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+}
+.scrap-modal-wide .scrap-modal-body { padding: 0 10px; }
+
+.scrap-results-loading {
+  display: flex; align-items: center; justify-content: center;
+  gap: 10px;
+  padding: 60px 20px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.scrap-results-error {
+  padding: 40px 24px;
+  text-align: center;
+  color: #dc2626;
+}
+.scrap-results-error-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.scrap-results-error-msg {
+  font-size: 13px;
+  color: #b91c1c;
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  margin-bottom: 12px;
+  word-break: break-word;
+}
+.scrap-results-error-hint {
+  font-size: 12px;
+  color: #6b7280;
+  max-width: 540px;
+  margin: 0 auto;
+}
+
+.scrap-actions-cell {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.scrap-pdf-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: rgba(0,119,204,0.08);
+  color: var(--admin-primary);
+  border: 1px solid rgba(0,119,204,0.15);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-family: inherit;
+}
+.scrap-pdf-btn:hover {
+  background: rgba(0,119,204,0.16);
+  border-color: rgba(0,119,204,0.30);
+}
+.scrap-pdf-btn svg { flex-shrink: 0; }
+
+/* Inline PDF viewer */
+.scrap-pdf-body {
+  padding: 0;
+  background: #1e1e1e;
+}
+.scrap-pdf-body iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #1e1e1e;
+}
+
+@media (max-width: 768px) {
+  .scrap-modal { max-height: 95vh; }
+  .scrap-modal-header, .scrap-modal-toolbar { padding-inline: 16px; }
+  .scrap-modal-pdf { height: 95vh; }
+}

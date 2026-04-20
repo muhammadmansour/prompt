@@ -62,6 +62,7 @@ const PAGE_NAMES = {
   'file-collections': 'File Collections',
   'workbench': 'Workbench',
   'audit-log': 'Audit Log',
+  'scrapping': 'NCAR Document Scrapping',
 };
 const VALID_PAGES = Object.keys(PAGE_NAMES);
 let currentPage = null;
@@ -112,6 +113,7 @@ function navigateTo(page, pushState = true, subId = null) {
   if (page === 'policy-ingestion') loadPolicyIngestion(subId);
   if (page === 'workbench') loadWorkbench(subId);
   if (page === 'audit-log') loadAuditLog(subId);
+  if (page === 'scrapping') loadScrapping();
 
   // Scroll to top
   window.scrollTo(0, 0);
@@ -10529,6 +10531,670 @@ function alRenderLinkedCard(title, items) {
 document.getElementById('al-ca-search').addEventListener('input', (e) => {
   alRenderCAGrid(e.target.value);
 });
+
+// ─── Scrapping (NCAR) ────────────────────────────────────────
+
+const SCRAP_API = '/api/scrapping';
+const scrapState = {
+  polling: null,
+  status: 'idle',
+  docsCache: [],
+  docsTotal: 0,
+  docsTrialId: null,
+  trials: [],
+  activeTab: 'log',
+  searchQ: '',
+  initialized: false,
+  gcsConfigured: false,
+  gcsBucket: null,
+};
+
+async function loadScrapping() {
+  scrapBindUi();
+  await scrapCheckGcs();
+  await scrapRefreshStatus();
+  await scrapRefreshTrials();
+  await scrapLoadDocuments();
+  scrapStartPolling();
+}
+
+function scrapBindUi() {
+  if (scrapState.initialized) return;
+  scrapState.initialized = true;
+
+  document.getElementById('scrap-start-btn').addEventListener('click', scrapStart);
+  document.getElementById('scrap-stop-btn').addEventListener('click', scrapStop);
+  document.getElementById('scrap-refresh-btn').addEventListener('click', async () => {
+    await scrapRefreshStatus();
+    await scrapRefreshTrials();
+    await scrapLoadDocuments();
+  });
+  document.getElementById('scrap-clear-log').addEventListener('click', () => {
+    const pane = document.getElementById('scrap-log-pane');
+    if (pane) pane.textContent = '(cleared — live log will resume on next poll)';
+  });
+
+  document.querySelectorAll('.scrap-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.scrapTab;
+      scrapState.activeTab = tab;
+      document.querySelectorAll('.scrap-tab').forEach(b => b.classList.toggle('active', b === btn));
+      document.getElementById('scrap-tab-log').style.display = tab === 'log' ? '' : 'none';
+      document.getElementById('scrap-tab-docs').style.display = tab === 'docs' ? '' : 'none';
+      document.getElementById('scrap-tab-trials').style.display = tab === 'trials' ? '' : 'none';
+      if (tab === 'docs') scrapLoadDocuments();
+      if (tab === 'trials') scrapRefreshTrials();
+    });
+  });
+
+  const search = document.getElementById('scrap-docs-search');
+  let searchTimer = null;
+  search.addEventListener('input', (e) => {
+    scrapState.searchQ = e.target.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(scrapLoadDocuments, 250);
+  });
+
+  const trialSel = document.getElementById('scrap-docs-trial');
+  if (trialSel) {
+    trialSel.addEventListener('change', (e) => {
+      scrapState.docsTrialId = e.target.value || null;
+      scrapLoadDocuments();
+    });
+  }
+
+  const refreshT = document.getElementById('scrap-trials-refresh');
+  if (refreshT) refreshT.addEventListener('click', scrapRefreshTrials);
+}
+
+async function scrapCheckGcs() {
+  try {
+    const res = await fetch(`${SCRAP_API}/gcs-check`);
+    const data = await res.json();
+    scrapState.gcsConfigured = Boolean(data.ok);
+    scrapState.gcsBucket = data.bucket || null;
+    const toggle = document.getElementById('scrap-upload-gcs');
+    const hint = document.getElementById('scrap-gcs-hint');
+    if (data.ok) {
+      toggle.disabled = false;
+      toggle.checked = true;
+      hint.textContent = `Uploads to gs://${data.bucket}/ per trial`;
+      hint.classList.remove('scrap-warning');
+    } else {
+      toggle.checked = false;
+      toggle.disabled = true;
+      hint.textContent = `GCP not configured: ${data.error || 'missing GCP_BUCKET / credentials'}`;
+      hint.classList.add('scrap-warning');
+    }
+  } catch (_) { /* ignore */ }
+}
+
+async function scrapStart() {
+  const body = {
+    startPage: parseInt(document.getElementById('scrap-start-page').value, 10) || 1,
+    perPage: parseInt(document.getElementById('scrap-per-page').value, 10) || 10,
+    sort: document.getElementById('scrap-sort').value,
+    order: document.getElementById('scrap-order').value,
+    delayMs: parseInt(document.getElementById('scrap-delay').value, 10) || 0,
+    downloadPdf: document.getElementById('scrap-download-pdf').checked,
+    uploadToGcs: document.getElementById('scrap-upload-gcs').checked,
+  };
+  const maxPagesVal = document.getElementById('scrap-max-pages').value;
+  if (maxPagesVal) body.maxPages = parseInt(maxPagesVal, 10);
+
+  const btn = document.getElementById('scrap-start-btn');
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${SCRAP_API}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to start');
+    toast('success', 'Started', `Trial ${data.trialId} is running.`);
+    scrapRenderStatus(data);
+    scrapStartPolling();
+    scrapRefreshTrials();
+  } catch (err) {
+    toast('error', 'Error', err.message);
+    btn.disabled = false;
+  }
+}
+
+async function scrapStop() {
+  if (!await showConfirm({
+    title: 'Stop scrapping?',
+    message: 'The current trial will halt. Files already uploaded to GCS remain; start a new trial to resume.',
+    confirmText: 'Stop',
+    type: 'warning',
+  })) return;
+  try {
+    const res = await fetch(`${SCRAP_API}/stop`, { method: 'POST' });
+    const data = await res.json();
+    scrapRenderStatus(data);
+    toast('info', 'Stopped', 'Scrapping trial stopped.');
+    scrapRefreshTrials();
+  } catch (err) {
+    toast('error', 'Error', err.message);
+  }
+}
+
+async function scrapRefreshStatus() {
+  try {
+    const res = await fetch(`${SCRAP_API}/status`);
+    const data = await res.json();
+    if (data.success) scrapRenderStatus(data);
+  } catch (_) { /* ignore */ }
+}
+
+function scrapStartPolling() {
+  if (scrapState.polling) clearInterval(scrapState.polling);
+  scrapState.polling = setInterval(async () => {
+    if (currentPage !== 'scrapping') {
+      clearInterval(scrapState.polling);
+      scrapState.polling = null;
+      return;
+    }
+    await scrapRefreshStatus();
+    if (['completed', 'stopped', 'failed', 'idle'].includes(scrapState.status)) {
+      clearInterval(scrapState.polling);
+      scrapState.polling = setInterval(scrapRefreshStatus, 5000);
+      if (scrapState.activeTab === 'docs') scrapLoadDocuments();
+      if (scrapState.activeTab === 'trials') scrapRefreshTrials();
+    }
+  }, 1500);
+}
+
+function scrapRenderStatus(s) {
+  const prevStatus = scrapState.status;
+  const prevTrial = scrapState.lastRunningTrialId;
+  scrapState.status = s.status || 'idle';
+
+  // Auto-open the results modal when a run that was "running" transitions
+  // to a terminal state. Only triggered when the user is on this page.
+  if (prevStatus === 'running' && ['completed', 'stopped', 'failed'].includes(s.status)) {
+    const tid = s.trialId || prevTrial;
+    if (tid && s.gcsEnabled !== false && s.gcsConfigured) {
+      // Let the "stopped/completed" log line render first
+      setTimeout(() => scrapShowResults(tid), 500);
+    }
+  }
+  if (s.status === 'running' && s.trialId) scrapState.lastRunningTrialId = s.trialId;
+
+
+  const pill = document.getElementById('scrap-status-pill');
+  const dot = document.getElementById('scrap-status-dot');
+  const txt = document.getElementById('scrap-status-text');
+  const statusCfg = {
+    idle:      { label: 'Idle',      cls: 'scrap-st-idle' },
+    running:   { label: 'Running',   cls: 'scrap-st-running' },
+    completed: { label: 'Completed', cls: 'scrap-st-done' },
+    stopped:   { label: 'Stopped',   cls: 'scrap-st-stopped' },
+    failed:    { label: 'Failed',    cls: 'scrap-st-failed' },
+  };
+  const cfg = statusCfg[s.status] || statusCfg.idle;
+  pill.className = 'scrap-pill ' + cfg.cls;
+  txt.textContent = cfg.label;
+  dot.className = 'scrap-dot';
+
+  const running = s.status === 'running';
+  document.getElementById('scrap-start-btn').disabled = running;
+  document.getElementById('scrap-stop-btn').disabled = !running;
+
+  // Trial bar
+  const bar = document.getElementById('scrap-trial-bar');
+  const barId = document.getElementById('scrap-trial-bar-id');
+  const barGcs = document.getElementById('scrap-trial-bar-gcs');
+  const barSep = document.getElementById('scrap-trial-bar-gcs-sep');
+  if (s.trialId) {
+    bar.style.display = '';
+    barId.textContent = s.trialId;
+    if (s.gcsEnabled && s.gcsBucket && s.gcsPrefix) {
+      barGcs.style.display = '';
+      barSep.style.display = '';
+      barGcs.href = `https://console.cloud.google.com/storage/browser/${s.gcsBucket}/${s.gcsPrefix}`;
+      barGcs.textContent = `gs://${s.gcsBucket}/${s.gcsPrefix}/`;
+    } else {
+      barGcs.style.display = 'none';
+      barSep.style.display = 'none';
+    }
+  } else {
+    bar.style.display = 'none';
+  }
+
+  // Metrics
+  document.getElementById('scrap-m-docs').textContent = `${s.processedDocs || 0} / ${s.totalDocs || 0}`;
+  document.getElementById('scrap-m-page').textContent = s.totalPages
+    ? `${s.currentPage || 0} / ${s.totalPages}`
+    : (s.currentPage ? String(s.currentPage) : '—');
+  document.getElementById('scrap-m-pdfs').textContent = s.gcsEnabled
+    ? `${s.downloadedPdfs || 0} · ↑${s.uploadedFiles || 0}`
+    : String(s.downloadedPdfs || 0);
+  document.getElementById('scrap-m-failed').textContent = String((s.failedDocs || 0) + (s.failedPages || 0) + (s.failedUploads || 0));
+
+  const pct = s.progressPct || 0;
+  document.getElementById('scrap-progress-fill').style.width = pct + '%';
+  document.getElementById('scrap-progress-text').textContent = pct + '%';
+
+  const pane = document.getElementById('scrap-log-pane');
+  if (pane && Array.isArray(s.log)) {
+    const wasAtBottom = (pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 20);
+    pane.textContent = s.log.length ? s.log.join('\n') : 'No activity yet.';
+    if (wasAtBottom) pane.scrollTop = pane.scrollHeight;
+  }
+
+  if (s.lastError && s.status === 'failed') {
+    const pane2 = document.getElementById('scrap-log-pane');
+    if (pane2) pane2.textContent += '\n\n✗ ' + s.lastError;
+  }
+}
+
+async function scrapLoadDocuments() {
+  try {
+    const params = new URLSearchParams({ limit: '100', offset: '0' });
+    if (scrapState.searchQ) params.set('search', scrapState.searchQ);
+    if (scrapState.docsTrialId) params.set('trialId', scrapState.docsTrialId);
+    const res = await fetch(`${SCRAP_API}/documents?${params.toString()}`);
+    const data = await res.json();
+    if (!data.success) return;
+    scrapState.docsCache = data.items || [];
+    scrapState.docsTotal = data.total || 0;
+    if (!scrapState.docsTrialId && data.trialId) scrapState.docsTrialId = null; // keep "latest"
+    scrapRenderDocs(data.trialId);
+  } catch (_) { /* ignore */ }
+}
+
+function scrapRenderDocs(effectiveTrialId) {
+  const el = document.getElementById('scrap-docs-list');
+  if (!el) return;
+  if (!scrapState.docsCache.length) {
+    el.innerHTML = '<div class="scrap-empty">No documents scraped yet.</div>';
+    return;
+  }
+
+  const tId = scrapState.docsTrialId || effectiveTrialId || '';
+
+  const rows = scrapState.docsCache.map(d => {
+    const qs = (type) => `trialId=${encodeURIComponent(tId)}&folder=${encodeURIComponent(d.folder)}`;
+    const pdfLinks = [];
+    if (d.has_original)   pdfLinks.push(`<a class="scrap-pdf-link" target="_blank" href="${SCRAP_API}/pdf/original?${qs()}">Original</a>`);
+    if (d.has_translated) pdfLinks.push(`<a class="scrap-pdf-link" target="_blank" href="${SCRAP_API}/pdf/translated?${qs()}">Translated</a>`);
+    if (d.has_printed)    pdfLinks.push(`<a class="scrap-pdf-link" target="_blank" href="${SCRAP_API}/pdf/printed?${qs()}">Printed</a>`);
+    const pdfCell = pdfLinks.length ? pdfLinks.join(' · ') : '<span class="scrap-muted">—</span>';
+
+    let gcsCell = '<span class="scrap-muted">—</span>';
+    if (scrapState.gcsConfigured && tId && (d.has_original || d.has_translated || d.has_printed)) {
+      const gcsLinks = [];
+      if (d.has_original)   gcsLinks.push(`<a class="scrap-pdf-link scrap-pdf-link-gcs" href="javascript:void(0)" onclick="scrapOpenGcs('${tId}','${d.folder}/original.pdf')">Orig</a>`);
+      if (d.has_translated) gcsLinks.push(`<a class="scrap-pdf-link scrap-pdf-link-gcs" href="javascript:void(0)" onclick="scrapOpenGcs('${tId}','${d.folder}/translated.pdf')">Trans</a>`);
+      if (d.has_printed)    gcsLinks.push(`<a class="scrap-pdf-link scrap-pdf-link-gcs" href="javascript:void(0)" onclick="scrapOpenGcs('${tId}','${d.folder}/printed.pdf')">Print</a>`);
+      gcsCell = gcsLinks.join(' · ');
+    }
+
+    return `<tr>
+      <td class="scrap-idx">#${d.idx}</td>
+      <td>
+        <div class="scrap-title-ar" dir="rtl">${esc(d.title_ar || '')}</div>
+        ${d.title_en ? `<div class="scrap-title-en">${esc(d.title_en)}</div>` : ''}
+      </td>
+      <td class="scrap-nowrap">${esc(d.number || '')}</td>
+      <td class="scrap-nowrap">${esc(d.approve_date || '')}</td>
+      <td>${esc(d.approve_type || '')}</td>
+      <td>${esc(d.marker_en || '')}</td>
+      <td>${pdfCell}</td>
+      <td>${gcsCell}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="scrap-table-wrap">
+      <table class="scrap-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Title</th>
+            <th>Number</th>
+            <th>Approve Date</th>
+            <th>Approve Type</th>
+            <th>Marker</th>
+            <th>Local PDFs</th>
+            <th>GCS</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="scrap-docs-footer">
+      ${tId ? `Trial <code>${esc(tId)}</code> — ` : ''}Showing ${scrapState.docsCache.length} of ${scrapState.docsTotal} scraped document${scrapState.docsTotal === 1 ? '' : 's'}
+    </div>
+  `;
+}
+
+async function scrapOpenGcs(trialId, relPath) {
+  try {
+    const params = new URLSearchParams({ trialId, path: relPath });
+    const res = await fetch(`${SCRAP_API}/gcs-url?${params.toString()}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to sign URL');
+    window.open(data.url, '_blank');
+  } catch (err) {
+    toast('error', 'GCS', err.message);
+  }
+}
+window.scrapOpenGcs = scrapOpenGcs;
+
+async function scrapRefreshTrials() {
+  try {
+    const res = await fetch(`${SCRAP_API}/trials?limit=200`);
+    const data = await res.json();
+    if (!data.success) return;
+    scrapState.trials = data.trials || [];
+    document.getElementById('scrap-trials-count').textContent = String(scrapState.trials.length);
+
+    // Populate trial dropdown for Documents tab
+    const sel = document.getElementById('scrap-docs-trial');
+    if (sel) {
+      const current = sel.value;
+      sel.innerHTML = '<option value="">Latest trial</option>' +
+        scrapState.trials.map(t => `<option value="${esc(t.id)}">${esc(t.id)} · ${esc(t.status)}</option>`).join('');
+      sel.value = current;
+    }
+
+    scrapRenderTrials();
+  } catch (_) { /* ignore */ }
+}
+
+function scrapRenderTrials() {
+  const el = document.getElementById('scrap-trials-list');
+  if (!el) return;
+  if (!scrapState.trials.length) {
+    el.innerHTML = '<div class="scrap-empty">No trials yet. Start one to create the first trial.</div>';
+    return;
+  }
+
+  const fmtDate = (s) => s ? new Date(s).toLocaleString() : '—';
+  const fmtDur = (a, b) => {
+    if (!a) return '—';
+    const end = b ? new Date(b) : new Date();
+    const ms = end - new Date(a);
+    if (ms < 0) return '—';
+    const mins = Math.floor(ms / 60000);
+    const secs = Math.floor((ms % 60000) / 1000);
+    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  };
+  const statusBadge = (st) => {
+    const cfg = {
+      running:   'scrap-st-running',
+      completed: 'scrap-st-done',
+      stopped:   'scrap-st-stopped',
+      failed:    'scrap-st-failed',
+      idle:      'scrap-st-idle',
+    };
+    return `<span class="scrap-pill ${cfg[st] || 'scrap-st-idle'}"><span class="scrap-dot"></span>${esc(st || 'idle')}</span>`;
+  };
+
+  const rows = scrapState.trials.map(t => {
+    const gcs = t.gcsEnabled && t.gcsBucket
+      ? `<a class="scrap-pdf-link" href="https://console.cloud.google.com/storage/browser/${encodeURIComponent(t.gcsBucket)}/${encodeURIComponent(t.gcsPrefix)}" target="_blank">gs://${esc(t.gcsBucket)}/${esc(t.gcsPrefix)}/ ↗</a>`
+      : '<span class="scrap-muted">—</span>';
+    const cfg = t.config || {};
+    const configSummary = cfg.startPage != null
+      ? `p${cfg.startPage}${cfg.maxPages ? `..${cfg.startPage + cfg.maxPages - 1}` : '→end'} · ${cfg.perPage || '?'}/pg`
+      : '—';
+    return `<tr>
+      <td><code class="scrap-trial-code">${esc(t.id)}</code></td>
+      <td>${statusBadge(t.status)}</td>
+      <td class="scrap-nowrap">${esc(fmtDate(t.startedAt))}</td>
+      <td class="scrap-nowrap">${esc(fmtDur(t.startedAt, t.finishedAt))}</td>
+      <td class="center">${t.processedDocs || 0} / ${t.totalDocs || 0}</td>
+      <td class="center">${t.downloadedPdfs || 0}</td>
+      <td class="center">${t.uploadedFiles || 0}</td>
+      <td>${configSummary}</td>
+      <td>${gcs}</td>
+      <td class="scrap-actions-cell">
+        ${t.gcsEnabled ? `<button class="scrap-pdf-link" onclick="scrapShowResults('${esc(t.id)}')">Open results</button>` : ''}
+        <button class="scrap-pdf-link" onclick="scrapViewTrialDocs('${esc(t.id)}')">View docs</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="scrap-table-wrap">
+      <table class="scrap-table">
+        <thead>
+          <tr>
+            <th>Trial ID</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Docs</th>
+            <th>PDFs</th>
+            <th>Uploaded</th>
+            <th>Config</th>
+            <th>GCS</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function scrapViewTrialDocs(trialId) {
+  scrapState.docsTrialId = trialId;
+  const sel = document.getElementById('scrap-docs-trial');
+  if (sel) sel.value = trialId;
+  const tabBtn = document.querySelector('.scrap-tab[data-scrap-tab="docs"]');
+  if (tabBtn) tabBtn.click();
+}
+window.scrapViewTrialDocs = scrapViewTrialDocs;
+
+// ─── Scrapping: GCS results modal + PDF viewer ────────────────
+
+const scrapResults = {
+  trialId: null,
+  items: [],
+  filtered: [],
+  bucket: null,
+  prefix: null,
+  consoleUrl: null,
+  manifest: null,
+  bound: false,
+};
+
+function scrapBindResultsModal() {
+  if (scrapResults.bound) return;
+  scrapResults.bound = true;
+
+  const closeResults = () => {
+    document.getElementById('scrap-results-overlay').classList.remove('active');
+  };
+  const closePdf = () => {
+    document.getElementById('scrap-pdf-overlay').classList.remove('active');
+    const frame = document.getElementById('scrap-pdf-frame');
+    if (frame) frame.src = 'about:blank';
+  };
+
+  document.getElementById('scrap-results-close').addEventListener('click', closeResults);
+  document.getElementById('scrap-results-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'scrap-results-overlay') closeResults();
+  });
+  document.getElementById('scrap-pdf-close').addEventListener('click', closePdf);
+  document.getElementById('scrap-pdf-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'scrap-pdf-overlay') closePdf();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const pdfOverlay = document.getElementById('scrap-pdf-overlay');
+    if (pdfOverlay.classList.contains('active')) { closePdf(); return; }
+    const resOverlay = document.getElementById('scrap-results-overlay');
+    if (resOverlay.classList.contains('active')) closeResults();
+  });
+
+  const search = document.getElementById('scrap-results-search');
+  let t = null;
+  search.addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    clearTimeout(t);
+    t = setTimeout(() => {
+      scrapResults.filtered = !q ? scrapResults.items : scrapResults.items.filter(d =>
+        (d.title_ar || '').toLowerCase().includes(q) ||
+        (d.title_en || '').toLowerCase().includes(q) ||
+        (d.number || '').toLowerCase().includes(q)
+      );
+      scrapRenderResultsTable();
+    }, 150);
+  });
+}
+
+async function scrapShowResults(trialId) {
+  if (!trialId) return;
+  scrapBindResultsModal();
+
+  // Open overlay immediately with loading state
+  const overlay = document.getElementById('scrap-results-overlay');
+  const sub = document.getElementById('scrap-results-sub');
+  const body = document.getElementById('scrap-results-body');
+  const title = document.getElementById('scrap-results-title');
+  const consoleLink = document.getElementById('scrap-results-console-link');
+  const stats = document.getElementById('scrap-results-stats');
+  const search = document.getElementById('scrap-results-search');
+
+  title.textContent = `Trial ${trialId}`;
+  sub.textContent = 'Loading from Cloud Storage…';
+  stats.textContent = '';
+  search.value = '';
+  body.innerHTML = `<div class="scrap-results-loading"><div class="spinner-sm"></div><span>Fetching index.jsonl from GCS…</span></div>`;
+  consoleLink.style.display = 'none';
+
+  overlay.classList.add('active');
+
+  try {
+    const res = await fetch(`${SCRAP_API}/trials/${encodeURIComponent(trialId)}/gcs-index`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to load results');
+
+    scrapResults.trialId = data.trialId;
+    scrapResults.items = data.items || [];
+    scrapResults.filtered = scrapResults.items.slice();
+    scrapResults.bucket = data.bucket;
+    scrapResults.prefix = data.prefix;
+    scrapResults.consoleUrl = data.consoleUrl;
+    scrapResults.manifest = data.manifest;
+
+    sub.innerHTML = `
+      <code class="scrap-trial-bar-id">gs://${esc(data.bucket)}/${esc(data.prefix)}/</code>
+      <span class="scrap-muted">· ${data.source === 'index.jsonl' ? 'loaded from index.jsonl' : 'reconstructed from bucket listing'}</span>
+    `;
+    consoleLink.href = data.consoleUrl;
+    consoleLink.style.display = '';
+
+    const totalPdfs = data.items.reduce((a, d) => a + (d.has_original||0) + (d.has_translated||0) + (d.has_printed||0), 0);
+    stats.innerHTML = `<span><strong>${data.total}</strong> documents</span> · <span><strong>${totalPdfs}</strong> PDFs</span>`;
+
+    scrapRenderResultsTable();
+  } catch (err) {
+    body.innerHTML = `
+      <div class="scrap-results-error">
+        <div class="scrap-results-error-title">Could not load trial from GCS</div>
+        <div class="scrap-results-error-msg">${esc(err.message)}</div>
+        <div class="scrap-results-error-hint">
+          Common causes: trial was stopped before any uploads · bucket permissions · GCP_BUCKET / key file not configured.
+        </div>
+      </div>`;
+  }
+}
+window.scrapShowResults = scrapShowResults;
+
+function scrapRenderResultsTable() {
+  const body = document.getElementById('scrap-results-body');
+  if (!body) return;
+
+  if (!scrapResults.filtered.length) {
+    body.innerHTML = `<div class="scrap-empty">No documents in this trial${scrapResults.items.length ? ' match the filter' : ''}.</div>`;
+    return;
+  }
+
+  const tId = scrapResults.trialId;
+  const rows = scrapResults.filtered.map(d => {
+    const btn = (type, label) => {
+      if (!d.has_original && type === 'original') return '';
+      if (!d.has_translated && type === 'translated') return '';
+      if (!d.has_printed && type === 'printed') return '';
+      const rel = d.gcs?.[type];
+      if (!rel) return '';
+      const arg = `'${tId}','${rel.replace(/'/g, "\\'")}','${type}',${d.idx}`;
+      return `<button class="scrap-pdf-btn" onclick="scrapOpenPdfViewer(${arg})" title="Open PDF">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 2H10L13 5V14H3V2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M10 2V5H13" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5 8H11M5 10.5H9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        ${label}
+      </button>`;
+    };
+    const actions = [btn('original', 'Original'), btn('translated', 'Translated'), btn('printed', 'Printed')].filter(Boolean);
+    const actionsHtml = actions.length ? actions.join('') : '<span class="scrap-muted">no PDFs</span>';
+
+    return `<tr>
+      <td class="scrap-idx">#${d.idx || ''}</td>
+      <td>
+        <div class="scrap-title-ar" dir="rtl">${esc(d.title_ar || '')}</div>
+        ${d.title_en ? `<div class="scrap-title-en">${esc(d.title_en)}</div>` : ''}
+      </td>
+      <td class="scrap-nowrap">${esc(d.number || '')}</td>
+      <td class="scrap-nowrap">${esc(d.approve_date || '')}</td>
+      <td>${esc(d.approve_type || '')}</td>
+      <td class="scrap-actions-cell">${actionsHtml}</td>
+    </tr>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="scrap-table-wrap">
+      <table class="scrap-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Title</th>
+            <th>Number</th>
+            <th>Approve Date</th>
+            <th>Approve Type</th>
+            <th>Open PDF</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function scrapOpenPdfViewer(trialId, relPath, type, idx) {
+  const overlay = document.getElementById('scrap-pdf-overlay');
+  const frame = document.getElementById('scrap-pdf-frame');
+  const title = document.getElementById('scrap-pdf-title');
+  const sub = document.getElementById('scrap-pdf-sub');
+  const openTab = document.getElementById('scrap-pdf-open-tab');
+  const dl = document.getElementById('scrap-pdf-download');
+
+  title.textContent = `Document #${idx} — ${type.charAt(0).toUpperCase() + type.slice(1)}`;
+  sub.innerHTML = `<code class="scrap-trial-bar-id">gs://${esc(scrapResults.bucket || '')}/${esc(trialId)}/${esc(relPath)}</code>`;
+  frame.src = 'about:blank';
+  overlay.classList.add('active');
+
+  try {
+    const params = new URLSearchParams({ trialId, path: relPath });
+    const res = await fetch(`${SCRAP_API}/gcs-url?${params.toString()}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed to sign URL');
+    frame.src = data.url;
+    openTab.href = data.url;
+    dl.href = data.url;
+    dl.setAttribute('download', `${type}_${idx}.pdf`);
+  } catch (err) {
+    frame.src = 'about:blank';
+    sub.innerHTML += `<div class="scrap-results-error-msg">${esc(err.message)}</div>`;
+    toast('error', 'PDF', err.message);
+  }
+}
+window.scrapOpenPdfViewer = scrapOpenPdfViewer;
 
 // ─── Init ─────────────────────────────────────────────────────
 
