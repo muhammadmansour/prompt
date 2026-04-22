@@ -8202,9 +8202,21 @@ function wbLogAudit(action, details) {
   });
 }
 
+// CISO's RA edit page renders the input widget off `question.type` and only
+// recognises `unique_choice` | `multiple_choice` | `date` | `text`. Earlier
+// versions of this admin wrote the literal string `'question'` (our internal
+// item_type) into that field, which caused CISO to render an empty card.
+// Normalise here so legacy rows are healed the next time they're touched.
+const CISO_VALID_QUESTION_TYPES = new Set(['unique_choice', 'multiple_choice', 'date', 'text']);
+function normalizeQuestionType(q) {
+  if (q && CISO_VALID_QUESTION_TYPES.has(q.type)) return q.type;
+  return Array.isArray(q && q.choices) && q.choices.length > 1 ? 'unique_choice' : 'text';
+}
+
 function migrateQuestionItem(qUrn, q, idx) {
   return {
     ...q,
+    type: normalizeQuestionType(q),
     item_type: 'question',
     content_ar: q.content_ar || q.text || '',
     content_en: q.content_en || '',
@@ -8711,7 +8723,7 @@ function addQuestionRow() {
   showItemEditor('question', null, (data) => {
     const audit = makeAuditFields();
     wbCurrentNode.questions[qUrn] = {
-      type: 'question',
+      type: 'unique_choice',
       item_type: 'question',
       text: data.content_ar,
       content_ar: data.content_ar,
@@ -8742,6 +8754,7 @@ function editQuestion(qUrn) {
     q.text = data.content_ar;
     q.content_ar = data.content_ar;
     q.content_en = data.content_en || '';
+    q.type = normalizeQuestionType(q);
     const audit = makeAuditFields(q);
     Object.assign(q, audit);
     wbLogAudit('edit_item', { item_type: 'question', item_id: qUrn, summary: `edited`, before });
@@ -8754,11 +8767,16 @@ async function deleteQuestion(qUrn) {
   const ok = await wbConfirm('Delete question', 'Are you sure you want to delete this question?', { confirmLabel: 'Delete', danger: true });
   if (!ok) return;
   const deleted = wbCurrentNode.questions[qUrn];
+  const snapshot = JSON.parse(JSON.stringify(wbCurrentNode.questions || {}));
   wbLogAudit('delete_item', { item_type: 'question', item_id: qUrn, summary: (deleted && deleted.content_ar) || (deleted && deleted.text) || qUrn });
   delete wbCurrentNode.questions[qUrn];
   reindexQuestions();
-  markDirty();
   renderQuestionsList();
+  await persistCurrentNode({
+    revert: () => { wbCurrentNode.questions = snapshot; renderQuestionsList(); },
+    successMsg: 'Question deleted.',
+    failureMsg: 'Delete Failed'
+  });
 }
 
 function reindexQuestions() {
@@ -8866,12 +8884,22 @@ async function deleteEvidence(idx) {
   if (!ok) return;
   const items = getEvidenceItems(wbCurrentNode);
   const deleted = items[idx];
+  const itemsSnapshot = JSON.parse(JSON.stringify(items));
+  const textSnapshot = wbCurrentNode.typical_evidence;
   wbLogAudit('delete_item', { item_type: 'typical_evidence', item_id: String(idx), summary: (deleted && deleted.content_ar) || (deleted && deleted.description) || '' });
   items.splice(idx, 1);
   items.forEach((it, i) => { it.display_order = i; });
   syncEvidenceToNode(items);
-  markDirty();
   renderEvidenceList();
+  await persistCurrentNode({
+    revert: () => {
+      syncEvidenceToNode(itemsSnapshot);
+      wbCurrentNode.typical_evidence = textSnapshot;
+      renderEvidenceList();
+    },
+    successMsg: 'Evidence deleted.',
+    failureMsg: 'Delete Failed'
+  });
 }
 
 // ── Admin Notes CRUD ──
@@ -8960,11 +8988,19 @@ async function deleteNote(idx) {
   if (!ok) return;
   const notes = wbCurrentNode.admin_notes || [];
   const deleted = notes[idx];
+  const snapshot = JSON.parse(JSON.stringify(notes));
   wbLogAudit('delete_item', { item_type: 'admin_note', item_id: String(idx), summary: (deleted && deleted.content_ar) || '' });
   notes.splice(idx, 1);
   notes.forEach((n, i) => { n.display_order = i; });
-  markDirty();
   renderNotesList();
+  await persistCurrentNode({
+    revert: () => {
+      wbCurrentNode.admin_notes = snapshot;
+      renderNotesList();
+    },
+    successMsg: 'Note deleted.',
+    failureMsg: 'Delete Failed'
+  });
 }
 
 // ── Action dispatcher ──
@@ -8991,6 +9027,45 @@ async function persistScopeToggle() {
   } catch (e) {
     wbAuditLog.unshift(...pendingLog);
     console.error('Scope toggle persist failed:', e);
+  }
+}
+
+// Persist the current node's full state to Muraji with user-facing feedback.
+// On failure, calls `revert` to restore pre-mutation state and re-queues the
+// audit log so no events are lost. Returns true on success, false otherwise.
+async function persistCurrentNode({ revert, successMsg, failureMsg = 'Save Failed' } = {}) {
+  if (!wbCurrentLibrary || !wbCurrentNode) return false;
+  const libId = wbCurrentLibrary._id || wbCurrentLibrary.id;
+  const pendingLog = wbAuditLog.splice(0);
+  try {
+    const res = await fetch(`${MURAJI_API}/${libId}/controls`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        updates: [{
+          code: wbCurrentNode.ref_id,
+          typical_requirements: wbCurrentNode.typical_evidence || '',
+          typical_evidence_items: wbCurrentNode.typical_evidence_items || getEvidenceItems(wbCurrentNode),
+          questions: wbCurrentNode.questions || {},
+          admin_notes: wbCurrentNode.admin_notes || [],
+          audit_log: pendingLog
+        }]
+      })
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || `HTTP ${res.status}`);
+    }
+    if (successMsg && typeof toast === 'function') toast('success', 'Saved', successMsg);
+    return true;
+  } catch (e) {
+    wbAuditLog.unshift(...pendingLog);
+    if (typeof revert === 'function') {
+      try { revert(); } catch (revertErr) { console.error('persistCurrentNode revert failed:', revertErr); }
+    }
+    if (typeof toast === 'function') toast('error', failureMsg, e.message);
+    console.error('persistCurrentNode failed:', e);
+    return false;
   }
 }
 
@@ -9408,7 +9483,7 @@ async function regenSection(sectionType) {
         const qUrn = `${nodeUrn}:question:${qNum}`;
         const qText = q.question || q.text || '';
         newQuestions[qUrn] = {
-          type: 'question', item_type: 'question', text: qText, content_ar: qText,
+          type: 'unique_choice', item_type: 'question', text: qText, content_ar: qText,
           content_en: q.question_en || q.text_en || '',
           included_in_ai_scope: true, provenance: 'ai_generated',
           generation_metadata: genMeta, ...audit, display_order: idx,
@@ -9578,7 +9653,7 @@ async function runAiGeneration() {
         const qUrn = `${nodeUrn}:question:${qNum}`;
         const qText = q.question || q.text || '';
         newQuestions[qUrn] = {
-          type: 'question', item_type: 'question', text: qText, content_ar: qText,
+          type: 'unique_choice', item_type: 'question', text: qText, content_ar: qText,
           content_en: q.question_en || q.text_en || '',
           included_in_ai_scope: true, provenance: 'ai_generated',
           generation_metadata: genMeta, ...audit, display_order: existingCount + idx,
@@ -10007,7 +10082,7 @@ async function runBulkGeneration() {
             const qUrn = `${node.urn}:question:${qNum}`;
             const qText = q.question || q.text || '';
             newQuestions[qUrn] = {
-              type: 'question', item_type: 'question', text: qText, content_ar: qText,
+              type: 'unique_choice', item_type: 'question', text: qText, content_ar: qText,
               content_en: q.question_en || q.text_en || '',
               included_in_ai_scope: true, provenance: 'ai_generated',
               generation_metadata: bulkGenMeta, ...bulkAudit,
