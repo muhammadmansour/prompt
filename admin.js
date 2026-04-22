@@ -8202,9 +8202,21 @@ function wbLogAudit(action, details) {
   });
 }
 
+// CISO's RA edit page renders the input widget off `question.type` and only
+// recognises `unique_choice` | `multiple_choice` | `date` | `text`. Earlier
+// versions of this admin wrote the literal string `'question'` (our internal
+// item_type) into that field, which caused CISO to render an empty card.
+// Normalise here so legacy rows are healed the next time they're touched.
+const CISO_VALID_QUESTION_TYPES = new Set(['unique_choice', 'multiple_choice', 'date', 'text']);
+function normalizeQuestionType(q) {
+  if (q && CISO_VALID_QUESTION_TYPES.has(q.type)) return q.type;
+  return Array.isArray(q && q.choices) && q.choices.length > 1 ? 'unique_choice' : 'text';
+}
+
 function migrateQuestionItem(qUrn, q, idx) {
   return {
     ...q,
+    type: normalizeQuestionType(q),
     item_type: 'question',
     content_ar: q.content_ar || q.text || '',
     content_en: q.content_en || '',
@@ -8711,7 +8723,7 @@ function addQuestionRow() {
   showItemEditor('question', null, (data) => {
     const audit = makeAuditFields();
     wbCurrentNode.questions[qUrn] = {
-      type: 'question',
+      type: 'unique_choice',
       item_type: 'question',
       text: data.content_ar,
       content_ar: data.content_ar,
@@ -8742,6 +8754,7 @@ function editQuestion(qUrn) {
     q.text = data.content_ar;
     q.content_ar = data.content_ar;
     q.content_en = data.content_en || '';
+    q.type = normalizeQuestionType(q);
     const audit = makeAuditFields(q);
     Object.assign(q, audit);
     wbLogAudit('edit_item', { item_type: 'question', item_id: qUrn, summary: `edited`, before });
@@ -9408,7 +9421,7 @@ async function regenSection(sectionType) {
         const qUrn = `${nodeUrn}:question:${qNum}`;
         const qText = q.question || q.text || '';
         newQuestions[qUrn] = {
-          type: 'question', item_type: 'question', text: qText, content_ar: qText,
+          type: 'unique_choice', item_type: 'question', text: qText, content_ar: qText,
           content_en: q.question_en || q.text_en || '',
           included_in_ai_scope: true, provenance: 'ai_generated',
           generation_metadata: genMeta, ...audit, display_order: idx,
@@ -9578,7 +9591,7 @@ async function runAiGeneration() {
         const qUrn = `${nodeUrn}:question:${qNum}`;
         const qText = q.question || q.text || '';
         newQuestions[qUrn] = {
-          type: 'question', item_type: 'question', text: qText, content_ar: qText,
+          type: 'unique_choice', item_type: 'question', text: qText, content_ar: qText,
           content_en: q.question_en || q.text_en || '',
           included_in_ai_scope: true, provenance: 'ai_generated',
           generation_metadata: genMeta, ...audit, display_order: existingCount + idx,
@@ -10007,7 +10020,7 @@ async function runBulkGeneration() {
             const qUrn = `${node.urn}:question:${qNum}`;
             const qText = q.question || q.text || '';
             newQuestions[qUrn] = {
-              type: 'question', item_type: 'question', text: qText, content_ar: qText,
+              type: 'unique_choice', item_type: 'question', text: qText, content_ar: qText,
               content_en: q.question_en || q.text_en || '',
               included_in_ai_scope: true, provenance: 'ai_generated',
               generation_metadata: bulkGenMeta, ...bulkAudit,
