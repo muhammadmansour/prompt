@@ -590,6 +590,10 @@ body {
   border-radius: var(--radius-md);
   scrollbar-width: thin;
   scrollbar-color: var(--color-border) transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 0;
 }
 
 .framework-list::-webkit-scrollbar {
@@ -626,6 +630,7 @@ body {
 /* Option Groups (framework categories) */
 .option-group {
   border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
 }
 
 .option-group:last-child {
@@ -644,6 +649,7 @@ body {
   cursor: pointer;
   transition: var(--transition);
   user-select: none;
+  flex-shrink: 0;
 }
 
 .option-group-header:hover {
