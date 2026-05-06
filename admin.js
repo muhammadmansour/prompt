@@ -19,6 +19,36 @@ async function adminLogout() {
 }
 window.adminLogout = adminLogout;
 
+/** GRC upstream rejected the stored token — clear local session and send user to login. */
+async function redirectIfGrcSessionExpired(response) {
+  if (response.status !== 401) return false;
+  let data = null;
+  try {
+    data = await response.clone().json();
+  } catch (_) {
+    return false;
+  }
+  if (data && data.grcSessionExpired) {
+    await adminLogout();
+    return true;
+  }
+  return false;
+}
+
+const _adminNativeFetch = window.fetch.bind(window);
+window.fetch = function adminPatchedFetch(input, init) {
+  const url = typeof input === 'string' ? input : (input instanceof Request ? input.url : String(input));
+  const isGrc = url.includes('/api/grc/');
+  return _adminNativeFetch(input, init).then(async (res) => {
+    if (isGrc && (await redirectIfGrcSessionExpired(res))) {
+      const err = new Error('GRC session expired');
+      err.code = 'GRC_SESSION_EXPIRED';
+      throw err;
+    }
+    return res;
+  });
+};
+
 const API = {
   sessions: '/api/chat/sessions',
   collections: '/api/collections',
@@ -3443,13 +3473,75 @@ document.getElementById('btn-prompts-clear-cache')?.addEventListener('click', as
 // ─── Controls Studio ──────────────────────────────────────────
 
 const CS_STEPS = [
-  { label: 'Requirements', icon: '1' },
-  { label: 'References', icon: '2' },
-  { label: 'Org Context', icon: '3' },
+  { label: 'Org Context', icon: '1' },
+  { label: 'Requirements', icon: '2' },
+  { label: 'References', icon: '3' },
   { label: 'Generate', icon: '4' },
   { label: 'Review', icon: '5' },
   { label: 'Export', icon: '6' },
 ];
+
+/** Map persisted step from previous wizard order (Req→Ref→Org) to Org→Req→Ref first. */
+function migrateCsWizardStep(stored) {
+  const s = stored == null ? 0 : Number(stored);
+  if (Number.isNaN(s)) return 0;
+  if (s <= 2) return [1, 2, 0][s];
+  return s;
+}
+
+/** Set of obligatory framework identifiers from org profile (UUIDs from GRC + lowercased lookups). Missing/empty mandates → null. */
+function csOrgMandatoryFrameworkKeySet(orgCtx) {
+  if (!orgCtx || !Array.isArray(orgCtx.obligatoryFrameworks)) return null;
+  const raw = orgCtx.obligatoryFrameworks.map(x => String(x).trim()).filter(Boolean);
+  if (!raw.length) return null;
+  const set = new Set();
+  raw.forEach(r => {
+    set.add(r);
+    set.add(r.toLowerCase());
+  });
+  return set;
+}
+
+function csGrcFrameworkMatchesMandatory(fw, keySet) {
+  if (!fw || !keySet || keySet.size === 0) return false;
+  const candidates = [];
+  for (const prop of ['id', 'uuid', 'urn']) {
+    const v = fw[prop];
+    if (v != null && String(v).trim()) candidates.push(String(v).trim());
+  }
+  for (const prop of ['ref_id', 'name']) {
+    const v = fw[prop];
+    if (v != null && String(v).trim()) candidates.push(String(v).trim());
+  }
+  return candidates.some(p => keySet.has(p) || keySet.has(p.toLowerCase()));
+}
+
+/** GRC frameworks that match the org’s obligatory framework list only. */
+function csGetStudioFrameworksForOrg(orgCtx, allLibraries) {
+  if (!Array.isArray(allLibraries) || !allLibraries.length || !orgCtx) return [];
+  const keySet = csOrgMandatoryFrameworkKeySet(orgCtx);
+  if (!keySet) return [];
+  return allLibraries.filter(fw => csGrcFrameworkMatchesMandatory(fw, keySet));
+}
+
+/** Remove requirement selections / cached trees that are outside the selected org’s permitted frameworks. */
+function csSyncStudioRequirementsToOrgFrameworks() {
+  if (!csSessionData) return;
+  const org = csSessionData.orgContext;
+  const allowedFw = csGetStudioFrameworksForOrg(org, csLibraries || []);
+  const allowedIds = new Set(allowedFw.map(fw => String(fw.id)));
+  Object.keys(csFrameworkTrees).forEach(k => {
+    if (!allowedIds.has(String(k))) delete csFrameworkTrees[k];
+  });
+  const keySet = csOrgMandatoryFrameworkKeySet(org);
+  if (!org || !keySet || allowedIds.size === 0) {
+    csSessionData.requirements = [];
+  } else {
+    csSessionData.requirements = (csSessionData.requirements || []).filter(r =>
+      r.frameworkId != null && allowedIds.has(String(r.frameworkId))
+    );
+  }
+}
 
 // CS Sessions — DB-backed via API
 let csCachedSessions = null; // in-memory cache, loaded from API
@@ -3680,11 +3772,21 @@ async function csOpenSession(id) {
     const d = await fetchJSON(API.csSessions + '/' + id);
     if (d.success && d.session) {
       csSessionData = d.session;
+      const orgId = csSessionData.orgContext && csSessionData.orgContext.id;
+      if (orgId) {
+        try {
+          const od = await fetchJSON(API.orgContexts + '/' + encodeURIComponent(orgId));
+          if (od.success && od.context) {
+            csSessionData.orgContext = { ...csSessionData.orgContext, ...od.context };
+          }
+        } catch (_) { /* use embedded org only */ }
+      }
       // For exported/generated sessions, jump straight to the review step
       if (csSessionData.status === 'exported' || csSessionData.status === 'generated') {
         csCurrentStep = 4; // Review step
       } else {
-        csCurrentStep = csSessionData.step || 0;
+        csCurrentStep = migrateCsWizardStep(csSessionData.step);
+        csSessionData.step = csCurrentStep;
       }
       csMode = 'wizard';
       document.getElementById('cs-back-to-sessions').style.display = '';
@@ -3743,13 +3845,13 @@ function csRenderWizard() {
   // Render current step content
   const content = document.getElementById('cs-content');
   switch (csCurrentStep) {
-    case 0: csRenderStepRequirements(content); break;
-    case 1: csRenderStepReferences(content); break;
-    case 2: csRenderStepOrgContext(content); break;
+    case 0: csRenderStepOrgContext(content); break;
+    case 1: csRenderStepRequirements(content); break;
+    case 2: csRenderStepReferences(content); break;
     case 3: csRenderStepGenerate(content); break;
     case 4: csRenderStepReview(content); break;
     case 5: csRenderStepExport(content); break;
-    default: csRenderStepRequirements(content);
+    default: csRenderStepOrgContext(content);
   }
 }
 
@@ -3762,7 +3864,7 @@ function csGoStep(i) {
 }
 window.csGoStep = csGoStep;
 
-// Step 1: Requirements — with real data
+// Step 2: Requirements — with real data
 function csRenderStepRequirements(el) {
   const reqs = csSessionData.requirements || [];
   const fwCount = new Set(reqs.map(r => r.frameworkName)).size;
@@ -3771,9 +3873,9 @@ function csRenderStepRequirements(el) {
       <div class="cs-wizard-header navy">
         <div class="cs-wizard-header-title">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="white" stroke-width="1.5"/><path d="M6 9L8 11L12 7" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Step 1: Select Requirements
+          Step 2: Select Requirements
         </div>
-        <div class="cs-wizard-header-desc">Choose which framework requirements to generate controls for. Select entire frameworks or expand to pick sections.</div>
+        <div class="cs-wizard-header-desc">Choose requirements only from frameworks linked to this organization profile (<strong>Obligatory frameworks</strong> in Organization Contexts). Expand a framework to select sections.</div>
         <div class="cs-wizard-header-stat">
           <span class="big" id="cs-req-count">${reqs.length}</span>
           <span class="label">requirements from ${fwCount} frameworks</span>
@@ -3793,8 +3895,8 @@ function csRenderStepRequirements(el) {
         </div>
       </div>
       <div class="cs-wizard-footer">
-        <div></div>
-        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=1;csSessionData.step=1;csRenderWizard()">
+        <button class="btn-admin-ghost" onclick="csSaveStep();csCurrentStep=0;csSessionData.step=0;csRenderWizard()">← Back</button>
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=2;csSessionData.step=2;csRenderWizard()">
           Next &nbsp;→
         </button>
       </div>
@@ -3808,8 +3910,11 @@ function csRenderStepRequirements(el) {
         if (d.success && Array.isArray(d.results)) csLibraries = d.results;
       } catch (e) { console.error('CS GRC frameworks fetch:', e); }
     }
+    csSyncStudioRequirementsToOrgFrameworks();
+    await csSaveStep();
     csRenderFwList();
     csAttachFwSearch();
+    csUpdateReqCount();
   })();
 }
 
@@ -3839,7 +3944,7 @@ async function csOnComplianceAssessmentChange() {
     console.log(`[Step 1] CA tree loaded for ${caId}`, Object.keys(d.tree).length, 'top-level entries');
     if (statusEl) statusEl.innerHTML = `<span style="color:#10b981">✓ Compliance assessment loaded</span>`;
 
-    // Re-render the framework list to update counts
+    csSyncStudioRequirementsToOrgFrameworks();
     csRenderFwList();
   } catch (err) {
     console.error('[Step 1] Failed to fetch CA tree:', err);
@@ -3855,14 +3960,32 @@ function csRenderFwList() {
   const listEl = document.getElementById('cs-fw-list');
   if (!listEl) return;
   const reqs = csSessionData.requirements || [];
+  const org = csSessionData.orgContext;
 
   if (!csLibraries.length) {
     listEl.innerHTML = '<div class="studio-empty-msg">No frameworks loaded from GRC.</div>';
     return;
   }
 
+  if (!org) {
+    listEl.innerHTML = '<div class="studio-empty-msg">Select an Organization Context first (go back to step 1).</div>';
+    return;
+  }
+
+  const mandateKeys = csOrgMandatoryFrameworkKeySet(org);
+  if (!mandateKeys) {
+    listEl.innerHTML = '<div class="studio-empty-msg">This organization profile has no obligatory frameworks. <button type="button" class="inline-link" onclick="navigateTo(\'org-contexts\')">Open Organization Contexts</button> to edit the profile and select frameworks.</div>';
+    return;
+  }
+
+  const fwList = csGetStudioFrameworksForOrg(org, csLibraries);
+  if (!fwList.length) {
+    listEl.innerHTML = '<div class="studio-empty-msg">No GRC frameworks match this profile’s obligatory framework list. Confirm mandate IDs in <button type="button" class="inline-link" onclick="navigateTo(\'org-contexts\')">Organization Contexts</button> match frameworks in your GRC tenant.</div>';
+    return;
+  }
+
   let html = '';
-  csLibraries.forEach((fw, li) => {
+  fwList.forEach((fw, li) => {
     const fwName = fw.name || fw.ref_id || 'Unknown Framework';
     const groupId = 'csg-' + li;
     const fwId = fw.id;
@@ -4129,7 +4252,7 @@ async function csSaveStep() {
 }
 window.csSaveStep = csSaveStep;
 
-// Step 2: References — with real data (collections + files + upload)
+// Step 3: References — with real data (collections + files + upload)
 function csRenderStepReferences(el) {
   if (!csSessionData.selectedFiles) csSessionData.selectedFiles = [];
   if (!csSessionData.collections) csSessionData.collections = [];
@@ -4143,7 +4266,7 @@ function csRenderStepReferences(el) {
       <div class="cs-wizard-header emerald">
         <div class="cs-wizard-header-title">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M16 11V15C16 15.6 15.6 16 15 16H3C2.4 16 2 15.6 2 15V11" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M12 6L9 3L6 6M9 3V11" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Step 2: Attach Reference Files
+          Step 3: Attach Reference Files
         </div>
         <div class="cs-wizard-header-desc">Select file collections with regulatory guidance, best practices, or existing control catalogs to inform AI suggestions.</div>
         <div class="cs-wizard-header-stat">
@@ -4170,8 +4293,8 @@ function csRenderStepReferences(el) {
         </div>
       </div>
       <div class="cs-wizard-footer">
-        <button class="btn-admin-ghost" onclick="csSaveStep();csCurrentStep=0;csSessionData.step=0;csRenderWizard()">← Back</button>
-        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=2;csSessionData.step=2;csRenderWizard()">
+        <button class="btn-admin-ghost" onclick="csSaveStep();csCurrentStep=1;csSessionData.step=1;csRenderWizard()">← Back</button>
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=3;csSessionData.step=3;csRenderWizard()">
           Next &nbsp;→
         </button>
       </div>
@@ -4508,8 +4631,8 @@ function csRenderStepOrgContext(el) {
         </p>
       </div>
       <div class="cs-wizard-footer">
-        <button class="btn-admin-ghost" onclick="csSaveStep();csCurrentStep=1;csSessionData.step=1;csRenderWizard()">← Back</button>
-        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=3;csSessionData.step=3;csRenderWizard()" ${!selected ? 'disabled title="Select an Organization Context first"' : ''}>
+        <div></div>
+        <button class="btn-admin-primary" onclick="csSaveStep();csCurrentStep=1;csSessionData.step=1;csRenderWizard()" ${!selected ? 'disabled title="Select an Organization Context first"' : ''}>
           Next &nbsp;→
         </button>
       </div>
@@ -4584,6 +4707,7 @@ function csSelectOrg(ctxId, rowEl) {
     const contexts = listEl?._contexts || [];
     csSessionData.orgContext = contexts.find(c => String(c.id) === String(ctxId)) || null;
   }
+  csSyncStudioRequirementsToOrgFrameworks();
   // Update header
   const countEl = document.getElementById('cs-org-selected');
   if (countEl) {
@@ -4629,7 +4753,7 @@ function csRenderStepGenerate(el) {
               An Organization Context is required to generate contextual controls.
               A "Government, Enterprise, Maturity 2" org gets different controls than "Healthcare, Medium, Maturity 4" for the same requirement.
             </p>
-            <button class="btn-admin-primary" onclick="csCurrentStep=2;csSessionData.step=2;csRenderWizard()">
+            <button class="btn-admin-primary" onclick="csCurrentStep=0;csSessionData.step=0;csRenderWizard()">
               ← Go back to select a profile
             </button>
             <p style="font-size:11px;color:#9ca3af;margin-top:12px">
